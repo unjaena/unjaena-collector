@@ -28,6 +28,7 @@ from collectors.artifact_collector import ArtifactCollector, ARTIFACT_TYPES
 # 플랫폼 통일 테마 및 새 컴포넌트
 from gui.styles import get_platform_stylesheet, COLORS
 from core.device_manager import UnifiedDeviceManager, DeviceType, DeviceStatus
+from core.device_enumerators import create_default_enumerators
 from gui.device_panel import DeviceListPanel
 from gui.e01_dialog import E01SelectionDialog
 from core.multi_device_collector import MultiDeviceCollector, TaskStatus
@@ -166,6 +167,11 @@ class CollectorWindow(QMainWindow):
         self.device_manager = UnifiedDeviceManager()
         self.device_manager.device_added.connect(self._on_device_added)
         self.device_manager.device_removed.connect(self._on_device_removed)
+
+        # 디바이스 열거자 등록 (Windows, Android, iOS, E01/RAW)
+        enumerators = create_default_enumerators()
+        for name, enumerator in enumerators.items():
+            self.device_manager.register_enumerator(name, enumerator)
 
         self.setup_ui()
         self.check_server_connection()
