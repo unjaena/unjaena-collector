@@ -391,8 +391,8 @@ class MultiDeviceCollector(QObject):
             # 첫 번째 NTFS 파티션 자동 선택
             partitions = collector.list_partitions()
             for p in partitions:
-                if p.get('filesystem', '').upper() == 'NTFS':
-                    collector.select_partition(p['index'])
+                if getattr(p, 'filesystem', '').upper() == 'NTFS':
+                    collector.select_partition(p.index)
                     break
             return collector
 

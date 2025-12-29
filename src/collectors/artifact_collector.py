@@ -1017,6 +1017,14 @@ class LocalMFTCollector(_LocalMFTBase):
             artifact_type = config['alias_of']
             config = ARTIFACT_TYPES[artifact_type]
 
+        # 전체 디스크 스캔 아티팩트는 _collect_full_disk_scan 사용
+        # (document, email, image, video 등)
+        if artifact_type in ARTIFACT_MFT_FILTERS:
+            mft_filter = ARTIFACT_MFT_FILTERS[artifact_type]
+            if mft_filter.get('full_disk_scan'):
+                yield from self._collect_full_disk_scan(artifact_type, progress_callback)
+                return
+
         collector_type = config.get('collector')
         paths = config.get('paths', [])
 

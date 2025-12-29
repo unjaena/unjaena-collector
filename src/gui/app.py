@@ -1510,16 +1510,16 @@ class CollectionWorker(QThread):
                 partitions = collector.list_partitions()
                 selected = False
                 for p in partitions:
-                    if p.get('filesystem', '').upper() == 'NTFS':
-                        if collector.select_partition(p['index']):
-                            self.log_message.emit(f"✓ 파티션 선택: {p['filesystem']} ({p.get('size_display', '')})", False)
+                    if getattr(p, 'filesystem', '').upper() == 'NTFS':
+                        if collector.select_partition(p.index):
+                            self.log_message.emit(f"✓ 파티션 선택: {p.filesystem} ({getattr(p, 'size_display', '')})", False)
                             selected = True
                             break
 
                 if not selected and partitions:
                     # NTFS가 없으면 첫 번째 파티션 선택
-                    collector.select_partition(partitions[0]['index'])
-                    self.log_message.emit(f"✓ 첫 번째 파티션 선택: {partitions[0].get('filesystem', 'Unknown')}", False)
+                    collector.select_partition(partitions[0].index)
+                    self.log_message.emit(f"✓ 첫 번째 파티션 선택: {getattr(partitions[0], 'filesystem', 'Unknown')}", False)
 
                 return collector
 

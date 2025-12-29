@@ -463,7 +463,7 @@ class E01SelectionDialog(QDialog):
 
         # 첫 번째 NTFS 파티션 선택
         for row in range(len(partitions)):
-            if partitions[row].get('filesystem', '').upper() == 'NTFS':
+            if getattr(partitions[row], 'filesystem', '').upper() == 'NTFS':
                 self.partition_table.selectRow(row)
                 break
 
