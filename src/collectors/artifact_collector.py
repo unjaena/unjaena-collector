@@ -1019,28 +1019,69 @@ class LocalMFTCollector(_LocalMFTBase):
 
         if full_disk_scan and extensions:
             # 전체 디스크 스캔 (document, image, video 등)
+            # 최적화: 느린 시스템 폴더 제외, 사용자 폴더 우선
             logger.info(f"[{source}] Full disk scan for {artifact_type} ({len(extensions)} extensions)")
-            for root, dirs, files in os.walk(volume_root):
-                # 시스템 폴더 제외 옵션 (기본: 포함)
-                # $Recycle.Bin은 접근 불가할 수 있음
-                try:
-                    for filename in files:
-                        ext = os.path.splitext(filename)[1].lower()
-                        if ext in extensions:
-                            src_path = os.path.join(root, filename)
-                            result = self._copy_file_with_metadata(
-                                src_path, artifact_dir, artifact_type
-                            )
-                            if result:
-                                collected_count += 1
-                                yield result
-                                if progress_callback:
-                                    progress_callback(result[0])
-                except PermissionError:
-                    continue
-                except Exception as e:
-                    logger.debug(f"Error scanning {root}: {e}")
-                    continue
+
+            # 스캔에서 제외할 느린 디렉토리 (대소문자 무시)
+            SKIP_DIRS = {
+                'windows', '$recycle.bin', 'system volume information',
+                'programdata', '$windows.~bt', '$windows.~ws',
+                'recovery', 'boot', 'perflogs',
+            }
+            # 느린 하위 디렉토리 (WinSxS, Installer 등)
+            SKIP_SUBDIRS = {
+                'winsxs', 'installer', 'assembly', 'servicing',
+                'softwaredistribution', 'catroot', 'catroot2',
+            }
+
+            # 사용자 폴더 우선 수집
+            users_dir = os.path.join(volume_root, 'Users')
+            priority_dirs = []
+            other_dirs = []
+
+            if os.path.exists(users_dir):
+                priority_dirs.append(users_dir)
+
+            # 나머지 최상위 디렉토리
+            try:
+                for entry in os.scandir(volume_root):
+                    if entry.is_dir():
+                        name_lower = entry.name.lower()
+                        if name_lower in SKIP_DIRS:
+                            continue
+                        if entry.path != users_dir:
+                            other_dirs.append(entry.path)
+            except PermissionError:
+                pass
+
+            scan_dirs = priority_dirs + other_dirs
+            total_dirs = len(scan_dirs)
+
+            for dir_idx, scan_dir in enumerate(scan_dirs, 1):
+                logger.info(f"[{source}] Scanning [{dir_idx}/{total_dirs}] {scan_dir}")
+
+                for root, dirs, files in os.walk(scan_dir):
+                    # 느린 하위 디렉토리 스킵
+                    dirs[:] = [d for d in dirs if d.lower() not in SKIP_SUBDIRS]
+
+                    try:
+                        for filename in files:
+                            ext = os.path.splitext(filename)[1].lower()
+                            if ext in extensions:
+                                src_path = os.path.join(root, filename)
+                                result = self._copy_file_with_metadata(
+                                    src_path, artifact_dir, artifact_type
+                                )
+                                if result:
+                                    collected_count += 1
+                                    yield result
+                                    if progress_callback:
+                                        progress_callback(result[0])
+                    except PermissionError:
+                        continue
+                    except Exception as e:
+                        logger.debug(f"Error scanning {root}: {e}")
+                        continue
 
         else:
             # 경로 기반 수집
