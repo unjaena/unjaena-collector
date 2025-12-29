@@ -234,7 +234,9 @@ class CollectorWindow(QMainWindow):
 
         # Step 0: Device Selection (새로 추가)
         device_group = QGroupBox("0. Select Devices")
+        device_group.setMaximumHeight(150)  # 최대 높이 제한
         device_layout = QVBoxLayout(device_group)
+        device_layout.setContentsMargins(5, 15, 5, 5)
 
         self.device_panel = DeviceListPanel(self.device_manager)
         self.device_panel.selection_changed.connect(self._on_device_selection_changed)
