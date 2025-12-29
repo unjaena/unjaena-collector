@@ -860,7 +860,7 @@ class FileContentExtractor:
         # 디버깅: 파일 크기 제한 (손상된 MFT로 인한 무한 루프 방지)
         MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
         if file_size > MAX_FILE_SIZE:
-            logger.warning(f"[SANITY CHECK] Abnormally large file_size: {file_size / 1024 / 1024 / 1024:.2f}GB - limiting to 10GB")
+            print(f"[SANITY CHECK] Abnormally large file_size: {file_size / 1024 / 1024 / 1024:.2f}GB - limiting to 10GB", flush=True)
             file_size = MAX_FILE_SIZE
 
         for run in data_runs:
@@ -875,7 +875,7 @@ class FileContentExtractor:
 
                 # 디버깅: sparse run 경고
                 if sparse_remaining > 1024 * 1024 * 1024:  # 1GB 이상
-                    logger.warning(f"[SPARSE] Large sparse run: {sparse_remaining / 1024 / 1024:.1f}MB")
+                    print(f"[SPARSE] Large sparse run: {sparse_remaining / 1024 / 1024:.1f}MB", flush=True)
 
                 while sparse_remaining > 0 and bytes_read < file_size:
                     yield_size = min(chunk_size, sparse_remaining, file_size - bytes_read)
@@ -890,7 +890,7 @@ class FileContentExtractor:
 
                 # 디버깅: 오프셋 검증
                 if run_offset < 0 or run.lcn < 0:
-                    logger.warning(f"[INVALID] Negative offset: lcn={run.lcn}, offset={run_offset}")
+                    print(f"[INVALID] Negative offset: lcn={run.lcn}, offset={run_offset}", flush=True)
                     continue
 
                 while run_read < run_size and bytes_read < file_size:
@@ -903,10 +903,10 @@ class FileContentExtractor:
 
                     # 느린 읽기 경고 (1초 이상)
                     if read_elapsed > 1.0:
-                        logger.warning(f"[SLOW READ] {read_elapsed:.2f}s for {read_size} bytes at offset {run_offset + run_read}")
+                        print(f"[SLOW READ] {read_elapsed:.2f}s for {read_size} bytes at offset {run_offset + run_read}", flush=True)
 
                     if not chunk:
-                        logger.debug(f"[EMPTY CHUNK] run {run_index}/{total_runs}, offset={run_offset + run_read}")
+                        print(f"[EMPTY CHUNK] run {run_index}/{total_runs}, offset={run_offset + run_read}", flush=True)
                         break
 
                     yield chunk
@@ -915,7 +915,7 @@ class FileContentExtractor:
 
                     # 타임아웃 체크 (단일 파일 최대 10분)
                     if time.time() - start_time > 600:
-                        logger.warning(f"[STREAM TIMEOUT] 10min limit reached at {bytes_read / 1024 / 1024:.1f}MB")
+                        print(f"[STREAM TIMEOUT] 10min limit reached at {bytes_read / 1024 / 1024:.1f}MB", flush=True)
                         return
 
     # ==========================================================================

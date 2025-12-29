@@ -499,11 +499,20 @@ class BaseMFTCollector(ABC):
 
         # 확장자 기반 빠른 필터링 (전체 디스크 스캔 시)
         if extensions and full_disk_scan:
+            file_counter = 0
             for ext in extensions:
                 ext_lower = ext.lower()
+                ext_count = len(self._extension_index.get(ext_lower, []))
+                print(f"[SCAN] Extension {ext_lower}: {ext_count} files to process", flush=True)
+
                 for entry in self._extension_index.get(ext_lower, []):
                     if not include_deleted and getattr(entry, 'is_deleted', False):
                         continue
+
+                    file_counter += 1
+                    filename = entry.filename if hasattr(entry, 'filename') else str(entry)
+                    if file_counter % 500 == 0:
+                        print(f"[PROGRESS] {artifact_type}: Processing file #{file_counter} - {filename}", flush=True)
 
                     yield from self._extract_entry(artifact_type, entry, artifact_dir)
             return
@@ -588,7 +597,7 @@ class BaseMFTCollector(ABC):
 
         # 디버깅: 대용량 파일 경고
         if file_size > 100 * 1024 * 1024:  # 100MB 이상
-            logger.info(f"[DEBUG] Large file detected: {filename} ({file_size / 1024 / 1024:.1f}MB)")
+            print(f"[DEBUG] Large file detected: {filename} ({file_size / 1024 / 1024:.1f}MB)", flush=True)
 
         try:
             # 출력 파일명 생성
@@ -623,17 +632,17 @@ class BaseMFTCollector(ABC):
             if hasattr(self._accessor, 'stream_file_by_inode'):
                 # 청크 스트리밍 (대용량 파일 지원)
                 try:
-                    logger.debug(f"[EXTRACT START] {filename} (inode={inode}, size={file_size})")
+                    print(f"[EXTRACT START] {filename} (inode={inode}, size={file_size})", flush=True)
                     with open(output_file, 'wb') as f:
                         chunk_count = 0
                         stream_generator = self._accessor.stream_file_by_inode(inode)
-                        logger.debug(f"[STREAM READY] {filename}")
+                        print(f"[STREAM READY] {filename}", flush=True)
                         for chunk in stream_generator:
                             current_time = time.time()
 
                             # 파일 전체 타임아웃 체크
                             if current_time - start_time > FILE_TIMEOUT:
-                                logger.warning(f"[TIMEOUT] File extraction timeout ({FILE_TIMEOUT}s): {filename}")
+                                print(f"[TIMEOUT] File extraction timeout ({FILE_TIMEOUT}s): {filename}", flush=True)
                                 break
 
                             if chunk:
@@ -647,10 +656,10 @@ class BaseMFTCollector(ABC):
 
                                 # 진행 로그 (100MB마다)
                                 if total_size % (100 * 1024 * 1024) < len(chunk):
-                                    logger.debug(f"[PROGRESS] {filename}: {total_size / 1024 / 1024:.1f}MB written")
+                                    print(f"[PROGRESS] {filename}: {total_size / 1024 / 1024:.1f}MB written", flush=True)
 
                 except Exception as stream_error:
-                    logger.warning(f"[STREAM ERROR] {filename}: {stream_error}")
+                    print(f"[STREAM ERROR] {filename}: {stream_error}", flush=True)
                     # 부분적으로 쓰인 파일 삭제
                     if output_file.exists() and total_size == 0:
                         output_file.unlink()
