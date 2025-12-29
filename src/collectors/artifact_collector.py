@@ -6,6 +6,7 @@ MFT (Master File Table) 기반 수집을 우선 사용하며,
 MFT 사용이 불가능한 경우 레거시 방식으로 폴백합니다.
 
 수집 방식:
+- BaseMFTCollector: 통합 MFT 기반 수집 (E01/Local 공용)
 - MFT 기반: pytsk3를 이용한 raw disk 접근 (권장)
 - 레거시: glob.glob + shutil.copy2 (폴백)
 
@@ -15,9 +16,24 @@ import os
 import glob
 import shutil
 import hashlib
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Generator, Tuple, Dict, Any, Optional, List
+
+logger = logging.getLogger(__name__)
+
+# Try to import BaseMFTCollector (통합 베이스 클래스)
+try:
+    from collectors.base_mft_collector import (
+        BaseMFTCollector,
+        ARTIFACT_MFT_FILTERS
+    )
+    BASE_MFT_AVAILABLE = True
+except ImportError:
+    BASE_MFT_AVAILABLE = False
+    BaseMFTCollector = None
+    ARTIFACT_MFT_FILTERS = {}
 
 # Try to import ForensicDiskAccessor (순수 Python - 우선)
 try:
@@ -554,7 +570,7 @@ ARTIFACT_TYPES = {
     },
     'document': {
         'name': 'Documents',
-        'description': 'Office documents, PDFs, HWP files',
+        'description': 'Office documents, PDFs, HWP files (Full disk scan)',
         'paths': [
             r'%USERPROFILE%\Documents\**\*.doc',
             r'%USERPROFILE%\Documents\**\*.docx',
@@ -566,16 +582,17 @@ ARTIFACT_TYPES = {
             r'%USERPROFILE%\Documents\**\*.pptx',
         ],
         'mft_config': {
-            'user_path': 'Documents',
-            'pattern': '*.*',
-            'extensions': ['.doc', '.docx', '.pdf', '.hwp', '.xls', '.xlsx', '.ppt', '.pptx'],
+            # 디지털 포렌식: 전체 디스크 스캔 (user_path 없음)
+            'extensions': ['.doc', '.docx', '.pdf', '.hwp', '.hwpx', '.xls', '.xlsx',
+                          '.ppt', '.pptx', '.txt', '.rtf', '.odt', '.ods', '.odp',
+                          '.csv', '.md', '.json', '.xml', '.html', '.htm'],
         },
-        'requires_admin': False,
+        'requires_admin': True,  # MFT 접근 필요
         'collector': 'collect_user_glob',
     },
     'email': {
         'name': 'Email Files',
-        'description': 'Outlook PST/OST, EML, MSG files',
+        'description': 'Outlook PST/OST, EML, MSG files (Full disk scan)',
         'paths': [
             r'%LOCALAPPDATA%\Microsoft\Outlook\*.ost',
             r'%USERPROFILE%\Documents\Outlook Files\*.pst',
@@ -583,16 +600,16 @@ ARTIFACT_TYPES = {
             r'%USERPROFILE%\**\*.msg',
         ],
         'mft_config': {
-            'user_path': 'AppData/Local/Microsoft/Outlook',
-            'pattern': '*.ost',
+            # 디지털 포렌식: 전체 디스크 스캔 (user_path 없음)
+            'extensions': ['.pst', '.ost', '.eml', '.msg', '.mbox', '.dbx'],
         },
-        'requires_admin': False,
+        'requires_admin': True,  # MFT 접근 필요
         'collector': 'collect_user_glob',
     },
     # 'compress' 아티팩트 제거됨 - 서버에서 압축파일 분석 미지원
     'image': {
         'name': 'Image Files',
-        'description': 'JPEG, PNG, GIF, BMP image files',
+        'description': 'JPEG, PNG, GIF, BMP, TIFF, HEIC, RAW image files (Full disk scan)',
         'paths': [
             r'%USERPROFILE%\Pictures\**\*.jpg',
             r'%USERPROFILE%\Pictures\**\*.jpeg',
@@ -601,16 +618,17 @@ ARTIFACT_TYPES = {
             r'%USERPROFILE%\Pictures\**\*.bmp',
         ],
         'mft_config': {
-            'user_path': 'Pictures',
-            'pattern': '*.*',
-            'extensions': ['.jpg', '.jpeg', '.png', '.gif', '.bmp'],
+            # 디지털 포렌식: 전체 디스크 스캔 (user_path 없음)
+            'extensions': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif',
+                          '.webp', '.heic', '.heif', '.raw', '.cr2', '.nef', '.arw',
+                          '.svg', '.ico', '.psd', '.ai', '.eps'],
         },
-        'requires_admin': False,
+        'requires_admin': True,  # MFT 접근 필요
         'collector': 'collect_user_glob',
     },
     'video': {
         'name': 'Video Files',
-        'description': 'MP4, AVI, MOV, WMV video files',
+        'description': 'MP4, AVI, MKV, MOV, WMV video files (Full disk scan)',
         'paths': [
             r'%USERPROFILE%\Videos\**\*.mp4',
             r'%USERPROFILE%\Videos\**\*.avi',
@@ -619,14 +637,551 @@ ARTIFACT_TYPES = {
             r'%USERPROFILE%\Videos\**\*.mkv',
         ],
         'mft_config': {
-            'user_path': 'Videos',
-            'pattern': '*.*',
-            'extensions': ['.mp4', '.avi', '.mov', '.wmv', '.mkv'],
+            # 디지털 포렌식: 전체 디스크 스캔 (user_path 없음)
+            'extensions': ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm',
+                          '.m4v', '.mpeg', '.mpg', '.3gp', '.ts', '.mts', '.m2ts',
+                          '.vob', '.rm', '.rmvb', '.asf'],
         },
-        'requires_admin': False,
+        'requires_admin': True,  # MFT 접근 필요
         'collector': 'collect_user_glob',
     },
 }
+
+
+# =============================================================================
+# Local MFT Collector (BaseMFTCollector 상속)
+# =============================================================================
+
+# BitLocker 모듈 import
+try:
+    from utils.bitlocker import (
+        detect_bitlocker_on_system_drive,
+        BitLockerDecryptor,
+        is_pybde_installed,
+        BitLockerVolumeDetectionResult
+    )
+    BITLOCKER_MODULE_AVAILABLE = True
+except ImportError:
+    BITLOCKER_MODULE_AVAILABLE = False
+    BitLockerDecryptor = None
+
+# 동적 베이스 클래스 결정
+_LocalMFTBase = BaseMFTCollector if (BASE_MFT_AVAILABLE and BaseMFTCollector) else object
+
+
+class LocalMFTCollector(_LocalMFTBase):
+    """
+    로컬 디스크 MFT 기반 수집기
+
+    BaseMFTCollector를 상속하여 E01과 동일한 MFT 기반 수집을 사용합니다.
+
+    수집 우선순위:
+    1. MFT 파싱 기반 수집 (ForensicDiskAccessor)
+    2. BitLocker 암호화 시 → 복호화 시도 → MFT 수집
+    3. 복호화 실패 시 → 디렉토리 탐색 폴백 (Windows API)
+
+    디지털 포렌식 원칙:
+    - 파일 수 제한 없음
+    - 삭제 파일 포함 (MFT 모드에서만)
+    - 시스템 폴더 포함
+    """
+
+    def __init__(self, output_dir: str, volume: str = 'C'):
+        """
+        Args:
+            output_dir: 추출된 아티팩트 저장 디렉토리
+            volume: 수집할 볼륨 (기본: 'C')
+        """
+        if not BASE_MFT_AVAILABLE:
+            raise ImportError("BaseMFTCollector not available")
+
+        super().__init__(output_dir)
+
+        self.volume = volume
+        self._partition_index: Optional[int] = None
+        self._drive_number: Optional[int] = None
+
+        # BitLocker 및 폴백 관련
+        self._bitlocker_detected: bool = False
+        self._bitlocker_decrypted: bool = False
+        self._use_directory_fallback: bool = False
+        self._decrypted_reader = None
+
+        self._initialize_accessor()
+
+    def _initialize_accessor(self) -> bool:
+        """
+        ForensicDiskAccessor 초기화
+
+        수집 우선순위:
+        1. 일반 NTFS 파티션 → MFT 수집
+        2. BitLocker 파티션 → 복호화 시도 → MFT 수집
+        3. 복호화 실패 → 디렉토리 탐색 폴백
+        """
+        if not FORENSIC_DISK_AVAILABLE or ForensicDiskAccessor is None:
+            logger.warning("ForensicDiskAccessor not available, using directory fallback")
+            self._use_directory_fallback = True
+            return False
+
+        try:
+            # 물리 드라이브 번호 가져오기
+            self._drive_number = self._get_physical_drive_number()
+            if self._drive_number is None:
+                logger.warning("Cannot determine physical drive number, using directory fallback")
+                self._use_directory_fallback = True
+                return False
+
+            self._accessor = ForensicDiskAccessor.from_physical_disk(self._drive_number)
+
+            # 볼륨에 해당하는 파티션 찾기
+            partition_result = self._find_partition_for_volume()
+
+            if partition_result['found']:
+                if partition_result['is_bitlocker']:
+                    # BitLocker 암호화 파티션 발견
+                    self._bitlocker_detected = True
+                    logger.info(f"BitLocker encrypted partition detected at index {partition_result['index']}")
+
+                    # 복호화 시도
+                    if self._try_bitlocker_decryption(partition_result['index']):
+                        self._bitlocker_decrypted = True
+                        logger.info("BitLocker decryption successful, using MFT collection")
+                        return True
+                    else:
+                        # 복호화 실패 → 디렉토리 탐색 폴백
+                        logger.warning("BitLocker decryption failed, falling back to directory traversal")
+                        self._use_directory_fallback = True
+                        self._accessor = None
+                        return False
+                else:
+                    # 일반 NTFS 파티션
+                    self._accessor.select_partition(partition_result['index'])
+                    self._partition_index = partition_result['index']
+                    logger.info(f"LocalMFTCollector initialized: {self.volume}: (Drive {self._drive_number}, Partition {partition_result['index']})")
+                    return True
+            else:
+                # 파티션을 찾을 수 없음 → 디렉토리 탐색 폴백
+                logger.warning("Cannot find partition for volume, using directory fallback")
+                self._use_directory_fallback = True
+                return False
+
+        except Exception as e:
+            logger.warning(f"LocalMFTCollector initialization failed: {e}, using directory fallback")
+            self._accessor = None
+            self._use_directory_fallback = True
+            return False
+
+    def _try_bitlocker_decryption(self, partition_index: int) -> bool:
+        """
+        BitLocker 복호화 시도
+
+        Windows가 이미 볼륨을 마운트했다면 (로그인 상태),
+        OS를 통해 접근 가능하므로 디렉토리 폴백으로 수집 가능.
+
+        Args:
+            partition_index: BitLocker 파티션 인덱스
+
+        Returns:
+            복호화 성공 여부
+        """
+        if not BITLOCKER_MODULE_AVAILABLE:
+            logger.debug("BitLocker module not available")
+            return False
+
+        if not is_pybde_installed():
+            logger.debug("pybde not installed, cannot decrypt BitLocker")
+            return False
+
+        try:
+            # BitLocker 복호화기 초기화
+            decryptor = BitLockerDecryptor.from_physical_disk(
+                self._drive_number,
+                partition_index
+            )
+
+            # 자동 잠금 해제 시도 (TPM, 자동 잠금 해제 키 등)
+            # 실제로는 사용자 입력이 필요할 수 있음
+            # 여기서는 Windows가 이미 마운트한 볼륨인지 확인
+
+            # Windows가 마운트한 볼륨은 디렉토리 탐색으로 접근 가능
+            volume_path = f"{self.volume}:\\"
+            if os.path.exists(volume_path) and os.path.isdir(volume_path):
+                logger.info(f"Volume {self.volume}: is mounted and accessible via Windows API")
+                # 디렉토리 폴백 사용 (이미 마운트됨)
+                return False  # MFT는 여전히 접근 불가, 폴백 필요
+
+            return False
+
+        except Exception as e:
+            logger.debug(f"BitLocker decryption attempt failed: {e}")
+            return False
+
+    def _get_source_description(self) -> str:
+        """소스 설명 반환"""
+        if self._use_directory_fallback:
+            return f"Local: {self.volume}: (Directory Fallback)"
+        return f"Local: {self.volume}:"
+
+    def _get_physical_drive_number(self) -> Optional[int]:
+        """볼륨 문자에서 물리 드라이브 번호 가져오기"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            volume_path = f"\\\\.\\{self.volume}:"
+
+            GENERIC_READ = 0x80000000
+            FILE_SHARE_READ = 0x00000001
+            FILE_SHARE_WRITE = 0x00000002
+            OPEN_EXISTING = 3
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.CreateFileW(
+                volume_path,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                0,
+                None
+            )
+
+            if handle == -1:
+                return None
+
+            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000
+
+            class DISK_EXTENT(ctypes.Structure):
+                _fields_ = [
+                    ("DiskNumber", wintypes.DWORD),
+                    ("StartingOffset", ctypes.c_int64),
+                    ("ExtentLength", ctypes.c_int64),
+                ]
+
+            class VOLUME_DISK_EXTENTS(ctypes.Structure):
+                _fields_ = [
+                    ("NumberOfDiskExtents", wintypes.DWORD),
+                    ("Extents", DISK_EXTENT * 1),
+                ]
+
+            extents = VOLUME_DISK_EXTENTS()
+            bytes_returned = wintypes.DWORD()
+
+            result = kernel32.DeviceIoControl(
+                handle,
+                IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+                None, 0,
+                ctypes.byref(extents),
+                ctypes.sizeof(extents),
+                ctypes.byref(bytes_returned),
+                None
+            )
+
+            kernel32.CloseHandle(handle)
+
+            if result and extents.NumberOfDiskExtents > 0:
+                return extents.Extents[0].DiskNumber
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Cannot get physical drive number: {e}")
+            return None
+
+    def _find_partition_for_volume(self) -> Dict[str, Any]:
+        """
+        현재 볼륨에 해당하는 파티션 인덱스 찾기
+
+        Returns:
+            {
+                'found': bool,
+                'index': Optional[int],
+                'is_bitlocker': bool,
+                'filesystem': str
+            }
+        """
+        result = {'found': False, 'index': None, 'is_bitlocker': False, 'filesystem': ''}
+
+        if not self._accessor:
+            return result
+
+        try:
+            partitions = self._accessor.list_partitions()
+
+            best_partition = None
+            best_size = 0
+            bitlocker_partition = None
+
+            for i, part in enumerate(partitions):
+                # Recovery 파티션 건너뛰기
+                if 'recovery' in part.type_name.lower():
+                    continue
+
+                # BitLocker 암호화된 파티션 기록
+                if part.filesystem in ('BitLocker', 'bitlocker'):
+                    # 가장 큰 BitLocker 파티션 선택 (보통 메인 Windows 파티션)
+                    if bitlocker_partition is None or part.size > best_size:
+                        bitlocker_partition = i
+                        best_size = part.size
+                    continue
+
+                # NTFS 파티션 중 가장 큰 것 선택
+                if part.filesystem in ('NTFS', 'ntfs'):
+                    if part.size > best_size:
+                        best_size = part.size
+                        best_partition = i
+
+            # NTFS 파티션 우선
+            if best_partition is not None:
+                result['found'] = True
+                result['index'] = best_partition
+                result['is_bitlocker'] = False
+                result['filesystem'] = 'NTFS'
+            # NTFS가 없으면 BitLocker 파티션
+            elif bitlocker_partition is not None:
+                result['found'] = True
+                result['index'] = bitlocker_partition
+                result['is_bitlocker'] = True
+                result['filesystem'] = 'BitLocker'
+
+            return result
+
+        except Exception as e:
+            logger.debug(f"Cannot find partition: {e}")
+            return result
+
+    def collect(
+        self,
+        artifact_type: str,
+        progress_callback: Optional[callable] = None,
+        **kwargs
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        아티팩트 수집
+
+        MFT 모드 또는 디렉토리 탐색 폴백 사용.
+
+        Args:
+            artifact_type: 수집할 아티팩트 유형
+            progress_callback: 진행률 콜백
+
+        Yields:
+            (로컬 경로, 메타데이터) 튜플
+        """
+        if self._use_directory_fallback:
+            # BitLocker 또는 MFT 접근 불가 → 디렉토리 탐색
+            logger.info(f"[{self._get_source_description()}] Collecting {artifact_type} via directory traversal...")
+            yield from self._collect_directory_fallback(artifact_type, progress_callback)
+        else:
+            # MFT 기반 수집 (부모 클래스)
+            yield from super().collect(artifact_type, progress_callback, **kwargs)
+
+    def _collect_directory_fallback(
+        self,
+        artifact_type: str,
+        progress_callback: Optional[callable] = None
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        디렉토리 탐색 기반 수집 (BitLocker/MFT 폴백)
+
+        Windows API (os.walk, glob)를 사용하여 파일 수집.
+        삭제된 파일은 수집 불가.
+
+        Args:
+            artifact_type: 아티팩트 유형
+            progress_callback: 진행률 콜백
+
+        Yields:
+            (로컬 경로, 메타데이터) 튜플
+        """
+        if artifact_type not in ARTIFACT_MFT_FILTERS:
+            logger.warning(f"Unknown artifact type: {artifact_type}")
+            return
+
+        mft_filter = ARTIFACT_MFT_FILTERS[artifact_type]
+        artifact_dir = self.output_dir / artifact_type
+        artifact_dir.mkdir(exist_ok=True)
+
+        # 특수 아티팩트는 디렉토리 폴백으로 수집 불가
+        if 'special' in mft_filter:
+            logger.warning(f"Cannot collect {artifact_type} via directory fallback (requires raw disk access)")
+            return
+
+        volume_root = f"{self.volume}:\\"
+        extensions = mft_filter.get('extensions', set())
+        path_pattern = mft_filter.get('path_pattern')
+        path_patterns = mft_filter.get('path_patterns', [])
+        target_files = mft_filter.get('files', set())
+        full_disk_scan = mft_filter.get('full_disk_scan', False)
+
+        collected_count = 0
+        source = self._get_source_description()
+
+        if full_disk_scan and extensions:
+            # 전체 디스크 스캔 (document, image, video 등)
+            logger.info(f"[{source}] Full disk scan for {artifact_type} ({len(extensions)} extensions)")
+            for root, dirs, files in os.walk(volume_root):
+                # 시스템 폴더 제외 옵션 (기본: 포함)
+                # $Recycle.Bin은 접근 불가할 수 있음
+                try:
+                    for filename in files:
+                        ext = os.path.splitext(filename)[1].lower()
+                        if ext in extensions:
+                            src_path = os.path.join(root, filename)
+                            result = self._copy_file_with_metadata(
+                                src_path, artifact_dir, artifact_type
+                            )
+                            if result:
+                                collected_count += 1
+                                yield result
+                                if progress_callback:
+                                    progress_callback(result[0])
+                except PermissionError:
+                    continue
+                except Exception as e:
+                    logger.debug(f"Error scanning {root}: {e}")
+                    continue
+
+        else:
+            # 경로 기반 수집
+            search_patterns = []
+
+            if path_pattern:
+                search_patterns.append(path_pattern)
+            search_patterns.extend(path_patterns)
+
+            for pattern in search_patterns:
+                # 패턴을 실제 경로로 변환
+                search_path = os.path.join(volume_root, pattern.replace('/', os.sep).lstrip('\\'))
+
+                if target_files:
+                    # 특정 파일 수집
+                    for filename in target_files:
+                        file_path = os.path.join(search_path, filename)
+                        if os.path.exists(file_path):
+                            result = self._copy_file_with_metadata(
+                                file_path, artifact_dir, artifact_type
+                            )
+                            if result:
+                                collected_count += 1
+                                yield result
+                                if progress_callback:
+                                    progress_callback(result[0])
+                elif extensions:
+                    # 확장자 기반 수집
+                    if os.path.isdir(search_path):
+                        for filename in os.listdir(search_path):
+                            ext = os.path.splitext(filename)[1].lower()
+                            if ext in extensions:
+                                file_path = os.path.join(search_path, filename)
+                                result = self._copy_file_with_metadata(
+                                    file_path, artifact_dir, artifact_type
+                                )
+                                if result:
+                                    collected_count += 1
+                                    yield result
+                                    if progress_callback:
+                                        progress_callback(result[0])
+                else:
+                    # 디렉토리 전체 수집
+                    if os.path.isdir(search_path):
+                        for root, dirs, files in os.walk(search_path):
+                            for filename in files:
+                                file_path = os.path.join(root, filename)
+                                result = self._copy_file_with_metadata(
+                                    file_path, artifact_dir, artifact_type
+                                )
+                                if result:
+                                    collected_count += 1
+                                    yield result
+                                    if progress_callback:
+                                        progress_callback(result[0])
+
+        logger.info(f"[{source}] Collected {collected_count} {artifact_type} artifacts (directory fallback)")
+
+    def _copy_file_with_metadata(
+        self,
+        src_path: str,
+        artifact_dir: Path,
+        artifact_type: str
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """
+        파일 복사 및 메타데이터 생성
+
+        Args:
+            src_path: 원본 파일 경로
+            artifact_dir: 출력 디렉토리
+            artifact_type: 아티팩트 유형
+
+        Returns:
+            (로컬 경로, 메타데이터) 또는 None
+        """
+        try:
+            src = Path(src_path)
+            if not src.exists() or not src.is_file():
+                return None
+
+            # 출력 파일명 생성
+            safe_filename = src.name
+            output_file = artifact_dir / safe_filename
+
+            # 중복 방지
+            if output_file.exists():
+                base = output_file.stem
+                suffix = output_file.suffix
+                counter = 1
+                while output_file.exists():
+                    output_file = artifact_dir / f"{base}_{counter}{suffix}"
+                    counter += 1
+
+            # 파일 복사
+            shutil.copy2(src_path, output_file)
+
+            # 해시 계산
+            md5_hash = hashlib.md5()
+            sha256_hash = hashlib.sha256()
+            with open(output_file, 'rb') as f:
+                for chunk in iter(lambda: f.read(65536), b''):
+                    md5_hash.update(chunk)
+                    sha256_hash.update(chunk)
+
+            # 메타데이터 생성
+            stat = src.stat()
+            metadata = {
+                'artifact_type': artifact_type,
+                'name': src.name,
+                'original_path': str(src),
+                'size': stat.st_size,
+                'hash_md5': md5_hash.hexdigest(),
+                'hash_sha256': sha256_hash.hexdigest(),
+                'collection_method': 'directory_fallback',
+                'source': self._get_source_description(),
+                'is_deleted': False,  # 디렉토리 폴백은 삭제 파일 수집 불가
+                'created_time': datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                'modified_time': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                'collected_at': datetime.now().isoformat(),
+                'warning': 'Collected via directory fallback - deleted files not recoverable',
+            }
+
+            if self._bitlocker_detected:
+                metadata['bitlocker_status'] = 'encrypted_but_mounted'
+
+            return str(output_file), metadata
+
+        except PermissionError:
+            logger.debug(f"Permission denied: {src_path}")
+            return None
+        except Exception as e:
+            logger.debug(f"Cannot copy {src_path}: {e}")
+            return None
+
+    def get_collection_mode(self) -> str:
+        """현재 수집 모드 반환"""
+        if self._use_directory_fallback:
+            if self._bitlocker_detected:
+                return "directory_fallback (BitLocker)"
+            return "directory_fallback"
+        return "mft_based"
 
 
 class ArtifactCollector:
@@ -1177,6 +1732,12 @@ class ArtifactCollector:
         MBR/GPT → VBR → MFT → Data Runs → Cluster 체인을 따라
         파일 시스템을 우회하여 직접 디스크에서 파일을 읽습니다.
 
+        디지털 포렌식 원칙:
+        - document, image, video, email: 전체 디스크 스캔 (MFT 기반)
+        - 파일 수 제한 없음
+        - 삭제 파일 포함
+        - 시스템 폴더 포함
+
         장점:
         - OS 잠금 파일 (SYSTEM, SAM, NTUSER.DAT 등) 직접 수집
         - 삭제된 파일 복구 가능
@@ -1196,6 +1757,25 @@ class ArtifactCollector:
             return
 
         # ==========================================================
+        # 디지털 포렌식: document, image, video, email은 전체 디스크 스캔
+        # ==========================================================
+        if artifact_type in {'document', 'image', 'video', 'email'}:
+            extensions = mft_config.get('extensions', None)
+            if extensions:
+                print(f"[ForensicDisk] Full disk scan for {artifact_type} (Digital Forensics mode)")
+                yield from self._collect_forensic_disk_pattern(
+                    '',  # base_path 무시
+                    '*.*',  # pattern
+                    artifact_type,
+                    artifact_dir,
+                    progress_callback,
+                    include_deleted=True,  # 삭제 파일 포함
+                    extensions=extensions,
+                    full_disk_scan=True  # 전체 디스크 스캔
+                )
+                return
+
+        # ==========================================================
         # User-specific paths (NTUSER.DAT, browser profiles, etc.)
         # ==========================================================
         if 'user_path' in mft_config:
@@ -1211,12 +1791,14 @@ class ArtifactCollector:
         base_path = mft_config.get('base_path', '')
         pattern = mft_config.get('pattern', None)
         files = mft_config.get('files', None)
+        extensions = mft_config.get('extensions', None)
 
         if pattern:
-            # 패턴 기반 수집
+            # 패턴 기반 수집 (확장자 필터 포함)
             yield from self._collect_forensic_disk_pattern(
                 base_path, pattern, artifact_type, artifact_dir,
-                progress_callback, include_deleted
+                progress_callback, include_deleted,
+                extensions=extensions
             )
         elif files:
             # 특정 파일 목록 수집
@@ -1410,24 +1992,45 @@ class ArtifactCollector:
         artifact_type: str,
         artifact_dir: Path,
         progress_callback: Optional[callable],
-        include_deleted: bool
+        include_deleted: bool,
+        extensions: Optional[List[str]] = None,
+        full_disk_scan: bool = False
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         패턴 기반 수집 (ForensicDiskAccessor)
 
         MFT를 스캔하여 패턴과 일치하는 파일을 수집합니다.
+
+        디지털 포렌식 원칙:
+        - 파일 수 제한 없음
+        - 삭제 파일 포함
+        - 시스템 폴더 포함 (full_disk_scan=True 시)
+
+        Args:
+            base_path: 기본 경로 (예: 'Users/username/Documents')
+            pattern: 파일명 패턴 (예: '*.pf', '*.*')
+            artifact_type: 아티팩트 유형
+            artifact_dir: 출력 디렉토리
+            progress_callback: 진행률 콜백
+            include_deleted: 삭제 파일 포함 여부
+            extensions: 확장자 필터 (예: ['.doc', '.docx', '.pdf'])
+            full_disk_scan: True면 전체 디스크 스캔 (base_path 무시)
         """
         import fnmatch
 
         try:
             # MFT 스캔
-            print(f"[ForensicDisk] Scanning for pattern: {base_path}/{pattern}")
+            if full_disk_scan:
+                print(f"[ForensicDisk] Full disk scan for {artifact_type} (extensions: {extensions})")
+            else:
+                print(f"[ForensicDisk] Scanning for pattern: {base_path}/{pattern}")
+
             scan_result = self.forensic_disk_accessor.scan_all_files(
                 include_deleted=include_deleted
             )
 
             # 경로 정규화
-            base_normalized = base_path.replace('\\', '/').strip('/')
+            base_normalized = base_path.replace('\\', '/').strip('/') if not full_disk_scan else ''
 
             # 활성 파일과 삭제된 파일 합치기
             all_files = scan_result.get('active_files', [])
@@ -1436,21 +2039,43 @@ class ArtifactCollector:
 
             collected_count = 0
 
+            # 확장자 정규화 (소문자, '.' 포함)
+            if extensions:
+                normalized_extensions = set()
+                for ext in extensions:
+                    ext_lower = ext.lower()
+                    if not ext_lower.startswith('.'):
+                        ext_lower = '.' + ext_lower
+                    normalized_extensions.add(ext_lower)
+                extensions = normalized_extensions
+
             for entry in all_files:
                 if entry.is_directory:
                     continue
 
-                # 경로 매칭
-                entry_path = entry.full_path.replace('\\', '/').strip('/')
-
-                # 베이스 경로 확인
-                if base_normalized and not entry_path.lower().startswith(base_normalized.lower()):
-                    continue
-
-                # 패턴 매칭
                 filename = entry.filename
-                if not fnmatch.fnmatch(filename.lower(), pattern.lower()):
-                    continue
+                filename_lower = filename.lower()
+
+                # 확장자 필터 (우선 적용 - 빠른 필터링)
+                if extensions:
+                    has_ext = False
+                    if '.' in filename_lower:
+                        file_ext = '.' + filename_lower.rsplit('.', 1)[-1]
+                        if file_ext in extensions:
+                            has_ext = True
+                    if not has_ext:
+                        continue
+
+                # 경로 매칭 (full_disk_scan이 아닌 경우에만)
+                if not full_disk_scan and base_normalized:
+                    entry_path = entry.full_path.replace('\\', '/').strip('/')
+                    if not entry_path.lower().startswith(base_normalized.lower()):
+                        continue
+
+                # 패턴 매칭 (확장자 필터가 없는 경우에만)
+                if not extensions and pattern:
+                    if not fnmatch.fnmatch(filename_lower, pattern.lower()):
+                        continue
 
                 # 파일 수집
                 try:
@@ -1500,7 +2125,7 @@ class ArtifactCollector:
                 except Exception as e:
                     print(f"[WARNING] Cannot read {entry.full_path}: {e}")
 
-            print(f"[ForensicDisk] Pattern collection completed: {collected_count} files")
+            print(f"[ForensicDisk] Pattern collection completed: {collected_count} files (no limits)")
 
         except Exception as e:
             print(f"[ERROR] ForensicDisk pattern collection failed: {e}")
@@ -1515,6 +2140,10 @@ class ArtifactCollector:
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         사용자별 경로 수집 (NTUSER.DAT, browser profiles 등)
+
+        디지털 포렌식 원칙:
+        - 확장자 필터 적용
+        - 삭제 파일 포함
         """
         users_dir = Path(r'C:\Users')
 
@@ -1529,6 +2158,7 @@ class ArtifactCollector:
             user_path = mft_config.get('user_path', '')
             pattern = mft_config.get('pattern', None)
             files = mft_config.get('files', None)
+            extensions = mft_config.get('extensions', None)  # 확장자 필터
 
             # 사용자별 출력 디렉토리
             user_output_dir = artifact_dir / user_dir.name
@@ -1536,11 +2166,12 @@ class ArtifactCollector:
 
             try:
                 if pattern:
-                    # 패턴 기반 수집
+                    # 패턴 기반 수집 (확장자 필터 포함)
                     full_base_path = f"Users/{user_dir.name}/{user_path}"
                     for result in self._collect_forensic_disk_pattern(
                         full_base_path, pattern, artifact_type,
-                        user_output_dir, progress_callback, include_deleted
+                        user_output_dir, progress_callback, include_deleted,
+                        extensions=extensions  # 확장자 필터 전달
                     ):
                         result[1]['username'] = user_dir.name
                         yield result

@@ -3,8 +3,13 @@
 E01 Artifact Collector
 
 E01 증거 이미지에서 아티팩트를 추출하는 수집기.
-기존 ForensicDiskAccessor를 활용하여 디스크 이미지를 파싱하고
-아티팩트를 로컬에 추출한 후 서버로 업로드합니다.
+BaseMFTCollector를 상속하여 MFT 기반 수집을 사용합니다.
+
+디지털 포렌식 원칙:
+- MFT 파싱 기반 수집 (디렉토리 탐색 금지)
+- 파일 수 제한 없음
+- 삭제 파일 포함
+- 시스템 폴더 포함
 
 Usage:
     collector = E01ArtifactCollector("evidence.E01", output_dir="./extracted")
@@ -15,12 +20,20 @@ Usage:
         print(f"Extracted: {file_path}")
 """
 
-import os
-import hashlib
 import logging
 from pathlib import Path
 from typing import Generator, Tuple, Dict, Any, List, Optional
 from dataclasses import dataclass
+
+# Import base class
+from collectors.base_mft_collector import BaseMFTCollector, ARTIFACT_MFT_FILTERS
+
+# Import ForensicDiskAccessor
+try:
+    from collectors.forensic_disk import ForensicDiskAccessor, FORENSIC_DISK_AVAILABLE
+except ImportError:
+    FORENSIC_DISK_AVAILABLE = False
+    ForensicDiskAccessor = None
 
 logger = logging.getLogger(__name__)
 
@@ -54,98 +67,172 @@ class ExtractedArtifact:
 
 
 # =============================================================================
-# Artifact Path Mappings
+# Legacy Artifact Path Mappings (backward compatibility)
 # =============================================================================
 
-# 아티팩트 유형별 수집 경로
 ARTIFACT_PATHS = {
-    # 레지스트리 하이브
     'registry': {
         'description': 'Windows Registry Hives',
         'paths': [
-            ('Windows/System32/config/SYSTEM', 'SYSTEM hive'),
-            ('Windows/System32/config/SOFTWARE', 'SOFTWARE hive'),
-            ('Windows/System32/config/SAM', 'SAM hive'),
-            ('Windows/System32/config/SECURITY', 'SECURITY hive'),
-            ('Windows/System32/config/DEFAULT', 'DEFAULT hive'),
-            ('Windows/AppCompat/Programs/Amcache.hve', 'Amcache'),
+            ('Windows/System32/config/SYSTEM', 'System Registry'),
+            ('Windows/System32/config/SOFTWARE', 'Software Registry'),
+            ('Windows/System32/config/SAM', 'SAM Registry'),
+            ('Windows/System32/config/SECURITY', 'Security Registry'),
+            ('Windows/System32/config/DEFAULT', 'Default Registry'),
         ],
         'user_paths': [
-            ('NTUSER.DAT', 'User registry hive'),
-            ('AppData/Local/Microsoft/Windows/UsrClass.dat', 'User class hive'),
+            ('NTUSER.DAT', 'User Registry Hive'),
         ],
+        'pattern': None,
     },
-
-    # Prefetch
     'prefetch': {
         'description': 'Windows Prefetch Files',
         'paths': [
-            ('Windows/Prefetch', 'Prefetch directory'),
+            ('Windows/Prefetch', 'Prefetch Directory'),
         ],
         'pattern': '*.pf',
     },
-
-    # 이벤트 로그
     'eventlog': {
         'description': 'Windows Event Logs',
         'paths': [
-            ('Windows/System32/winevt/Logs', 'Event logs directory'),
+            ('Windows/System32/winevt/Logs', 'Event Logs'),
         ],
         'pattern': '*.evtx',
     },
-
-    # 브라우저
     'browser': {
-        'description': 'Browser Artifacts',
+        'description': 'Browser Data',
         'user_paths': [
             ('AppData/Local/Google/Chrome/User Data/Default/History', 'Chrome History'),
             ('AppData/Local/Google/Chrome/User Data/Default/Cookies', 'Chrome Cookies'),
             ('AppData/Local/Microsoft/Edge/User Data/Default/History', 'Edge History'),
             ('AppData/Roaming/Mozilla/Firefox/Profiles', 'Firefox Profiles'),
         ],
+        'pattern': None,
     },
-
-    # USB 흔적
     'usb': {
-        'description': 'USB Device Traces',
+        'description': 'USB Device History',
         'paths': [
-            ('Windows/inf/setupapi.dev.log', 'USB setup log'),
+            ('Windows/INF/setupapi.dev.log', 'SetupAPI Device Log'),
+            ('Windows/inf/setupapi.dev.log', 'SetupAPI Device Log (lowercase)'),
         ],
-        # USB 정보는 주로 레지스트리에서 추출
+        'pattern': None,
     },
-
-    # 최근 파일
     'recent': {
-        'description': 'Recent Files and Links',
+        'description': 'Recent Files',
         'user_paths': [
-            ('AppData/Roaming/Microsoft/Windows/Recent', 'Recent files'),
-            ('AppData/Roaming/Microsoft/Office/Recent', 'Office recent'),
+            ('AppData/Roaming/Microsoft/Windows/Recent', 'Recent Files'),
         ],
+        'pattern': '*.lnk',
     },
-
-    # MFT
     'mft': {
         'description': 'Master File Table',
-        'paths': [
-            ('$MFT', 'Master File Table'),
-        ],
+        'special': 'collect_mft_raw',
     },
-
-    # USN Journal
+    'logfile': {
+        'description': 'NTFS $LogFile',
+        'special': 'collect_logfile',
+    },
     'usn_journal': {
-        'description': 'USN Change Journal',
-        'paths': [
-            ('$Extend/$UsnJrnl:$J', 'USN Journal'),
-        ],
+        'description': 'USN Journal',
+        'special': 'collect_usn_journal',
     },
-
-    # 시스템 정보
-    'system_info': {
-        'description': 'System Information',
+    'amcache': {
+        'description': 'Amcache.hve',
         'paths': [
-            ('Windows/System32/config/SYSTEM', 'System config'),
+            ('Windows/AppCompat/Programs/Amcache.hve', 'Amcache'),
         ],
+        'pattern': None,
     },
+    'userassist': {
+        'description': 'UserAssist (NTUSER.DAT)',
+        'user_paths': [
+            ('NTUSER.DAT', 'User Registry'),
+        ],
+        'pattern': None,
+    },
+    'recycle_bin': {
+        'description': 'Recycle Bin',
+        'paths': [
+            ('$Recycle.Bin', 'Recycle Bin'),
+        ],
+        'pattern': '$I*',
+    },
+    'srum': {
+        'description': 'SRUM Database',
+        'paths': [
+            ('Windows/System32/sru/SRUDB.dat', 'SRUM'),
+            ('Windows/System32/SRU/SRUDB.dat', 'SRUM (uppercase)'),
+        ],
+        'pattern': None,
+    },
+    'jumplist': {
+        'description': 'Jump Lists',
+        'user_paths': [
+            ('AppData/Roaming/Microsoft/Windows/Recent/AutomaticDestinations', 'Auto Destinations'),
+            ('AppData/Roaming/Microsoft/Windows/Recent/CustomDestinations', 'Custom Destinations'),
+        ],
+        'pattern': '*.automaticDestinations-ms,*.customDestinations-ms',
+    },
+    'shortcut': {
+        'description': 'Shortcut Files',
+        'user_paths': [
+            ('Desktop', 'Desktop Shortcuts'),
+        ],
+        'pattern': '*.lnk',
+    },
+    'scheduled_task': {
+        'description': 'Scheduled Tasks',
+        'paths': [
+            ('Windows/System32/Tasks', 'Scheduled Tasks'),
+        ],
+        'pattern': '*',
+    },
+    'shellbags': {
+        'description': 'ShellBags',
+        'user_paths': [
+            ('NTUSER.DAT', 'NTUSER.DAT'),
+            ('AppData/Local/Microsoft/Windows/UsrClass.dat', 'UsrClass.dat'),
+        ],
+        'pattern': None,
+    },
+    'thumbcache': {
+        'description': 'Thumbnail Cache',
+        'user_paths': [
+            ('AppData/Local/Microsoft/Windows/Explorer', 'Explorer Cache'),
+        ],
+        'pattern': 'thumbcache_*.db',
+    },
+    'document': {
+        'description': 'Documents',
+        'pattern': '*.doc,*.docx,*.pdf,*.xls,*.xlsx,*.ppt,*.pptx,*.hwp,*.hwpx,*.txt,*.rtf',
+    },
+    'email': {
+        'description': 'Email Files',
+        'pattern': '*.pst,*.ost,*.eml,*.msg',
+    },
+    'image': {
+        'description': 'Image Files',
+        'pattern': '*.jpg,*.jpeg,*.png,*.gif,*.bmp,*.tiff,*.webp,*.heic,*.raw',
+    },
+    'video': {
+        'description': 'Video Files',
+        'pattern': '*.mp4,*.avi,*.mkv,*.mov,*.wmv,*.flv,*.webm,*.mpeg',
+    },
+    # Mobile artifacts (skip for E01)
+    'mobile_android_sms': {'skip': True},
+    'mobile_android_call': {'skip': True},
+    'mobile_android_contacts': {'skip': True},
+    'mobile_android_app': {'skip': True},
+    'mobile_android_wifi': {'skip': True},
+    'mobile_android_location': {'skip': True},
+    'mobile_android_media': {'skip': True},
+    'mobile_ios_sms': {'skip': True},
+    'mobile_ios_call': {'skip': True},
+    'mobile_ios_contacts': {'skip': True},
+    'mobile_ios_app': {'skip': True},
+    'mobile_ios_safari': {'skip': True},
+    'mobile_ios_location': {'skip': True},
+    'mobile_ios_backup': {'skip': True},
 }
 
 
@@ -153,12 +240,17 @@ ARTIFACT_PATHS = {
 # E01 Artifact Collector
 # =============================================================================
 
-class E01ArtifactCollector:
+class E01ArtifactCollector(BaseMFTCollector):
     """
-    E01 이미지에서 아티팩트 추출
+    E01 이미지 아티팩트 수집기
 
-    ForensicDiskAccessor를 사용하여 E01 이미지를 파싱하고
-    지정된 아티팩트를 로컬 파일로 추출합니다.
+    BaseMFTCollector를 상속하여 MFT 기반 수집을 사용합니다.
+
+    디지털 포렌식 원칙:
+    - MFT 파싱 기반 수집 (디렉토리 탐색 금지)
+    - 파일 수 제한 없음
+    - 삭제 파일 포함
+    - 시스템 폴더 포함
     """
 
     def __init__(self, e01_path: str, output_dir: str = None):
@@ -168,87 +260,68 @@ class E01ArtifactCollector:
             output_dir: 추출된 아티팩트 저장 디렉토리
         """
         self.e01_path = Path(e01_path)
-        self.output_dir = Path(output_dir) if output_dir else Path.cwd() / 'e01_extract'
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self._accessor = None
+        if output_dir is None:
+            output_dir = str(Path.cwd() / 'e01_extract')
+
+        super().__init__(output_dir)
+
         self._selected_partition: Optional[int] = None
         self._partitions: List[PartitionInfo] = []
         self._user_folders: List[str] = []
 
-        self._initialize()
+        self._initialize_accessor()
 
-    def _initialize(self):
-        """이미지 로드 및 초기화"""
+    def _initialize_accessor(self) -> bool:
+        """ForensicDiskAccessor 초기화"""
+        if not FORENSIC_DISK_AVAILABLE or ForensicDiskAccessor is None:
+            logger.error("ForensicDiskAccessor not available")
+            return False
+
         try:
-            from collectors.forensic_disk import ForensicDiskAccessor, FORENSIC_DISK_AVAILABLE
-
-            if not FORENSIC_DISK_AVAILABLE:
-                raise ImportError("ForensicDiskAccessor not available")
-
-            self._accessor = ForensicDiskAccessor.from_e01(str(self.e01_path))
-            logger.info(f"E01 image loaded: {self.e01_path.name}")
-
-        except ImportError as e:
-            logger.error(f"Failed to load ForensicDiskAccessor: {e}")
-            raise
+            self._accessor = ForensicDiskAccessor.from_e01_file(str(self.e01_path))
+            logger.info(f"E01 image loaded: {self.e01_path}")
+            return True
         except Exception as e:
             logger.error(f"Failed to load E01 image: {e}")
-            raise
+            self._accessor = None
+            return False
 
-    def list_partitions(self) -> List[Dict[str, Any]]:
-        """
-        파티션 목록 조회
+    def _get_source_description(self) -> str:
+        """소스 설명 반환"""
+        return f"E01: {self.e01_path.name}"
 
-        Returns:
-            파티션 정보 딕셔너리 목록
-        """
+    # =========================================================================
+    # Partition Management
+    # =========================================================================
+
+    def list_partitions(self) -> List[PartitionInfo]:
+        """파티션 목록 조회"""
         if not self._accessor:
             return []
 
         try:
-            partitions = self._accessor.list_partitions()
+            raw_partitions = self._accessor.list_partitions()
             self._partitions = []
 
-            result = []
-            for i, p in enumerate(partitions):
-                info = PartitionInfo(
+            for i, p in enumerate(raw_partitions):
+                self._partitions.append(PartitionInfo(
                     index=i,
-                    offset=getattr(p, 'offset', 0),
-                    size=getattr(p, 'size', 0),
-                    filesystem=getattr(p, 'filesystem', 'Unknown'),
-                    type_name=getattr(p, 'type_name', 'Unknown'),
+                    offset=p.start_offset,
+                    size=p.size,
+                    filesystem=p.filesystem,
+                    type_name=p.type_name,
                     bootable=getattr(p, 'bootable', False),
-                )
-                self._partitions.append(info)
+                ))
 
-                result.append({
-                    'index': i,
-                    'offset': info.offset,
-                    'size': info.size,
-                    'size_display': self._format_size(info.size),
-                    'filesystem': info.filesystem,
-                    'type': info.type_name,
-                    'bootable': info.bootable,
-                })
-
-            logger.info(f"Found {len(result)} partitions")
-            return result
+            return self._partitions
 
         except Exception as e:
             logger.error(f"Failed to list partitions: {e}")
             return []
 
     def select_partition(self, index: int) -> bool:
-        """
-        분석할 파티션 선택
-
-        Args:
-            index: 파티션 인덱스
-
-        Returns:
-            성공 여부
-        """
+        """파티션 선택"""
         if not self._accessor:
             return False
 
@@ -260,40 +333,83 @@ class E01ArtifactCollector:
             # 사용자 폴더 탐색
             self._discover_user_folders()
 
+            # MFT 인덱스 초기화
+            self._mft_indexed = False
+            self._mft_cache = {'active_files': [], 'deleted_files': [], 'directories': []}
+            self._extension_index = {}
+
             return True
 
         except Exception as e:
             logger.error(f"Failed to select partition {index}: {e}")
             return False
 
-    def _discover_user_folders(self):
-        """사용자 프로필 폴더 탐색"""
+    def get_windows_partition(self) -> Optional[int]:
+        """Windows 파티션 자동 탐지"""
+        if not self._partitions:
+            self.list_partitions()
+
+        for p in self._partitions:
+            if p.filesystem.upper() == 'NTFS' and p.size > 20 * 1024 * 1024 * 1024:
+                # 20GB 이상의 NTFS 파티션 선택
+                return p.index
+
+        # 가장 큰 NTFS 파티션 선택
+        ntfs_partitions = [p for p in self._partitions if p.filesystem.upper() == 'NTFS']
+        if ntfs_partitions:
+            largest = max(ntfs_partitions, key=lambda p: p.size)
+            return largest.index
+
+        return None
+
+    def _discover_user_folders(self) -> None:
+        """Users 폴더 내 사용자 디렉토리 탐색"""
+        if not self._accessor:
+            return
+
         self._user_folders = []
+        system_folders = {'public', 'default', 'default user', 'all users', 'desktop.ini'}
 
         try:
-            users_path = "Users"
-            if self._accessor.path_exists(users_path):
-                for entry in self._accessor.list_directory(users_path):
-                    name = entry.name if hasattr(entry, 'name') else str(entry)
-                    # 시스템 폴더 제외
-                    if name not in ['All Users', 'Default', 'Default User', 'Public', 'desktop.ini']:
-                        self._user_folders.append(name)
+            # Users 디렉토리 찾기
+            users_inode = self._accessor.resolve_path('/Users')
+            if users_inode is None:
+                users_inode = self._accessor.resolve_path('/users')
 
-            logger.info(f"Found {len(self._user_folders)} user folders")
+            if users_inode is None:
+                logger.warning("Users directory not found")
+                return
+
+            # 사용자 폴더 목록
+            entries = self._accessor.list_directory(users_inode)
+            for entry in entries:
+                name = entry.filename if hasattr(entry, 'filename') else str(entry)
+                is_dir = entry.is_directory if hasattr(entry, 'is_directory') else False
+
+                if is_dir and name.lower() not in system_folders:
+                    self._user_folders.append(name)
+
+            logger.info(f"Found {len(self._user_folders)} user folders: {self._user_folders}")
 
         except Exception as e:
-            logger.debug(f"Failed to discover user folders: {e}")
+            logger.debug(f"Error discovering user folders: {e}")
+
+    # =========================================================================
+    # Collection (inherits from BaseMFTCollector)
+    # =========================================================================
 
     def collect(
         self,
         artifact_type: str,
+        progress_callback: Optional[callable] = None,
         **kwargs
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        아티팩트 수집
+        아티팩트 수집 (MFT 기반)
 
         Args:
             artifact_type: 수집할 아티팩트 유형
+            progress_callback: 진행률 콜백
 
         Yields:
             (로컬 경로, 메타데이터) 튜플
@@ -302,215 +418,33 @@ class E01ArtifactCollector:
             logger.error("No partition selected. Call select_partition() first.")
             return
 
-        if artifact_type not in ARTIFACT_PATHS:
-            logger.warning(f"Unknown artifact type: {artifact_type}")
+        # Skip mobile artifacts
+        if artifact_type in ARTIFACT_PATHS and ARTIFACT_PATHS[artifact_type].get('skip'):
+            logger.debug(f"Skipping {artifact_type} (not applicable for E01)")
             return
 
-        config = ARTIFACT_PATHS[artifact_type]
-        extracted_count = 0
+        # Use base class implementation
+        yield from super().collect(artifact_type, progress_callback, **kwargs)
 
-        # 시스템 경로 수집
-        if 'paths' in config:
-            for path, description in config['paths']:
-                for result in self._extract_path(artifact_type, path, description, config.get('pattern')):
-                    extracted_count += 1
-                    yield result
+    # =========================================================================
+    # Utilities
+    # =========================================================================
 
-        # 사용자별 경로 수집
-        if 'user_paths' in config:
-            for user_folder in self._user_folders:
-                for rel_path, description in config['user_paths']:
-                    full_path = f"Users/{user_folder}/{rel_path}"
-                    for result in self._extract_path(
-                        artifact_type,
-                        full_path,
-                        f"{description} ({user_folder})",
-                        config.get('pattern')
-                    ):
-                        extracted_count += 1
-                        yield result
+    def get_image_info(self) -> Dict[str, Any]:
+        """E01 이미지 정보 반환"""
+        if not self._accessor:
+            return {}
 
-        logger.info(f"Extracted {extracted_count} artifacts for {artifact_type}")
-
-    def _extract_path(
-        self,
-        artifact_type: str,
-        path: str,
-        description: str,
-        pattern: Optional[str] = None
-    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        """
-        경로에서 파일 추출
-
-        Args:
-            artifact_type: 아티팩트 유형
-            path: 추출할 경로
-            description: 설명
-            pattern: 파일 패턴 (디렉토리인 경우)
-
-        Yields:
-            (로컬 경로, 메타데이터) 튜플
-        """
-        try:
-            # 경로 존재 확인
-            if not self._accessor.path_exists(path):
-                logger.debug(f"Path not found: {path}")
-                return
-
-            # 디렉토리인 경우
-            if self._accessor.is_directory(path):
-                for file_path, metadata in self._extract_directory(artifact_type, path, description, pattern):
-                    yield file_path, metadata
-            else:
-                # 단일 파일
-                for file_path, metadata in self._extract_file(artifact_type, path, description):
-                    yield file_path, metadata
-
-        except Exception as e:
-            logger.warning(f"Failed to extract {path}: {e}")
-
-    def _extract_directory(
-        self,
-        artifact_type: str,
-        dir_path: str,
-        description: str,
-        pattern: Optional[str] = None
-    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        """디렉토리 내 파일 추출"""
-        try:
-            entries = self._accessor.list_directory(dir_path)
-
-            for entry in entries:
-                name = entry.name if hasattr(entry, 'name') else str(entry)
-
-                # 패턴 필터링
-                if pattern:
-                    import fnmatch
-                    if not fnmatch.fnmatch(name.lower(), pattern.lower()):
-                        continue
-
-                file_path = f"{dir_path}/{name}"
-
-                if not self._accessor.is_directory(file_path):
-                    for result in self._extract_file(artifact_type, file_path, description):
-                        yield result
-
-        except Exception as e:
-            logger.warning(f"Failed to read directory {dir_path}: {e}")
-
-    def _extract_file(
-        self,
-        artifact_type: str,
-        file_path: str,
-        description: str
-    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        """
-        단일 파일 추출
-
-        Args:
-            artifact_type: 아티팩트 유형
-            file_path: 파일 경로
-            description: 설명
-
-        Yields:
-            (로컬 경로, 메타데이터) 튜플
-        """
-        try:
-            # 파일 데이터 읽기
-            file_data = self._accessor.read_file(file_path)
-
-            if file_data is None:
-                logger.debug(f"Could not read file: {file_path}")
-                return
-
-            # 파일명 추출
-            filename = Path(file_path).name
-
-            # 로컬 저장 경로
-            local_dir = self.output_dir / artifact_type
-            local_dir.mkdir(parents=True, exist_ok=True)
-
-            # 충돌 방지를 위한 고유 이름 생성
-            local_path = self._get_unique_path(local_dir, filename)
-
-            # 파일 저장
-            with open(local_path, 'wb') as f:
-                f.write(file_data)
-
-            # 해시 계산
-            sha256 = hashlib.sha256(file_data).hexdigest()
-            md5 = hashlib.md5(file_data).hexdigest()
-
-            # 파일 메타데이터 가져오기
-            file_meta = self._accessor.get_file_metadata(file_path) if hasattr(self._accessor, 'get_file_metadata') else None
-
-            metadata = {
-                'artifact_type': artifact_type,
-                'original_path': file_path,
-                'filename': filename,
-                'size': len(file_data),
-                'sha256': sha256,
-                'md5': md5,
-                'description': description,
-                'source': 'e01_image',
-                'e01_path': str(self.e01_path),
-                'partition_index': self._selected_partition,
-            }
-
-            # 타임스탬프 추가 (가능한 경우)
-            if file_meta:
-                if hasattr(file_meta, 'created'):
-                    metadata['created'] = file_meta.created
-                if hasattr(file_meta, 'modified'):
-                    metadata['modified'] = file_meta.modified
-                if hasattr(file_meta, 'accessed'):
-                    metadata['accessed'] = file_meta.accessed
-
-            logger.debug(f"Extracted: {file_path} -> {local_path}")
-            yield str(local_path), metadata
-
-        except Exception as e:
-            logger.warning(f"Failed to extract file {file_path}: {e}")
-
-    def _get_unique_path(self, directory: Path, filename: str) -> Path:
-        """중복되지 않는 파일 경로 생성"""
-        path = directory / filename
-        if not path.exists():
-            return path
-
-        # 중복 시 번호 추가
-        stem = path.stem
-        suffix = path.suffix
-        counter = 1
-
-        while path.exists():
-            path = directory / f"{stem}_{counter}{suffix}"
-            counter += 1
-
-        return path
-
-    @staticmethod
-    def _format_size(size_bytes: int) -> str:
-        """크기를 사람이 읽기 쉬운 형태로 변환"""
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if size_bytes < 1024:
-                return f"{size_bytes:.1f} {unit}"
-            size_bytes /= 1024
-        return f"{size_bytes:.1f} PB"
-
-    def get_supported_artifact_types(self) -> List[str]:
-        """지원하는 아티팩트 유형 목록"""
-        return list(ARTIFACT_PATHS.keys())
+        return {
+            'path': str(self.e01_path),
+            'partitions': len(self._partitions),
+            'selected_partition': self._selected_partition,
+            'user_folders': self._user_folders,
+        }
 
     def close(self):
-        """리소스 해제"""
-        if self._accessor and hasattr(self._accessor, 'close'):
-            self._accessor.close()
-            logger.info("E01 accessor closed")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-        return False
+        """리소스 정리"""
+        super().close()
+        self._selected_partition = None
+        self._partitions = []
+        self._user_folders = []

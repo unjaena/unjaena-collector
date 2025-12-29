@@ -369,8 +369,18 @@ class MultiDeviceCollector(QObject):
         output_dir = self._output_dir or './collected'
 
         if device.device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
-            from collectors.artifact_collector import ArtifactCollector
-            return ArtifactCollector(output_dir)
+            # LocalMFTCollector 사용 (BitLocker 자동 감지 + 디렉토리 폴백)
+            from collectors.artifact_collector import LocalMFTCollector, BASE_MFT_AVAILABLE
+            if BASE_MFT_AVAILABLE:
+                volume = device.metadata.get('volume', 'C')
+                collector = LocalMFTCollector(output_dir, volume=volume)
+                logger.info(f"Using LocalMFTCollector (mode: {collector.get_collection_mode()})")
+                return collector
+            else:
+                # BaseMFTCollector 없으면 기존 ArtifactCollector 사용
+                from collectors.artifact_collector import ArtifactCollector
+                logger.info("Using legacy ArtifactCollector (BaseMFTCollector not available)")
+                return ArtifactCollector(output_dir)
 
         elif device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE):
             from collectors.e01_artifact_collector import E01ArtifactCollector

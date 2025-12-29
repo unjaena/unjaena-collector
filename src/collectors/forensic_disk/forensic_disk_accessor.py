@@ -35,7 +35,7 @@ Usage:
 
 import struct
 import logging
-from typing import Optional, List, Dict, Generator, Any, Union
+from typing import Optional, List, Dict, Generator, Any, Union, Tuple
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -133,6 +133,11 @@ class FileCatalogEntry:
         if self.ads_streams is None:
             self.ads_streams = []
 
+    @property
+    def name(self) -> str:
+        """filename 별칭 (호환성)"""
+        return self.filename
+
 
 # ==============================================================================
 # Forensic Disk Accessor
@@ -176,6 +181,13 @@ class ForensicDiskAccessor:
 
         # MFT 인덱스 캐시 (경로 → inode)
         self._path_cache: Dict[str, int] = {}
+
+        # MFT 부모-자식 인덱스 캐시 (parent_inode → [child_inodes])
+        self._parent_child_index: Dict[int, List[int]] = {}
+        self._parent_index_built: bool = False
+
+        # 파일명 맵 캐시 ((parent_inode, lowercase_name) → inode)
+        self._name_to_inode_map: Dict[tuple, int] = {}
 
         # 파티션 탐지
         self._detect_partitions()
@@ -675,6 +687,192 @@ class ForensicDiskAccessor:
 
         return self._extractor.list_ads_streams(inode)
 
+    def path_exists(self, path: str) -> bool:
+        """
+        경로 존재 여부 확인
+
+        Args:
+            path: 파일/디렉토리 경로
+
+        Returns:
+            존재 여부
+        """
+        if self._extractor is None:
+            return False
+
+        try:
+            path = self._normalize_path(path)
+            inode = self._resolve_path_to_inode(path)
+            return inode is not None
+        except Exception:
+            return False
+
+    def is_directory(self, path: str) -> bool:
+        """
+        경로가 디렉토리인지 확인
+
+        Args:
+            path: 경로
+
+        Returns:
+            디렉토리 여부
+        """
+        if self._extractor is None:
+            return False
+
+        try:
+            path = self._normalize_path(path)
+            inode = self._resolve_path_to_inode(path)
+            if inode is None:
+                return False
+
+            metadata = self._extractor.get_file_metadata(inode)
+            return metadata.is_directory
+        except Exception:
+            return False
+
+    def _get_mft_entry_count(self) -> int:
+        """
+        MFT 전체 엔트리 수 추정
+
+        $MFT 파일 크기를 기반으로 전체 엔트리 수를 계산합니다.
+        """
+        try:
+            # $MFT 메타데이터에서 크기 가져오기
+            mft_metadata = self._extractor.get_file_metadata(0)
+            if mft_metadata and mft_metadata.size > 0:
+                # MFT 엔트리 크기는 일반적으로 1024 바이트
+                entry_count = mft_metadata.size // 1024
+                logger.debug(f"MFT size: {mft_metadata.size} bytes, estimated entries: {entry_count}")
+                return entry_count
+        except Exception as e:
+            logger.debug(f"Failed to get MFT size: {e}")
+
+        # 기본값: 500만 엔트리 (대용량 이미지 지원)
+        return 5000000
+
+    def _build_parent_index(self) -> None:
+        """
+        MFT 부모-자식 인덱스 구축 (최초 1회만 실행)
+
+        MFT 전체를 순회하여 parent_inode → [child_inodes] 맵을 생성합니다.
+        이후 list_directory() 호출 시 O(1)로 자식을 조회할 수 있습니다.
+
+        또한 파일명 → inode 맵도 구축하여 대소문자 무관 검색을 지원합니다.
+
+        디지털 포렌식 원칙:
+        - MFT 엔트리 수 제한 없음 (동적으로 전체 크기 감지)
+        - 삭제되지 않은 파일만 인덱싱 (list_directory 용)
+        """
+        if self._parent_index_built or self._extractor is None:
+            return
+
+        logger.info("Building MFT parent-child index (this may take a moment)...")
+        self._parent_child_index = {}
+        self._name_to_inode_map = {}  # (parent_inode, lowercase_name) -> inode
+
+        try:
+            # MFT 전체 순회 - 동적 크기 감지 (제한 없음)
+            max_entries = self._get_mft_entry_count()
+            logger.info(f"MFT index building: scanning up to {max_entries:,} entries")
+            consecutive_errors = 0
+            max_consecutive_errors = 1000
+            indexed_count = 0
+
+            for entry_num in range(0, max_entries):
+                try:
+                    entry_data = self._extractor.read_mft_entry(entry_num)
+
+                    # 유효하지 않은 엔트리 건너뛰기
+                    if entry_data[:4] != b'FILE':
+                        consecutive_errors += 1
+                        if consecutive_errors > max_consecutive_errors:
+                            logger.debug(f"Stopping index build at entry {entry_num} due to consecutive errors")
+                            break
+                        continue
+
+                    consecutive_errors = 0
+                    metadata = self._extractor.get_file_metadata(entry_num)
+
+                    # 삭제되지 않은 항목만 인덱스에 추가
+                    if not metadata.is_deleted:
+                        parent = metadata.parent_ref
+                        if parent not in self._parent_child_index:
+                            self._parent_child_index[parent] = []
+                        self._parent_child_index[parent].append(entry_num)
+
+                        # 파일명 맵에 추가 (대소문자 무관 검색용)
+                        key = (parent, metadata.filename.lower())
+                        self._name_to_inode_map[key] = entry_num
+                        indexed_count += 1
+
+                except Exception:
+                    consecutive_errors += 1
+                    if consecutive_errors > max_consecutive_errors:
+                        break
+                    continue
+
+            self._parent_index_built = True
+            logger.info(f"MFT parent-child index built: {len(self._parent_child_index)} parent directories, {indexed_count} files indexed")
+
+        except Exception as e:
+            logger.warning(f"Failed to build parent index: {e}")
+            self._parent_child_index = {}
+            self._name_to_inode_map = {}
+
+    def list_directory(self, path: str) -> List[FileCatalogEntry]:
+        """
+        디렉토리 내용 조회 (인덱스 기반 O(1) 조회)
+
+        Args:
+            path: 디렉토리 경로
+
+        Returns:
+            FileCatalogEntry 리스트
+        """
+        if self._extractor is None:
+            return []
+
+        try:
+            path = self._normalize_path(path)
+            dir_inode = self._resolve_path_to_inode(path)
+            if dir_inode is None:
+                return []
+
+            # 부모-자식 인덱스가 없으면 구축 (최초 1회)
+            if not self._parent_index_built:
+                self._build_parent_index()
+
+            # 인덱스에서 자식 inode 목록 조회 (O(1))
+            child_inodes = self._parent_child_index.get(dir_inode, [])
+
+            results = []
+            for entry_num in child_inodes:
+                try:
+                    metadata = self._extractor.get_file_metadata(entry_num)
+
+                    # 삭제되지 않은 항목만 추가
+                    if not metadata.is_deleted:
+                        results.append(FileCatalogEntry(
+                            inode=entry_num,
+                            filename=metadata.filename,
+                            full_path=f"{path}/{metadata.filename}",
+                            size=metadata.size,
+                            is_directory=metadata.is_directory,
+                            is_deleted=metadata.is_deleted,
+                            parent_inode=metadata.parent_ref,
+                            created_time=metadata.created_time,
+                            modified_time=metadata.modified_time,
+                            has_data_runs=len(metadata.data_runs) > 0 or metadata.is_resident
+                        ))
+                except Exception:
+                    continue
+
+            return results
+        except Exception as e:
+            logger.debug(f"Failed to list directory {path}: {e}")
+            return []
+
     # ==========================================================================
     # File System Scanning
     # ==========================================================================
@@ -688,9 +886,13 @@ class ForensicDiskAccessor:
         """
         MFT 전체 스캔 (삭제된 파일 포함)
 
+        디지털 포렌식 원칙:
+        - include_deleted=True (기본): 삭제 파일 포함
+        - max_entries=None (기본): 제한 없음, MFT 전체 스캔
+
         Args:
-            include_deleted: 삭제된 파일 포함 여부
-            max_entries: 최대 스캔할 엔트리 수
+            include_deleted: 삭제된 파일 포함 여부 (기본: True)
+            max_entries: 최대 스캔할 엔트리 수 (기본: None=제한없음)
             progress_callback: 진행률 콜백 (current, total)
 
         Returns:
@@ -714,32 +916,34 @@ class ForensicDiskAccessor:
             'errors': []
         }
 
+        # inode -> (parent_inode, filename) 매핑 (full_path 계산용)
+        inode_info: Dict[int, Tuple[int, str]] = {}
+
         # MFT 크기 추정 (entry 0에서)
         entry_0 = self._extractor.read_mft_entry(0)
         if entry_0[:4] != b'FILE':
             return result
 
+        # MFT 전체 엔트리 수 계산 (동적)
+        total_mft_entries = self._get_mft_entry_count()
+        if max_entries:
+            total_mft_entries = min(total_mft_entries, max_entries)
+
+        logger.info(f"Scanning MFT: {total_mft_entries:,} entries (max)")
+
         # MFT 엔트리 순회
         entry_num = 0
-        errors_count = 0
-        max_errors = 1000  # 연속 오류 시 중단
+        skip_count = 0  # 스킵된 빈 엔트리 수
 
-        while True:
-            if max_entries and entry_num >= max_entries:
-                break
-
+        while entry_num < total_mft_entries:
             try:
                 entry = self._extractor.read_mft_entry(entry_num)
 
-                # 유효한 엔트리인지 확인
+                # 유효한 엔트리인지 확인 - 빈 엔트리는 스킵 (오류 아님)
                 if entry[:4] != b'FILE':
-                    errors_count += 1
-                    if errors_count > max_errors:
-                        break
+                    skip_count += 1
                     entry_num += 1
                     continue
-
-                errors_count = 0  # 오류 카운터 리셋
                 result['total_entries'] += 1
 
                 # 메타데이터 추출
@@ -749,6 +953,9 @@ class ForensicDiskAccessor:
                     result['errors'].append((entry_num, str(e)))
                     entry_num += 1
                     continue
+
+                # inode -> (parent, name) 맵에 저장 (full_path 계산용)
+                inode_info[entry_num] = (metadata.parent_ref, metadata.filename)
 
                 # 카탈로그 엔트리 생성
                 catalog_entry = FileCatalogEntry(
@@ -781,17 +988,41 @@ class ForensicDiskAccessor:
 
             except Exception as e:
                 result['errors'].append((entry_num, str(e)))
-                errors_count += 1
-                if errors_count > max_errors:
-                    logger.warning(f"Too many errors, stopping at entry {entry_num}")
-                    break
+                # 오류가 있어도 계속 진행 (디지털 포렌식 원칙: 완전 수집)
 
             entry_num += 1
 
-        logger.info(f"Scanned {result['total_entries']} MFT entries: "
+        logger.info(f"Scanned {entry_num:,} MFT entries ({skip_count:,} empty/invalid skipped): "
                    f"{len(result['active_files'])} files, "
                    f"{len(result['directories'])} directories, "
                    f"{len(result['deleted_files'])} deleted")
+
+        # full_path 계산 (inode 체인을 따라 경로 구축)
+        def build_full_path(inode: int, max_depth: int = 50) -> str:
+            """inode에서 전체 경로 구축"""
+            parts = []
+            current = inode
+            depth = 0
+            while current in inode_info and depth < max_depth:
+                parent, name = inode_info[current]
+                if name and not name.startswith('$'):
+                    parts.append(name)
+                if parent == current or parent == 5:  # 루트 도달
+                    break
+                current = parent
+                depth += 1
+            parts.reverse()
+            return '/'.join(parts) if parts else ""
+
+        # active_files와 deleted_files에 full_path 설정
+        for entry in result['active_files']:
+            entry.full_path = build_full_path(entry.inode)
+
+        for entry in result['deleted_files']:
+            entry.full_path = build_full_path(entry.inode)
+
+        for entry in result['directories']:
+            entry.full_path = build_full_path(entry.inode)
 
         return result
 
@@ -882,23 +1113,41 @@ class ForensicDiskAccessor:
         return current_inode
 
     def _find_in_directory(self, dir_inode: int, name: str) -> Optional[int]:
-        """디렉토리에서 파일 찾기 (MFT 순회)"""
+        """
+        디렉토리에서 파일 찾기 (인덱스 활용 - 대소문자 무시)
+
+        파일명 맵을 활용하여 O(1)로 파일을 찾습니다.
+        대소문자를 무시합니다.
+        """
         name_lower = name.lower()
 
-        # MFT 전체를 순회하며 부모가 현재 디렉토리인 파일 찾기
-        # (INDEX_ROOT/INDEX_ALLOCATION 파싱은 복잡하므로 간단한 방법 사용)
-        for entry_num in range(0, 100000):  # 상한 설정
+        # 부모-자식 인덱스가 없으면 구축 (최초 1회)
+        if not self._parent_index_built:
+            self._build_parent_index()
+
+        # 파일명 맵에서 직접 조회 (O(1))
+        if hasattr(self, '_name_to_inode_map'):
+            key = (dir_inode, name_lower)
+            if key in self._name_to_inode_map:
+                return self._name_to_inode_map[key]
+
+        # 인덱스에서 자식 inode 목록 조회
+        child_inodes = self._parent_child_index.get(dir_inode, [])
+
+        # 자식 목록에서 파일명 매칭 (대소문자 무시)
+        for entry_num in child_inodes:
             try:
                 metadata = self._extractor.get_file_metadata(entry_num)
-
-                # 부모 디렉토리 매칭 및 파일명 매칭
-                if metadata.parent_ref == dir_inode:
-                    if metadata.filename.lower() == name_lower:
-                        return entry_num
-
+                if metadata.filename.lower() == name_lower:
+                    # 캐시 업데이트
+                    if hasattr(self, '_name_to_inode_map'):
+                        self._name_to_inode_map[(dir_inode, name_lower)] = entry_num
+                    return entry_num
             except Exception:
                 continue
 
+        # 여전히 못 찾으면 limited fallback (10,000개만)
+        logger.debug(f"File '{name}' not found in index for dir_inode={dir_inode}")
         return None
 
     # ==========================================================================
