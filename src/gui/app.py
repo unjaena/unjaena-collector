@@ -228,13 +228,19 @@ class CollectorWindow(QMainWindow):
         return frame
 
     def _create_left_panel(self) -> QWidget:
-        """Create left panel with controls"""
+        """Create left panel with controls (scrollable)"""
+        # 스크롤 가능한 패널 생성
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        layout.setSpacing(8)
 
         # Step 0: Device Selection (새로 추가)
         device_group = QGroupBox("0. Select Devices")
-        device_group.setMaximumHeight(150)  # 최대 높이 제한
         device_layout = QVBoxLayout(device_group)
         device_layout.setContentsMargins(5, 15, 5, 5)
 
@@ -437,7 +443,9 @@ class CollectorWindow(QMainWindow):
 
         layout.addStretch()
 
-        return panel
+        # 스크롤 영역에 패널 설정
+        scroll_area.setWidget(panel)
+        return scroll_area
 
     def _create_right_panel(self) -> QWidget:
         """Create right panel with log"""
