@@ -31,13 +31,14 @@ class ConsentDialog(QDialog):
     def setup_ui(self):
         """UI 초기화"""
         self.setWindowTitle("디지털 포렌식 수집 동의서")
-        self.setMinimumSize(700, 850)  # 확장된 동의서 내용을 위해 크기 증가
+        self.setMinimumSize(600, 500)  # 컴팩트한 크기
+        self.setMaximumSize(700, 600)  # 최대 크기 제한
         self.setModal(True)
         self.setStyleSheet(self._get_stylesheet())
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
 
         # 헤더
         header = QLabel("디지털 포렌식 수집 동의서")
@@ -70,7 +71,8 @@ class ConsentDialog(QDialog):
         consent_text = QTextEdit()
         consent_text.setReadOnly(True)
         consent_text.setHtml(self._get_consent_html())
-        consent_text.setMinimumHeight(300)
+        consent_text.setMinimumHeight(150)  # 컴팩트하게 축소
+        consent_text.setMaximumHeight(250)  # 최대 높이 제한
         content_layout.addWidget(consent_text)
 
         scroll.setWidget(content_widget)
@@ -80,6 +82,8 @@ class ConsentDialog(QDialog):
         checkbox_frame = QFrame()
         checkbox_frame.setObjectName("checkboxFrame")
         checkbox_layout = QVBoxLayout(checkbox_frame)
+        checkbox_layout.setContentsMargins(8, 8, 8, 8)
+        checkbox_layout.setSpacing(4)
 
         self.check_authority = QCheckBox(
             "본인은 이 시스템에 대한 적법한 수집 권한(소유자 동의 또는 법적 권한)이 있음을 확인합니다."
@@ -414,20 +418,21 @@ class ConsentDialog(QDialog):
             #checkboxFrame {{
                 background-color: {COLORS['bg_secondary']};
                 border: 1px solid {COLORS['border_subtle']};
-                border-radius: 8px;
-                padding: 16px;
+                border-radius: 6px;
+                padding: 8px;
             }}
             #consentCheck {{
                 color: {COLORS['text_primary']};
-                font-size: 13px;
-                spacing: 8px;
-                padding: 4px 0;
+                background-color: transparent;
+                font-size: 11px;
+                spacing: 6px;
+                padding: 2px 0;
             }}
             #consentCheck::indicator {{
-                width: 20px;
-                height: 20px;
+                width: 16px;
+                height: 16px;
                 border: 2px solid {COLORS['border_subtle']};
-                border-radius: 4px;
+                border-radius: 3px;
                 background-color: {COLORS['bg_tertiary']};
             }}
             #consentCheck::indicator:checked {{

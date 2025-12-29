@@ -11,10 +11,12 @@ import os
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFrame, QRadioButton, QButtonGroup,
-    QFileDialog, QMessageBox, QGroupBox
+    QFileDialog, QMessageBox, QGroupBox, QScrollArea, QWidget
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
+
+from gui.styles import COLORS
 
 
 @dataclass
@@ -55,14 +57,14 @@ class BitLockerDialog(QDialog):
     def setup_ui(self):
         """UI 초기화"""
         self.setWindowTitle("BitLocker 볼륨 감지됨")
-        self.setMinimumSize(550, 500)
-        self.setMaximumWidth(650)
+        self.setMinimumSize(500, 400)
+        self.setMaximumSize(600, 500)
         self.setModal(True)
         self.setStyleSheet(self._get_stylesheet())
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
 
         # 헤더
         header = QLabel("🔒 BitLocker 암호화 볼륨 감지됨")
@@ -358,128 +360,131 @@ class BitLockerDialog(QDialog):
         return self.result
 
     def _get_stylesheet(self) -> str:
-        """스타일시트"""
-        return """
-            QDialog {
-                background-color: #1a1a2e;
-            }
-            #header {
-                font-size: 18px;
+        """스타일시트 - 플랫폼 통일 테마"""
+        return f"""
+            QDialog {{
+                background-color: {COLORS['bg_primary']};
+            }}
+            #header {{
+                font-size: 16px;
                 font-weight: bold;
-                color: #f0a500;
+                color: {COLORS['warning']};
+                padding: 4px;
+            }}
+            #infoFrame {{
+                background-color: {COLORS['info_bg']};
+                border: 1px solid {COLORS['info']};
+                border-radius: 6px;
                 padding: 8px;
-            }
-            #infoFrame {
-                background-color: rgba(76, 201, 240, 0.1);
-                border: 1px solid #4cc9f0;
-                border-radius: 8px;
-                padding: 12px;
-            }
-            #infoText {
-                color: #e0e0e0;
-                font-size: 13px;
-            }
-            #partitionInfo {
-                color: #4cc9f0;
-                font-size: 12px;
-                font-weight: bold;
-                margin-top: 8px;
-            }
-            #warningFrame {
-                background-color: rgba(247, 37, 133, 0.15);
-                border: 1px solid #f72585;
-                border-radius: 8px;
-                padding: 12px;
-            }
-            #warningText {
-                color: #f72585;
-                font-size: 12px;
-            }
-            #keyGroup {
-                background-color: #16213e;
-                border: 1px solid #333;
-                border-radius: 8px;
-                padding: 16px;
-                color: #e0e0e0;
-                font-size: 13px;
-            }
-            QRadioButton {
-                color: #e0e0e0;
-                font-size: 13px;
-                padding: 4px 0;
-            }
-            QRadioButton::indicator {
-                width: 16px;
-                height: 16px;
-            }
-            QRadioButton:disabled {
-                color: #666;
-            }
-            #keyDesc {
-                color: #888;
+            }}
+            #infoText {{
+                color: {COLORS['text_primary']};
                 font-size: 11px;
-                margin-left: 24px;
-                margin-bottom: 8px;
-            }
-            #inputFrame {
-                background-color: #16213e;
-                border: 1px solid #333;
-                border-radius: 8px;
-                padding: 16px;
-            }
-            QLineEdit {
-                background-color: #0f3460;
-                border: 1px solid #333;
-                border-radius: 6px;
-                color: #e0e0e0;
-                padding: 10px;
-                font-size: 13px;
-            }
-            QLineEdit:disabled {
-                background-color: #1a1a2e;
-                color: #666;
-            }
-            QLineEdit::placeholder {
-                color: #666;
-            }
-            QLabel {
-                color: #e0e0e0;
-                font-size: 13px;
-            }
-            #errorLabel {
-                color: #f72585;
-                font-size: 12px;
-                padding: 8px;
-                background-color: rgba(247, 37, 133, 0.1);
-                border-radius: 4px;
-            }
-            QPushButton {
-                background-color: #0f3460;
-                border: 1px solid #333;
-                border-radius: 6px;
-                color: #fff;
-                padding: 10px 16px;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #1a4a7a;
-            }
-            QPushButton:disabled {
-                background-color: #333;
-                color: #666;
-            }
-            #unlockButton {
-                background-color: #f0a500;
-                color: #000;
+            }}
+            #partitionInfo {{
+                color: {COLORS['info']};
+                font-size: 10px;
                 font-weight: bold;
-            }
-            #unlockButton:hover {
-                background-color: #d99400;
-            }
-            #unlockButton:disabled {
-                background-color: #333;
-                color: #666;
-            }
+                margin-top: 4px;
+            }}
+            #warningFrame {{
+                background-color: {COLORS['error_bg']};
+                border: 1px solid {COLORS['error']};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+            #warningText {{
+                color: {COLORS['error']};
+                font-size: 10px;
+            }}
+            #keyGroup {{
+                background-color: {COLORS['bg_secondary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 6px;
+                padding: 8px;
+                color: {COLORS['text_primary']};
+                font-size: 11px;
+            }}
+            QRadioButton {{
+                color: {COLORS['text_primary']};
+                background-color: transparent;
+                font-size: 11px;
+                padding: 2px 0;
+            }}
+            QRadioButton::indicator {{
+                width: 14px;
+                height: 14px;
+            }}
+            QRadioButton:disabled {{
+                color: {COLORS['text_tertiary']};
+            }}
+            #keyDesc {{
+                color: {COLORS['text_secondary']};
+                font-size: 9px;
+                margin-left: 20px;
+                margin-bottom: 4px;
+            }}
+            #inputFrame {{
+                background-color: {COLORS['bg_secondary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+            QLineEdit {{
+                background-color: {COLORS['bg_tertiary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 4px;
+                color: {COLORS['text_primary']};
+                padding: 6px;
+                font-size: 11px;
+            }}
+            QLineEdit:disabled {{
+                background-color: {COLORS['bg_secondary']};
+                color: {COLORS['text_tertiary']};
+            }}
+            QLineEdit::placeholder {{
+                color: {COLORS['text_tertiary']};
+            }}
+            QLabel {{
+                color: {COLORS['text_primary']};
+                font-size: 11px;
+            }}
+            #errorLabel {{
+                color: {COLORS['error']};
+                font-size: 10px;
+                padding: 4px;
+                background-color: {COLORS['error_bg']};
+                border-radius: 4px;
+            }}
+            QPushButton {{
+                background-color: {COLORS['bg_tertiary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 4px;
+                color: {COLORS['text_primary']};
+                padding: 6px 12px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['bg_hover']};
+                border-color: {COLORS['border_default']};
+            }}
+            QPushButton:disabled {{
+                background-color: {COLORS['bg_tertiary']};
+                color: {COLORS['text_tertiary']};
+            }}
+            #unlockButton {{
+                background-color: {COLORS['brand_primary']};
+                border: none;
+                color: {COLORS['bg_primary']};
+                font-weight: bold;
+            }}
+            #unlockButton:hover {{
+                background-color: {COLORS['brand_accent']};
+            }}
+            #unlockButton:disabled {{
+                background-color: {COLORS['bg_tertiary']};
+                color: {COLORS['text_tertiary']};
+            }}
         """
 
 

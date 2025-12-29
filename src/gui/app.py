@@ -260,14 +260,14 @@ class CollectorWindow(QMainWindow):
 
         # Step 0: Device Selection (새로 추가)
         device_group = QGroupBox("0. Select Devices")
-        device_group.setMaximumHeight(150)  # 디바이스 목록이 너무 커지지 않도록 제한
+        device_group.setMaximumHeight(120)  # 디바이스 목록이 너무 커지지 않도록 제한
         device_layout = QVBoxLayout(device_group)
-        device_layout.setContentsMargins(6, 16, 6, 6)
+        device_layout.setContentsMargins(6, 12, 6, 6)
         device_layout.setSpacing(2)
 
         self.device_panel = DeviceListPanel(self.device_manager)
-        self.device_panel.setMinimumHeight(60)
-        self.device_panel.setMaximumHeight(120)  # 내부 스크롤로 overflow 처리
+        self.device_panel.setMinimumHeight(40)
+        self.device_panel.setMaximumHeight(80)  # 내부 스크롤로 overflow 처리
         self.device_panel.selection_changed.connect(self._on_device_selection_changed)
         self.device_panel.image_file_requested.connect(self._on_image_file_added)
         device_layout.addWidget(self.device_panel)
@@ -276,9 +276,10 @@ class CollectorWindow(QMainWindow):
 
         # Step 1: Token
         token_group = QGroupBox("1. Session Token")
+        token_group.setMaximumHeight(100)  # 토큰 그룹 높이 제한
         token_layout = QVBoxLayout(token_group)
-        token_layout.setContentsMargins(6, 16, 6, 6)
-        token_layout.setSpacing(4)
+        token_layout.setContentsMargins(6, 12, 6, 6)
+        token_layout.setSpacing(2)
 
         self.token_input = QLineEdit()
         self.token_input.setPlaceholderText("Paste your session token here")
@@ -303,7 +304,7 @@ class CollectorWindow(QMainWindow):
 
         # Step 2: Artifacts (탭 기반 - Phase 2.1)
         artifacts_group = QGroupBox("2. Select Artifacts")
-        artifacts_group.setMaximumHeight(220)  # 아티팩트 목록 높이 제한
+        artifacts_group.setMaximumHeight(180)  # 아티팩트 목록 높이 제한
         artifacts_outer_layout = QVBoxLayout(artifacts_group)
         artifacts_outer_layout.setContentsMargins(6, 16, 6, 6)
         artifacts_outer_layout.setSpacing(4)
@@ -363,9 +364,10 @@ class CollectorWindow(QMainWindow):
 
         # Step 3: Progress (P2-1: 단계별 진행률 표시)
         progress_group = QGroupBox("3. Collection Progress")
+        progress_group.setMaximumHeight(180)  # 진행률 그룹 높이 제한
         progress_outer_layout = QVBoxLayout(progress_group)
-        progress_outer_layout.setContentsMargins(6, 16, 6, 6)
-        progress_outer_layout.setSpacing(4)
+        progress_outer_layout.setContentsMargins(6, 12, 6, 6)
+        progress_outer_layout.setSpacing(2)
 
         progress_content = QWidget()
         progress_content.setStyleSheet("background: transparent;")
@@ -441,7 +443,7 @@ class CollectorWindow(QMainWindow):
 
         # 수집된 파일 목록
         self.collected_list = QListWidget()
-        self.collected_list.setMaximumHeight(80)
+        self.collected_list.setMaximumHeight(50)
         progress_layout.addWidget(self.collected_list)
 
         progress_outer_layout.addWidget(progress_content)
@@ -1129,10 +1131,17 @@ class CollectorWindow(QMainWindow):
         self._log(f"Legal consent obtained: {consent_record['consent_hash'][:16]}...")
 
         # BitLocker 감지 및 복호화 처리
+        # 주의: BitLocker 감지는 물리 디스크에만 적용 (E01/RAW 이미지는 제외)
         bitlocker_decryptor = None
         bitlocker_info = None
 
-        if BITLOCKER_AVAILABLE:
+        # 선택된 디바이스 중 물리 디스크가 있는지 확인
+        has_physical_disk = any(
+            d.device_type == DeviceType.WINDOWS_PHYSICAL_DISK
+            for d in selected_devices
+        )
+
+        if BITLOCKER_AVAILABLE and has_physical_disk:
             self._log("BitLocker 암호화 볼륨 확인 중...")
             bitlocker_result = detect_bitlocker_on_system_drive()
 
