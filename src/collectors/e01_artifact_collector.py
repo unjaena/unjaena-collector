@@ -307,11 +307,11 @@ class E01ArtifactCollector(BaseMFTCollector):
             for i, p in enumerate(raw_partitions):
                 self._partitions.append(PartitionInfo(
                     index=i,
-                    offset=p.start_offset,
+                    offset=p.offset,
                     size=p.size,
                     filesystem=p.filesystem,
                     type_name=p.type_name,
-                    bootable=getattr(p, 'bootable', False),
+                    bootable=getattr(p, 'is_bootable', False),
                 ))
 
             return self._partitions

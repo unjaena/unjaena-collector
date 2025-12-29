@@ -984,161 +984,261 @@ class LocalMFTCollector(_LocalMFTBase):
         """
         디렉토리 탐색 기반 수집 (BitLocker/MFT 폴백)
 
-        Windows API (os.walk, glob)를 사용하여 파일 수집.
+        ARTIFACT_TYPES의 paths를 사용하여 파일 수집.
         삭제된 파일은 수집 불가.
-
-        Args:
-            artifact_type: 아티팩트 유형
-            progress_callback: 진행률 콜백
-
-        Yields:
-            (로컬 경로, 메타데이터) 튜플
         """
+        if artifact_type not in ARTIFACT_TYPES:
+            # MFT-only 아티팩트 처리 (document, image, video 등)
+            if artifact_type in ARTIFACT_MFT_FILTERS:
+                yield from self._collect_full_disk_scan(artifact_type, progress_callback)
+            else:
+                logger.warning(f"Unknown artifact type: {artifact_type}")
+            return
+
+        config = ARTIFACT_TYPES[artifact_type]
+        artifact_dir = self.output_dir / artifact_type
+        artifact_dir.mkdir(exist_ok=True)
+
+        source = self._get_source_description()
+        collected_count = 0
+
+        # 특수 아티팩트는 디렉토리 폴백으로 수집 불가
+        if config.get('requires_mft'):
+            logger.warning(f"Cannot collect {artifact_type} via directory fallback (requires raw disk access)")
+            return
+
+        # 모바일 아티팩트는 스킵
+        if config.get('category') in ('android', 'ios'):
+            logger.debug(f"Skipping mobile artifact: {artifact_type}")
+            return
+
+        # 별칭 처리
+        if 'alias_of' in config:
+            artifact_type = config['alias_of']
+            config = ARTIFACT_TYPES[artifact_type]
+
+        collector_type = config.get('collector')
+        paths = config.get('paths', [])
+
+        # 사용자 폴더 목록
+        users_dir = Path(f"{self.volume}:/Users")
+        user_folders = []
+        if users_dir.exists():
+            for entry in users_dir.iterdir():
+                if entry.is_dir() and entry.name.lower() not in {'public', 'default', 'default user', 'all users'}:
+                    user_folders.append(entry)
+
+        if collector_type == 'collect_glob':
+            # glob 패턴 수집
+            for path_pattern in paths:
+                expanded = self._expand_path(path_pattern)
+                for match in glob.glob(expanded, recursive=True):
+                    result = self._copy_file_with_metadata(match, artifact_dir, artifact_type)
+                    if result:
+                        collected_count += 1
+                        yield result
+                        if progress_callback:
+                            progress_callback(result[0])
+
+        elif collector_type == 'collect_files':
+            # 특정 파일 수집
+            for file_path in paths:
+                expanded = self._expand_path(file_path)
+                if os.path.exists(expanded):
+                    result = self._copy_file_with_metadata(expanded, artifact_dir, artifact_type)
+                    if result:
+                        collected_count += 1
+                        yield result
+                        if progress_callback:
+                            progress_callback(result[0])
+
+        elif collector_type == 'collect_locked_files':
+            # 잠긴 파일 수집 (일반 복사 시도)
+            for file_path in paths:
+                expanded = self._expand_path(file_path)
+                if os.path.exists(expanded):
+                    result = self._copy_file_with_metadata(expanded, artifact_dir, artifact_type)
+                    if result:
+                        collected_count += 1
+                        yield result
+                        if progress_callback:
+                            progress_callback(result[0])
+
+        elif collector_type in ('collect_ntuser', 'collect_usrclass'):
+            # 사용자별 레지스트리 수집
+            mft_config = config.get('mft_config', {})
+            user_file = mft_config.get('user_path', '')
+            for user_folder in user_folders:
+                file_path = user_folder / user_file
+                if file_path.exists():
+                    result = self._copy_file_with_metadata(str(file_path), artifact_dir, artifact_type)
+                    if result:
+                        collected_count += 1
+                        yield result
+                        if progress_callback:
+                            progress_callback(result[0])
+
+        elif collector_type == 'collect_user_glob':
+            # 사용자별 glob 수집
+            for path_pattern in paths:
+                for user_folder in user_folders:
+                    # %APPDATA% -> Users/xxx/AppData/Roaming
+                    expanded = path_pattern.replace('%APPDATA%', str(user_folder / 'AppData' / 'Roaming'))
+                    expanded = expanded.replace('%LOCALAPPDATA%', str(user_folder / 'AppData' / 'Local'))
+                    expanded = expanded.replace('%USERPROFILE%', str(user_folder))
+                    for match in glob.glob(expanded, recursive=True):
+                        result = self._copy_file_with_metadata(match, artifact_dir, artifact_type)
+                        if result:
+                            collected_count += 1
+                            yield result
+                            if progress_callback:
+                                progress_callback(result[0])
+
+        elif collector_type == 'collect_all_browsers':
+            # 브라우저 데이터 수집
+            browsers = config.get('browsers', {})
+            for browser_name, browser_config in browsers.items():
+                browser_paths = browser_config.get('paths', [])
+                for path_pattern in browser_paths:
+                    for user_folder in user_folders:
+                        expanded = path_pattern.replace('%LOCALAPPDATA%', str(user_folder / 'AppData' / 'Local'))
+                        expanded = expanded.replace('%APPDATA%', str(user_folder / 'AppData' / 'Roaming'))
+                        for match in glob.glob(expanded, recursive=True):
+                            result = self._copy_file_with_metadata(match, artifact_dir, artifact_type)
+                            if result:
+                                collected_count += 1
+                                yield result
+                                if progress_callback:
+                                    progress_callback(result[0])
+
+        elif collector_type == 'collect_scheduled_tasks':
+            # 예약 작업 수집
+            tasks_dir = Path(f"{self.volume}:/Windows/System32/Tasks")
+            if tasks_dir.exists():
+                for root, dirs, files in os.walk(tasks_dir):
+                    for filename in files:
+                        file_path = os.path.join(root, filename)
+                        result = self._copy_file_with_metadata(file_path, artifact_dir, artifact_type)
+                        if result:
+                            collected_count += 1
+                            yield result
+                            if progress_callback:
+                                progress_callback(result[0])
+
+        else:
+            # 기본: paths 있으면 수집 시도
+            for path_pattern in paths:
+                expanded = self._expand_path(path_pattern)
+                if '*' in expanded or '?' in expanded:
+                    for match in glob.glob(expanded, recursive=True):
+                        result = self._copy_file_with_metadata(match, artifact_dir, artifact_type)
+                        if result:
+                            collected_count += 1
+                            yield result
+                            if progress_callback:
+                                progress_callback(result[0])
+                elif os.path.exists(expanded):
+                    result = self._copy_file_with_metadata(expanded, artifact_dir, artifact_type)
+                    if result:
+                        collected_count += 1
+                        yield result
+                        if progress_callback:
+                            progress_callback(result[0])
+
+        logger.info(f"[{source}] Collected {collected_count} {artifact_type} artifacts (directory fallback)")
+
+    def _expand_path(self, path: str) -> str:
+        """환경 변수 확장"""
+        volume_root = f"{self.volume}:"
+        # 환경 변수 확장
+        path = path.replace('%SYSTEMROOT%', f'{volume_root}\\Windows')
+        path = path.replace('%WINDIR%', f'{volume_root}\\Windows')
+        path = path.replace('%PROGRAMDATA%', f'{volume_root}\\ProgramData')
+        # 사용자별 경로는 현재 사용자 기준
+        path = os.path.expandvars(path)
+        # C: 드라이브를 현재 볼륨으로 변경
+        if path.startswith('C:'):
+            path = volume_root + path[2:]
+        return path
+
+    def _collect_full_disk_scan(
+        self,
+        artifact_type: str,
+        progress_callback: Optional[callable] = None
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """전체 디스크 스캔 (document, image, video 등)"""
         if artifact_type not in ARTIFACT_MFT_FILTERS:
-            logger.warning(f"Unknown artifact type: {artifact_type}")
             return
 
         mft_filter = ARTIFACT_MFT_FILTERS[artifact_type]
         artifact_dir = self.output_dir / artifact_type
         artifact_dir.mkdir(exist_ok=True)
 
-        # 특수 아티팩트는 디렉토리 폴백으로 수집 불가
-        if 'special' in mft_filter:
-            logger.warning(f"Cannot collect {artifact_type} via directory fallback (requires raw disk access)")
+        extensions = mft_filter.get('extensions', set())
+        if not extensions:
             return
 
         volume_root = f"{self.volume}:\\"
-        extensions = mft_filter.get('extensions', set())
-        path_pattern = mft_filter.get('path_pattern')
-        path_patterns = mft_filter.get('path_patterns', [])
-        target_files = mft_filter.get('files', set())
-        full_disk_scan = mft_filter.get('full_disk_scan', False)
-
-        collected_count = 0
         source = self._get_source_description()
+        collected_count = 0
 
-        if full_disk_scan and extensions:
-            # 전체 디스크 스캔 (document, image, video 등)
-            # 최적화: 느린 시스템 폴더 제외, 사용자 폴더 우선
-            logger.info(f"[{source}] Full disk scan for {artifact_type} ({len(extensions)} extensions)")
+        # 스캔에서 제외할 느린 디렉토리
+        SKIP_DIRS = {
+            'windows', '$recycle.bin', 'system volume information',
+            'programdata', '$windows.~bt', '$windows.~ws',
+            'recovery', 'boot', 'perflogs',
+        }
+        SKIP_SUBDIRS = {
+            'winsxs', 'installer', 'assembly', 'servicing',
+            'softwaredistribution', 'catroot', 'catroot2',
+        }
 
-            # 스캔에서 제외할 느린 디렉토리 (대소문자 무시)
-            SKIP_DIRS = {
-                'windows', '$recycle.bin', 'system volume information',
-                'programdata', '$windows.~bt', '$windows.~ws',
-                'recovery', 'boot', 'perflogs',
-            }
-            # 느린 하위 디렉토리 (WinSxS, Installer 등)
-            SKIP_SUBDIRS = {
-                'winsxs', 'installer', 'assembly', 'servicing',
-                'softwaredistribution', 'catroot', 'catroot2',
-            }
+        # 사용자 폴더 우선 수집
+        users_dir = os.path.join(volume_root, 'Users')
+        scan_dirs = []
 
-            # 사용자 폴더 우선 수집
-            users_dir = os.path.join(volume_root, 'Users')
-            priority_dirs = []
-            other_dirs = []
+        if os.path.exists(users_dir):
+            scan_dirs.append(users_dir)
 
-            if os.path.exists(users_dir):
-                priority_dirs.append(users_dir)
-
-            # 나머지 최상위 디렉토리
-            try:
-                for entry in os.scandir(volume_root):
-                    if entry.is_dir():
-                        name_lower = entry.name.lower()
-                        if name_lower in SKIP_DIRS:
-                            continue
-                        if entry.path != users_dir:
-                            other_dirs.append(entry.path)
-            except PermissionError:
-                pass
-
-            scan_dirs = priority_dirs + other_dirs
-            total_dirs = len(scan_dirs)
-
-            for dir_idx, scan_dir in enumerate(scan_dirs, 1):
-                logger.info(f"[{source}] Scanning [{dir_idx}/{total_dirs}] {scan_dir}")
-
-                for root, dirs, files in os.walk(scan_dir):
-                    # 느린 하위 디렉토리 스킵
-                    dirs[:] = [d for d in dirs if d.lower() not in SKIP_SUBDIRS]
-
-                    try:
-                        for filename in files:
-                            ext = os.path.splitext(filename)[1].lower()
-                            if ext in extensions:
-                                src_path = os.path.join(root, filename)
-                                result = self._copy_file_with_metadata(
-                                    src_path, artifact_dir, artifact_type
-                                )
-                                if result:
-                                    collected_count += 1
-                                    yield result
-                                    if progress_callback:
-                                        progress_callback(result[0])
-                    except PermissionError:
+        try:
+            for entry in os.scandir(volume_root):
+                if entry.is_dir():
+                    name_lower = entry.name.lower()
+                    if name_lower in SKIP_DIRS:
                         continue
-                    except Exception as e:
-                        logger.debug(f"Error scanning {root}: {e}")
-                        continue
+                    if entry.path != users_dir:
+                        scan_dirs.append(entry.path)
+        except PermissionError:
+            pass
 
-        else:
-            # 경로 기반 수집
-            search_patterns = []
+        total_dirs = len(scan_dirs)
+        logger.info(f"[{source}] Full disk scan for {artifact_type} ({len(extensions)} extensions)")
 
-            if path_pattern:
-                search_patterns.append(path_pattern)
-            search_patterns.extend(path_patterns)
+        for dir_idx, scan_dir in enumerate(scan_dirs, 1):
+            logger.info(f"[{source}] Scanning [{dir_idx}/{total_dirs}] {scan_dir}")
 
-            for pattern in search_patterns:
-                # 패턴을 실제 경로로 변환
-                search_path = os.path.join(volume_root, pattern.replace('/', os.sep).lstrip('\\'))
+            for root, dirs, files in os.walk(scan_dir):
+                dirs[:] = [d for d in dirs if d.lower() not in SKIP_SUBDIRS]
 
-                if target_files:
-                    # 특정 파일 수집
-                    for filename in target_files:
-                        file_path = os.path.join(search_path, filename)
-                        if os.path.exists(file_path):
-                            result = self._copy_file_with_metadata(
-                                file_path, artifact_dir, artifact_type
-                            )
+                try:
+                    for filename in files:
+                        ext = os.path.splitext(filename)[1].lower()
+                        if ext in extensions:
+                            src_path = os.path.join(root, filename)
+                            result = self._copy_file_with_metadata(src_path, artifact_dir, artifact_type)
                             if result:
                                 collected_count += 1
                                 yield result
                                 if progress_callback:
                                     progress_callback(result[0])
-                elif extensions:
-                    # 확장자 기반 수집
-                    if os.path.isdir(search_path):
-                        for filename in os.listdir(search_path):
-                            ext = os.path.splitext(filename)[1].lower()
-                            if ext in extensions:
-                                file_path = os.path.join(search_path, filename)
-                                result = self._copy_file_with_metadata(
-                                    file_path, artifact_dir, artifact_type
-                                )
-                                if result:
-                                    collected_count += 1
-                                    yield result
-                                    if progress_callback:
-                                        progress_callback(result[0])
-                else:
-                    # 디렉토리 전체 수집
-                    if os.path.isdir(search_path):
-                        for root, dirs, files in os.walk(search_path):
-                            for filename in files:
-                                file_path = os.path.join(root, filename)
-                                result = self._copy_file_with_metadata(
-                                    file_path, artifact_dir, artifact_type
-                                )
-                                if result:
-                                    collected_count += 1
-                                    yield result
-                                    if progress_callback:
-                                        progress_callback(result[0])
+                except PermissionError:
+                    continue
+                except Exception as e:
+                    logger.debug(f"Error scanning {root}: {e}")
+                    continue
 
         logger.info(f"[{source}] Collected {collected_count} {artifact_type} artifacts (directory fallback)")
+
 
     def _copy_file_with_metadata(
         self,
