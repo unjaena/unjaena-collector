@@ -145,7 +145,7 @@ class ConsentDialog(QDialog):
     def _get_consent_html(self) -> str:
         """동의서 HTML 내용 (개인정보 보호법 준수)"""
         return f"""
-        <div style="font-family: 'Segoe UI', 'Malgun Gothic', sans-serif; line-height: 1.8; color: {COLORS['text_primary']};">
+        <div style="font-family: 'Malgun Gothic', 'Segoe UI', sans-serif; line-height: 1.8; color: {COLORS['text_primary']};">
 
         <!-- ===== 1. 개인정보 수집·이용 동의 ===== -->
         <h3 style="color: {COLORS['brand_primary']}; border-bottom: 2px solid {COLORS['brand_primary']}; padding-bottom: 8px;">

@@ -82,7 +82,7 @@ def get_platform_stylesheet() -> str:
        ========================================= */
 
     * {{
-        font-family: 'Segoe UI', 'Malgun Gothic', sans-serif;
+        font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
     }}
 
     QMainWindow, QWidget {{

@@ -230,7 +230,7 @@ class CollectorWindow(QMainWindow):
 
         title = QLabel(self.config['app_name'])
         title.setObjectName("title")
-        title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        title.setFont(QFont("Malgun Gothic", 12, QFont.Weight.Bold))
         layout.addWidget(title)
 
         layout.addStretch()
@@ -238,7 +238,7 @@ class CollectorWindow(QMainWindow):
         # Server status indicator
         self.server_status = QLabel("Server: Checking...")
         self.server_status.setObjectName("serverStatus")
-        self.server_status.setFont(QFont("Segoe UI", 9))
+        self.server_status.setFont(QFont("Malgun Gothic", 9))
         layout.addWidget(self.server_status)
 
         return frame

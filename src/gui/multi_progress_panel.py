@@ -55,13 +55,13 @@ class DeviceProgressCard(QFrame):
 
         # 디바이스 이름
         self.name_label = QLabel(self.device.display_name)
-        self.name_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
+        self.name_label.setFont(QFont("Malgun Gothic", 10, QFont.Weight.Medium))
         header_layout.addWidget(self.name_label, 1)
 
         # 상태 아이콘/텍스트
         self.status_label = QLabel("Pending")
         self.status_label.setObjectName("statusPending")
-        self.status_label.setFont(QFont("Segoe UI", 9))
+        self.status_label.setFont(QFont("Malgun Gothic", 9))
         header_layout.addWidget(self.status_label)
 
         layout.addLayout(header_layout)
@@ -80,12 +80,12 @@ class DeviceProgressCard(QFrame):
 
         self.current_task_label = QLabel("Waiting...")
         self.current_task_label.setObjectName("mutedLabel")
-        self.current_task_label.setFont(QFont("Segoe UI", 8))
+        self.current_task_label.setFont(QFont("Malgun Gothic", 8))
         detail_layout.addWidget(self.current_task_label, 1)
 
         self.count_label = QLabel("")
         self.count_label.setObjectName("mutedLabel")
-        self.count_label.setFont(QFont("Segoe UI", 8))
+        self.count_label.setFont(QFont("Malgun Gothic", 8))
         detail_layout.addWidget(self.count_label)
 
         layout.addLayout(detail_layout)
@@ -228,7 +228,7 @@ class MultiProgressPanel(QWidget):
         # 제목
         self.title_label = QLabel("Collection Progress")
         self.title_label.setObjectName("headerLabel")
-        self.title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Medium))
+        self.title_label.setFont(QFont("Malgun Gothic", 11, QFont.Weight.Medium))
         layout.addWidget(self.title_label)
 
         layout.addStretch()
@@ -236,7 +236,7 @@ class MultiProgressPanel(QWidget):
         # 디바이스 카운트
         self.device_count_label = QLabel("0/0 devices")
         self.device_count_label.setObjectName("mutedLabel")
-        self.device_count_label.setFont(QFont("Segoe UI", 9))
+        self.device_count_label.setFont(QFont("Malgun Gothic", 9))
         layout.addWidget(self.device_count_label)
 
         return header
@@ -254,7 +254,7 @@ class MultiProgressPanel(QWidget):
         progress_layout.setSpacing(8)
 
         progress_label = QLabel("Overall:")
-        progress_label.setFont(QFont("Segoe UI", 9))
+        progress_label.setFont(QFont("Malgun Gothic", 9))
         progress_layout.addWidget(progress_label)
 
         self.overall_progress = QProgressBar()
@@ -266,7 +266,7 @@ class MultiProgressPanel(QWidget):
 
         self.overall_percent_label = QLabel("0%")
         self.overall_percent_label.setFixedWidth(35)
-        self.overall_percent_label.setFont(QFont("Segoe UI", 9))
+        self.overall_percent_label.setFont(QFont("Malgun Gothic", 9))
         progress_layout.addWidget(self.overall_percent_label)
 
         layout.addLayout(progress_layout)
@@ -278,7 +278,7 @@ class MultiProgressPanel(QWidget):
         # 수집 파일 수
         self.total_files_label = QLabel("0 files collected")
         self.total_files_label.setObjectName("mutedLabel")
-        self.total_files_label.setFont(QFont("Segoe UI", 9))
+        self.total_files_label.setFont(QFont("Malgun Gothic", 9))
         button_layout.addWidget(self.total_files_label)
 
         button_layout.addStretch()
