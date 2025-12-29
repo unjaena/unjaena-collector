@@ -34,18 +34,6 @@ from typing import Dict, List, Any, Optional, Generator, Tuple, Set
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# Constants
-# =============================================================================
-
-# 대용량 파일 스킵 (기본 100MB) - document, image, video, email 아티팩트에 적용
-MAX_FILE_SIZE_MB = 100
-MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
-
-# 대용량 파일 스킵 대상 아티팩트 (전체 디스크 스캔)
-LARGE_FILE_SKIP_ARTIFACTS = {'document', 'image', 'video', 'email'}
-
-
-# =============================================================================
 # Data Classes
 # =============================================================================
 
@@ -577,7 +565,7 @@ class BaseMFTCollector(ABC):
         artifact_dir: Path
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        MFT 엔트리에서 파일 추출
+        MFT 엔트리에서 파일 추출 (청크 스트리밍)
 
         Args:
             artifact_type: 아티팩트 유형
@@ -596,42 +584,59 @@ class BaseMFTCollector(ABC):
         if inode is None:
             return
 
-        # 대용량 파일 스킵 (document, image, video, email 아티팩트)
-        if artifact_type in LARGE_FILE_SKIP_ARTIFACTS:
-            if file_size > MAX_FILE_SIZE_BYTES:
-                logger.info(f"[Skip] Large file ({file_size / 1024 / 1024:.1f}MB > {MAX_FILE_SIZE_MB}MB): {filename}")
-                return
-
         try:
-            data = self._accessor.read_file_by_inode(inode)
+            # 출력 파일명 생성
+            safe_filename = self._sanitize_filename(filename)
+            if is_deleted:
+                safe_filename = f"[DELETED]_{safe_filename}"
 
-            if data:
-                # 출력 파일명 생성
-                safe_filename = self._sanitize_filename(filename)
-                if is_deleted:
-                    safe_filename = f"[DELETED]_{safe_filename}"
+            output_file = artifact_dir / safe_filename
 
-                output_file = artifact_dir / safe_filename
+            # 중복 방지
+            if output_file.exists():
+                base = output_file.stem
+                suffix = output_file.suffix
+                counter = 1
+                while output_file.exists():
+                    output_file = artifact_dir / f"{base}_{counter}{suffix}"
+                    counter += 1
 
-                # 중복 방지
-                if output_file.exists():
-                    base = output_file.stem
-                    suffix = output_file.suffix
-                    counter = 1
-                    while output_file.exists():
-                        output_file = artifact_dir / f"{base}_{counter}{suffix}"
-                        counter += 1
+            # 청크 스트리밍으로 파일 쓰기 + 해시 계산
+            md5_hash = hashlib.md5()
+            sha256_hash = hashlib.sha256()
+            total_size = 0
+            has_data = False
 
-                output_file.write_bytes(data)
+            # 스트리밍 메서드 확인
+            if hasattr(self._accessor, 'stream_file_by_inode'):
+                # 청크 스트리밍 (대용량 파일 지원)
+                with open(output_file, 'wb') as f:
+                    for chunk in self._accessor.stream_file_by_inode(inode):
+                        if chunk:
+                            f.write(chunk)
+                            md5_hash.update(chunk)
+                            sha256_hash.update(chunk)
+                            total_size += len(chunk)
+                            has_data = True
+            else:
+                # 폴백: 전체 읽기 (작은 파일용)
+                data = self._accessor.read_file_by_inode(inode)
+                if data:
+                    output_file.write_bytes(data)
+                    md5_hash.update(data)
+                    sha256_hash.update(data)
+                    total_size = len(data)
+                    has_data = True
 
+            if has_data:
                 # 메타데이터 생성
                 metadata = {
                     'artifact_type': artifact_type,
                     'name': filename,
                     'original_path': full_path,
-                    'size': len(data),
-                    'hash_md5': hashlib.md5(data).hexdigest(),
-                    'hash_sha256': hashlib.sha256(data).hexdigest(),
+                    'size': total_size,
+                    'hash_md5': md5_hash.hexdigest(),
+                    'hash_sha256': sha256_hash.hexdigest(),
                     'collection_method': 'mft_based',
                     'source': self._get_source_description(),
                     'mft_inode': inode,
@@ -642,6 +647,10 @@ class BaseMFTCollector(ABC):
                 }
 
                 yield str(output_file), metadata
+            else:
+                # 빈 파일 삭제
+                if output_file.exists():
+                    output_file.unlink()
 
         except Exception as e:
             logger.debug(f"Cannot extract {full_path}: {e}")

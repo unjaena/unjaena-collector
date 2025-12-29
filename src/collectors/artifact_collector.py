@@ -28,18 +28,12 @@ try:
     from collectors.base_mft_collector import (
         BaseMFTCollector,
         ARTIFACT_MFT_FILTERS,
-        MAX_FILE_SIZE_BYTES,
-        MAX_FILE_SIZE_MB,
-        LARGE_FILE_SKIP_ARTIFACTS
     )
     BASE_MFT_AVAILABLE = True
 except ImportError:
     BASE_MFT_AVAILABLE = False
     BaseMFTCollector = None
     ARTIFACT_MFT_FILTERS = {}
-    MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
-    MAX_FILE_SIZE_MB = 100
-    LARGE_FILE_SKIP_ARTIFACTS = {'document', 'image', 'video', 'email'}
 
 # Try to import ForensicDiskAccessor (순수 Python - 우선)
 try:
@@ -1275,13 +1269,6 @@ class LocalMFTCollector(_LocalMFTBase):
             src = Path(src_path)
             if not src.exists() or not src.is_file():
                 return None
-
-            # 대용량 파일 스킵 (document, image, video, email)
-            if artifact_type in LARGE_FILE_SKIP_ARTIFACTS:
-                file_size = src.stat().st_size
-                if file_size > MAX_FILE_SIZE_BYTES:
-                    logger.info(f"[Skip] Large file ({file_size / 1024 / 1024:.1f}MB > {MAX_FILE_SIZE_MB}MB): {src.name}")
-                    return None
 
             # 출력 파일명 생성
             safe_filename = src.name
