@@ -2,6 +2,7 @@
 Main GUI Application
 
 PyQt6-based graphical interface for the forensic collector.
+통합 디바이스 관리 및 병렬 수집 지원.
 """
 import asyncio
 import requests
@@ -23,6 +24,14 @@ from core.token_validator import TokenValidator, ValidationResult
 from core.encryptor import FileEncryptor
 from core.uploader import SyncUploader
 from collectors.artifact_collector import ArtifactCollector, ARTIFACT_TYPES
+
+# 플랫폼 통일 테마 및 새 컴포넌트
+from gui.styles import get_platform_stylesheet, COLORS
+from core.device_manager import UnifiedDeviceManager, DeviceType, DeviceStatus
+from gui.device_panel import DeviceListPanel
+from gui.e01_dialog import E01SelectionDialog
+from core.multi_device_collector import MultiDeviceCollector, TaskStatus
+from gui.multi_progress_panel import MultiProgressPanel
 
 # BitLocker 지원
 try:
@@ -140,7 +149,7 @@ SERVER_TO_COLLECTOR_MAPPING = {
 
 
 class CollectorWindow(QMainWindow):
-    """Main application window"""
+    """Main application window with unified device management"""
 
     def __init__(self, config: dict):
         super().__init__()
@@ -153,14 +162,23 @@ class CollectorWindow(QMainWindow):
         self.ws_url = None
         self.allowed_artifacts = []
 
+        # 통합 디바이스 관리자
+        self.device_manager = UnifiedDeviceManager()
+        self.device_manager.device_added.connect(self._on_device_added)
+        self.device_manager.device_removed.connect(self._on_device_removed)
+
         self.setup_ui()
         self.check_server_connection()
+
+        # 디바이스 모니터링 시작
+        self.device_manager.start_monitoring(poll_interval_ms=3000)
 
     def setup_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle(f"{self.config['app_name']} v{self.config['version']}")
-        self.setMinimumSize(800, 600)
-        self.setStyleSheet(self._get_stylesheet())
+        self.setMinimumSize(1000, 700)
+        # 플랫폼 통일 테마 적용
+        self.setStyleSheet(get_platform_stylesheet())
 
         # Central widget
         central = QWidget()
@@ -213,6 +231,17 @@ class CollectorWindow(QMainWindow):
         """Create left panel with controls"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
+
+        # Step 0: Device Selection (새로 추가)
+        device_group = QGroupBox("0. Select Devices")
+        device_layout = QVBoxLayout(device_group)
+
+        self.device_panel = DeviceListPanel(self.device_manager)
+        self.device_panel.selection_changed.connect(self._on_device_selection_changed)
+        self.device_panel.image_file_requested.connect(self._on_image_file_added)
+        device_layout.addWidget(self.device_panel)
+
+        layout.addWidget(device_group)
 
         # Step 1: Token
         token_group = QGroupBox("1. Session Token")
@@ -731,6 +760,40 @@ class CollectorWindow(QMainWindow):
         except Exception as e:
             self.ios_info_label.setText(f"Error: {e}")
 
+    # =========================================================================
+    # Device Management Event Handlers (새로 추가)
+    # =========================================================================
+
+    def _on_device_added(self, device):
+        """디바이스 추가됨 (DeviceListPanel이 자동 처리)"""
+        self._log(f"Device detected: {device.display_name}")
+
+    def _on_device_removed(self, device_id: str):
+        """디바이스 제거됨 (DeviceListPanel이 자동 처리)"""
+        self._log(f"Device removed: {device_id}")
+
+    def _on_device_selection_changed(self):
+        """디바이스 선택 변경됨"""
+        selected = self.device_manager.get_selected_devices()
+        count = len(selected)
+        self._log(f"Selected {count} device(s)")
+
+        # 디바이스가 선택되면 수집 버튼 상태 업데이트
+        self._update_collect_button_state()
+
+    def _on_image_file_added(self):
+        """포렌식 이미지 파일 추가됨 (DeviceListPanel에서 처리)"""
+        self._log("Forensic image added")
+        self._update_collect_button_state()
+
+    def _update_collect_button_state(self):
+        """수집 버튼 상태 업데이트"""
+        has_token = self.collection_token is not None
+        has_devices = len(self.device_manager.get_selected_devices()) > 0
+        has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
+
+        self.collect_btn.setEnabled(has_token and has_devices and has_artifacts)
+
     def _get_stylesheet(self) -> str:
         """Get application stylesheet"""
         return """
@@ -946,7 +1009,8 @@ class CollectorWindow(QMainWindow):
                     cb.setEnabled(True)
                     cb.setChecked(True)  # 기본으로 모든 허용된 아티팩트 선택
 
-            self.collect_btn.setEnabled(True)
+            # 디바이스 선택 상태 포함하여 수집 버튼 상태 업데이트
+            self._update_collect_button_state()
         else:
             self.token_status.setText(f"Invalid: {result.error}")
             self.token_status.setStyleSheet("color: #f72585;")
@@ -956,10 +1020,18 @@ class CollectorWindow(QMainWindow):
 
     def _start_collection(self):
         """Start the collection process"""
+        # 디바이스 선택 확인
+        selected_devices = self.device_manager.get_selected_devices()
+        if not selected_devices:
+            QMessageBox.warning(self, "Error", "Please select at least one device")
+            return
+
         selected = [k for k, cb in self.artifact_checks.items() if cb.isChecked()]
         if not selected:
             QMessageBox.warning(self, "Error", "Please select at least one artifact type")
             return
+
+        self._log(f"Starting collection from {len(selected_devices)} device(s)")
 
         # 법적 동의 확인 (필수)
         from gui.consent_dialog import show_consent_dialog
@@ -1192,6 +1264,18 @@ class CollectorWindow(QMainWindow):
         html += f'<span style="color: #eee;">{message}</span>'
 
         self.log_text.append(html)
+
+    def closeEvent(self, event):
+        """윈도우 종료 시 정리"""
+        # 디바이스 모니터링 중지
+        self.device_manager.stop_monitoring()
+
+        # 진행 중인 수집 취소
+        if hasattr(self, 'worker') and self.worker.isRunning():
+            self.worker.cancel()
+            self.worker.wait(3000)  # 최대 3초 대기
+
+        super().closeEvent(event)
 
 
 class CollectionWorker(QThread):
