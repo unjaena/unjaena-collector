@@ -548,42 +548,57 @@ class CollectorWindow(QMainWindow):
         """Create Android Forensics tab"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
         # 상태 정보 섹션
         status_frame = QFrame()
-        status_frame.setStyleSheet("QFrame { background-color: #1a1a2e; border-radius: 4px; padding: 5px; }")
+        status_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_tertiary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 4px;
+                padding: 4px;
+            }}
+            QLabel {{
+                font-size: 10px;
+                color: {COLORS['text_primary']};
+            }}
+        """)
         status_layout = QGridLayout(status_frame)
+        status_layout.setContentsMargins(6, 6, 6, 6)
+        status_layout.setSpacing(4)
 
         # ADB 상태
         from collectors.artifact_collector import ADB_AVAILABLE
         adb_status = "Available" if ADB_AVAILABLE else "Not Found"
         self.adb_status_label = QLabel(f"ADB: {adb_status}")
         self.adb_status_label.setStyleSheet(
-            f"color: {'#4cc9f0' if ADB_AVAILABLE else '#ff6b6b'};"
+            f"color: {COLORS['success'] if ADB_AVAILABLE else COLORS['error']}; font-size: 10px;"
         )
         status_layout.addWidget(self.adb_status_label, 0, 0)
 
         # 기기 연결 상태
         self.android_device_label = QLabel("Device: Not connected")
-        self.android_device_label.setStyleSheet("color: #888;")
+        self.android_device_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 10px;")
         status_layout.addWidget(self.android_device_label, 0, 1)
 
         # 기기 새로고침 버튼
         refresh_btn = QPushButton("Refresh")
-        refresh_btn.setMaximumWidth(80)
+        refresh_btn.setFixedSize(60, 20)
         refresh_btn.clicked.connect(self._refresh_android_devices)
         status_layout.addWidget(refresh_btn, 0, 2)
 
         # 기기 정보 (루팅 상태 등)
         self.android_info_label = QLabel("")
+        self.android_info_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 9px;")
         status_layout.addWidget(self.android_info_label, 1, 0, 1, 3)
 
         layout.addWidget(status_frame)
 
         # USB 디버깅 가이드
-        guide_label = QLabel("Enable USB Debugging: Settings > Developer Options > USB Debugging")
-        guide_label.setStyleSheet("color: #888; font-size: 10px;")
+        guide_label = QLabel("USB Debugging: Settings > Developer Options > USB Debugging")
+        guide_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
         guide_label.setWordWrap(True)
         layout.addWidget(guide_label)
 
@@ -630,22 +645,42 @@ class CollectorWindow(QMainWindow):
         """Create iOS Forensics tab"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
         # 상태 정보 섹션
         status_frame = QFrame()
-        status_frame.setStyleSheet("QFrame { background-color: #1a1a2e; border-radius: 4px; padding: 5px; }")
+        status_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_tertiary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 4px;
+                padding: 4px;
+            }}
+            QLabel {{
+                font-size: 10px;
+                color: {COLORS['text_primary']};
+            }}
+            QComboBox {{
+                font-size: 10px;
+            }}
+        """)
         status_layout = QVBoxLayout(status_frame)
+        status_layout.setContentsMargins(6, 6, 6, 6)
+        status_layout.setSpacing(4)
 
         # 백업 선택
         backup_row = QHBoxLayout()
+        backup_row.setSpacing(6)
         backup_label = QLabel("Backup:")
+        backup_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 10px;")
         self.ios_backup_combo = QComboBox()
-        self.ios_backup_combo.setMinimumWidth(200)
+        self.ios_backup_combo.setMinimumWidth(150)
+        self.ios_backup_combo.setFixedHeight(22)
         self.ios_backup_combo.currentIndexChanged.connect(self._on_ios_backup_selected)
 
         refresh_btn = QPushButton("Refresh")
-        refresh_btn.setMaximumWidth(80)
+        refresh_btn.setFixedSize(60, 20)
         refresh_btn.clicked.connect(self._refresh_ios_backups)
 
         backup_row.addWidget(backup_label)
@@ -655,15 +690,15 @@ class CollectorWindow(QMainWindow):
 
         # 백업 정보
         self.ios_info_label = QLabel("No backup selected")
-        self.ios_info_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.ios_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
         self.ios_info_label.setWordWrap(True)
         status_layout.addWidget(self.ios_info_label)
 
         layout.addWidget(status_frame)
 
         # 백업 생성 가이드
-        guide_label = QLabel("Create backup: Connect device to iTunes/Finder > Back Up Now (unencrypted)")
-        guide_label.setStyleSheet("color: #888; font-size: 10px;")
+        guide_label = QLabel("Backup: Connect device to iTunes/Finder > Back Up Now (unencrypted)")
+        guide_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
         guide_label.setWordWrap(True)
         layout.addWidget(guide_label)
 
@@ -732,18 +767,19 @@ class CollectorWindow(QMainWindow):
             if devices:
                 serial, model = devices[0]
                 self.android_device_label.setText(f"Device: {model}")
-                self.android_device_label.setStyleSheet("color: #4cc9f0;")
+                self.android_device_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 10px;")
                 self.android_info_label.setText(f"Serial: {serial}")
                 # Store for collection
                 self._android_device_serial = serial
             else:
                 self.android_device_label.setText("Device: Not connected")
-                self.android_device_label.setStyleSheet("color: #ff6b6b;")
+                self.android_device_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 10px;")
                 self.android_info_label.setText("")
                 self._android_device_serial = None
 
         except Exception as e:
             self.android_device_label.setText(f"Device: Error")
+            self.android_device_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 10px;")
             self.android_info_label.setText(str(e))
             self._android_device_serial = None
 
@@ -777,6 +813,7 @@ class CollectorWindow(QMainWindow):
         """Handle iOS backup selection"""
         if index <= 0:
             self.ios_info_label.setText("No backup selected")
+            self.ios_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
             self._ios_backup_path = None
             return
 
@@ -792,12 +829,13 @@ class CollectorWindow(QMainWindow):
                 info_text = f"Device: {backup_info.device_name} | iOS: {backup_info.ios_version} | Size: {backup_info.size_mb:.1f} MB"
                 if backup_info.encrypted:
                     info_text += " | ENCRYPTED (cannot extract)"
-                    self.ios_info_label.setStyleSheet("color: #ff6b6b;")
+                    self.ios_info_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 9px;")
                 else:
-                    self.ios_info_label.setStyleSheet("color: #4cc9f0;")
+                    self.ios_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
                 self.ios_info_label.setText(info_text)
         except Exception as e:
             self.ios_info_label.setText(f"Error: {e}")
+            self.ios_info_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 9px;")
 
     # =========================================================================
     # Device Management Event Handlers (새로 추가)
