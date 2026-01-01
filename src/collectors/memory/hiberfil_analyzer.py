@@ -28,6 +28,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Debug output control
+_DEBUG_OUTPUT = False
+def _debug_print(msg): 
+    if _DEBUG_OUTPUT: _debug_print(msg)
+
 
 class HiberfilAnalyzer:
     """hiberfil.sys 분석기"""
@@ -276,7 +281,7 @@ class HiberfilAnalyzer:
         Yields:
             (page_number, page_data) 튜플
         """
-        print(f"[Hiberfil] 메모리 페이지 추출 (타입: {self.hiberfil_type})...")
+        _debug_print(f"[Hiberfil] 메모리 페이지 추출 (타입: {self.hiberfil_type})...")
 
         # 헤더 이후부터 시작
         offset = self.PAGE_SIZE
@@ -307,9 +312,9 @@ class HiberfilAnalyzer:
             offset += self.PAGE_SIZE
 
             if page_count % 10000 == 0:
-                print(f"[Hiberfil] {page_count:,} 페이지 처리...")
+                _debug_print(f"[Hiberfil] {page_count:,} 페이지 처리...")
 
-        print(f"[Hiberfil] 총 {page_count:,} 페이지 추출")
+        _debug_print(f"[Hiberfil] 총 {page_count:,} 페이지 추출")
 
     def find_strings(
         self,
@@ -326,7 +331,7 @@ class HiberfilAnalyzer:
         Yields:
             문자열 정보 딕셔너리
         """
-        print(f"[Hiberfil] 문자열 검색 (최대 {max_pages} 페이지)...")
+        _debug_print(f"[Hiberfil] 문자열 검색 (최대 {max_pages} 페이지)...")
 
         ascii_pattern = re.compile(
             rb'[\x20-\x7E]{' + str(min_length).encode() + rb',}'
@@ -345,7 +350,7 @@ class HiberfilAnalyzer:
                 }
                 total_strings += 1
 
-        print(f"[Hiberfil] {total_strings:,}개 문자열 발견")
+        _debug_print(f"[Hiberfil] {total_strings:,}개 문자열 발견")
 
     def find_urls(self, max_pages: int = 10000) -> List[Dict]:
         """
@@ -357,7 +362,7 @@ class HiberfilAnalyzer:
         Returns:
             URL 정보 리스트
         """
-        print(f"[Hiberfil] URL 검색 중...")
+        _debug_print(f"[Hiberfil] URL 검색 중...")
 
         url_pattern = re.compile(
             rb'https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&\'()*+,;=%]+',
@@ -378,7 +383,7 @@ class HiberfilAnalyzer:
                         'offset_in_page': match.start(),
                     })
 
-        print(f"[Hiberfil] {len(urls):,}개 URL 발견")
+        _debug_print(f"[Hiberfil] {len(urls):,}개 URL 발견")
         return urls
 
     def find_processes(self, max_pages: int = 10000) -> List[Dict]:
@@ -394,7 +399,7 @@ class HiberfilAnalyzer:
         Returns:
             프로세스 정보 리스트 (기본적인 패턴 매칭)
         """
-        print(f"[Hiberfil] 프로세스 정보 검색 중...")
+        _debug_print(f"[Hiberfil] 프로세스 정보 검색 중...")
 
         # .exe 파일명 패턴
         exe_pattern = re.compile(
@@ -416,7 +421,7 @@ class HiberfilAnalyzer:
                         'offset_in_page': match.start(),
                     })
 
-        print(f"[Hiberfil] {len(processes):,}개 실행 파일명 발견")
+        _debug_print(f"[Hiberfil] {len(processes):,}개 실행 파일명 발견")
         return processes
 
     def analyze_all(self, max_pages: int = 10000) -> Dict:
@@ -429,13 +434,13 @@ class HiberfilAnalyzer:
         Returns:
             분석 결과 딕셔너리
         """
-        print(f"[Hiberfil] 전체 분석 시작 (크기: {self.file_size / 1024 / 1024:.1f} MB)...")
+        _debug_print(f"[Hiberfil] 전체 분석 시작 (크기: {self.file_size / 1024 / 1024:.1f} MB)...")
 
         # 헤더 파싱
         header_info = self.parse_header()
 
         if not header_info['is_valid']:
-            print(f"[Hiberfil] 유효하지 않은 hiberfil: {header_info['signature']}")
+            _debug_print(f"[Hiberfil] 유효하지 않은 hiberfil: {header_info['signature']}")
             return {'error': 'Invalid hibernation file', 'header': header_info}
 
         results = {
@@ -454,9 +459,9 @@ class HiberfilAnalyzer:
             'total_processes': len(results['processes']),
         }
 
-        print(f"[Hiberfil] 분석 완료:")
+        _debug_print(f"[Hiberfil] 분석 완료:")
         for key, value in results['summary'].items():
-            print(f"  - {key}: {value}")
+            _debug_print(f"  - {key}: {value}")
 
         return results
 
@@ -494,7 +499,7 @@ class SwapfileAnalyzer:
         Returns:
             분석 결과
         """
-        print(f"[Swapfile] 분석 시작 (크기: {self.file_size / 1024 / 1024:.1f} MB)...")
+        _debug_print(f"[Swapfile] 분석 시작 (크기: {self.file_size / 1024 / 1024:.1f} MB)...")
 
         # pagefile 분석기와 유사하게 처리
         from .pagefile_analyzer import PagefileAnalyzer
@@ -519,7 +524,7 @@ class SwapfileAnalyzer:
             'total_emails': len(results['emails']),
         }
 
-        print(f"[Swapfile] 분석 완료")
+        _debug_print(f"[Swapfile] 분석 완료")
         return results
 
 
@@ -535,7 +540,7 @@ def analyze_hiberfil_from_image(img_info, hiberfil_offset: int, hiberfil_size: i
     Returns:
         분석 결과
     """
-    print(f"[Hiberfil] 이미지에서 hiberfil 읽기 (offset={hiberfil_offset})...")
+    _debug_print(f"[Hiberfil] 이미지에서 hiberfil 읽기 (offset={hiberfil_offset})...")
 
     # 크기 제한 (메모리 보호)
     max_size = min(hiberfil_size, 1024 * 1024 * 1024)  # 최대 1GB
@@ -580,7 +585,7 @@ def create_hiberfil_analyzer_raw_disk(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    print(f"[Hiberfil] Raw Disk Access로 hiberfil.sys 읽기 시작...")
+    _debug_print(f"[Hiberfil] Raw Disk Access로 hiberfil.sys 읽기 시작...")
 
     try:
         with ForensicDiskAccessor.from_physical_disk(drive_number) as disk:
@@ -609,13 +614,13 @@ def create_hiberfil_analyzer_raw_disk(
                     return None
 
                 disk.select_partition(ntfs_idx)
-                print(f"[Hiberfil] 파티션 {ntfs_idx} 선택 (NTFS)")
+                _debug_print(f"[Hiberfil] 파티션 {ntfs_idx} 선택 (NTFS)")
 
             # hiberfil.sys 스트리밍 읽기 (크기 제한)
             hiberfil_path = '/hiberfil.sys'
             max_size = max_size_mb * 1024 * 1024
 
-            print(f"[Hiberfil] hiberfil.sys 데이터 스트리밍 중 (최대 {max_size_mb} MB)...")
+            _debug_print(f"[Hiberfil] hiberfil.sys 데이터 스트리밍 중 (최대 {max_size_mb} MB)...")
 
             chunks = []
             total_size = 0
@@ -623,20 +628,20 @@ def create_hiberfil_analyzer_raw_disk(
             for chunk in disk.stream_file(hiberfil_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                print(f"[Hiberfil] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Hiberfil] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
 
                 if total_size >= max_size:
-                    print(f"[Hiberfil] 최대 크기 도달 ({max_size_mb} MB)")
+                    _debug_print(f"[Hiberfil] 최대 크기 도달 ({max_size_mb} MB)")
                     break
 
             hiberfil_data = b''.join(chunks)
-            print(f"[Hiberfil] 총 {len(hiberfil_data) / 1024 / 1024:.1f} MB 읽기 완료 [raw disk]")
+            _debug_print(f"[Hiberfil] 총 {len(hiberfil_data) / 1024 / 1024:.1f} MB 읽기 완료 [raw disk]")
 
             return HiberfilAnalyzer(hiberfil_data=hiberfil_data)
 
     except Exception as e:
         logger.error(f"Raw disk hiberfil read error: {e}")
-        print(f"[Hiberfil] Raw disk error: {e}")
+        _debug_print(f"[Hiberfil] Raw disk error: {e}")
         return None
 
 
@@ -667,8 +672,8 @@ def create_hiberfil_analyzer_e01(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    print(f"[Hiberfil] E01 이미지에서 hiberfil.sys 읽기 시작...")
-    print(f"[Hiberfil] E01 경로: {e01_path}")
+    _debug_print(f"[Hiberfil] E01 이미지에서 hiberfil.sys 읽기 시작...")
+    _debug_print(f"[Hiberfil] E01 경로: {e01_path}")
 
     try:
         with ForensicDiskAccessor.from_e01(e01_path) as disk:
@@ -696,12 +701,12 @@ def create_hiberfil_analyzer_e01(
                     return None
 
                 disk.select_partition(ntfs_idx)
-                print(f"[Hiberfil] 파티션 {ntfs_idx} 선택 (NTFS)")
+                _debug_print(f"[Hiberfil] 파티션 {ntfs_idx} 선택 (NTFS)")
 
             hiberfil_path = '/hiberfil.sys'
             max_size = max_size_mb * 1024 * 1024
 
-            print(f"[Hiberfil] hiberfil.sys 데이터 스트리밍 중 (최대 {max_size_mb} MB)...")
+            _debug_print(f"[Hiberfil] hiberfil.sys 데이터 스트리밍 중 (최대 {max_size_mb} MB)...")
 
             chunks = []
             total_size = 0
@@ -709,20 +714,20 @@ def create_hiberfil_analyzer_e01(
             for chunk in disk.stream_file(hiberfil_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                print(f"[Hiberfil] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Hiberfil] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
 
                 if total_size >= max_size:
-                    print(f"[Hiberfil] 최대 크기 도달 ({max_size_mb} MB)")
+                    _debug_print(f"[Hiberfil] 최대 크기 도달 ({max_size_mb} MB)")
                     break
 
             hiberfil_data = b''.join(chunks)
-            print(f"[Hiberfil] 총 {len(hiberfil_data) / 1024 / 1024:.1f} MB 읽기 완료 [E01]")
+            _debug_print(f"[Hiberfil] 총 {len(hiberfil_data) / 1024 / 1024:.1f} MB 읽기 완료 [E01]")
 
             return HiberfilAnalyzer(hiberfil_data=hiberfil_data)
 
     except Exception as e:
         logger.error(f"E01 hiberfil read error: {e}")
-        print(f"[Hiberfil] E01 error: {e}")
+        _debug_print(f"[Hiberfil] E01 error: {e}")
         return None
 
 
@@ -748,7 +753,7 @@ def create_swapfile_analyzer_raw_disk(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    print(f"[Swapfile] Raw Disk Access로 swapfile.sys 읽기 시작...")
+    _debug_print(f"[Swapfile] Raw Disk Access로 swapfile.sys 읽기 시작...")
 
     try:
         with ForensicDiskAccessor.from_physical_disk(drive_number) as disk:
@@ -769,7 +774,7 @@ def create_swapfile_analyzer_raw_disk(
 
             swapfile_path = '/swapfile.sys'
 
-            print(f"[Swapfile] swapfile.sys 데이터 읽기 중...")
+            _debug_print(f"[Swapfile] swapfile.sys 데이터 읽기 중...")
 
             chunks = []
             total_size = 0
@@ -777,10 +782,10 @@ def create_swapfile_analyzer_raw_disk(
             for chunk in disk.stream_file(swapfile_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                print(f"[Swapfile] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Swapfile] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
 
             swapfile_data = b''.join(chunks)
-            print(f"[Swapfile] 총 {len(swapfile_data) / 1024 / 1024:.1f} MB 읽기 완료 [raw disk]")
+            _debug_print(f"[Swapfile] 총 {len(swapfile_data) / 1024 / 1024:.1f} MB 읽기 완료 [raw disk]")
 
             return SwapfileAnalyzer(swapfile_data=swapfile_data)
 

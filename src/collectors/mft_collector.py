@@ -26,8 +26,8 @@ try:
     PYTSK3_AVAILABLE = True
 except ImportError:
     PYTSK3_AVAILABLE = False
-    print("[WARNING] pytsk3 not installed. MFT collection will be disabled.")
-    print("[INFO] Install with: pip install pytsk3")
+    _debug_print("[WARNING] pytsk3 not installed. MFT collection will be disabled.")
+    _debug_print("[INFO] Install with: pip install pytsk3")
 
 
 @dataclass
@@ -126,8 +126,8 @@ class MFTCollector:
         # If disk_reader is provided (BitLocker decrypted), skip direct pytsk3 access
         # TODO: Implement custom pytsk3 Img_Info wrapper for decrypted readers
         if disk_reader:
-            print("[INFO] BitLocker decrypted reader provided - MFT collection may be limited")
-            print("[INFO] Will attempt standard volume access after decryption")
+            _debug_print("[INFO] BitLocker decrypted reader provided - MFT collection may be limited")
+            _debug_print("[INFO] Will attempt standard volume access after decryption")
 
         self._open_volume()
 
@@ -264,7 +264,7 @@ class MFTCollector:
             )
 
         except Exception as e:
-            print(f"[MFT] Error reading entry: {e}")
+            _debug_print(f"[MFT] Error reading entry: {e}")
             return None
 
     def collect_by_path(
@@ -305,7 +305,7 @@ class MFTCollector:
                     yield result
 
         except Exception as e:
-            print(f"[MFT] Error collecting {path}: {e}")
+            _debug_print(f"[MFT] Error collecting {path}: {e}")
 
     def collect_by_pattern(
         self,
@@ -360,7 +360,7 @@ class MFTCollector:
                         yield result
 
         except Exception as e:
-            print(f"[MFT] Error scanning {base_path}/{pattern}: {e}")
+            _debug_print(f"[MFT] Error scanning {base_path}/{pattern}: {e}")
 
     def _walk_directory(
         self,
@@ -420,7 +420,7 @@ class MFTCollector:
                             continue
 
         except Exception as e:
-            print(f"[MFT] Error walking directory {path}: {e}")
+            _debug_print(f"[MFT] Error walking directory {path}: {e}")
 
     def _extract_file(
         self,
@@ -512,7 +512,7 @@ class MFTCollector:
             yield str(output_path), metadata
 
         except Exception as e:
-            print(f"[MFT] Error extracting file: {e}")
+            _debug_print(f"[MFT] Error extracting file: {e}")
 
     def collect_mft_raw(self, output_path: Optional[str] = None) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
@@ -568,7 +568,7 @@ class MFTCollector:
             return output_path, metadata
 
         except Exception as e:
-            print(f"[MFT] Error collecting $MFT: {e}")
+            _debug_print(f"[MFT] Error collecting $MFT: {e}")
             return None
 
     def collect_usn_journal(self, output_path: Optional[str] = None) -> Optional[Tuple[str, Dict[str, Any]]]:
@@ -621,7 +621,7 @@ class MFTCollector:
                         break
 
             if bytes_written == 0:
-                print("[MFT] USN Journal is empty or sparse")
+                _debug_print("[MFT] USN Journal is empty or sparse")
                 return None
 
             metadata = {
@@ -639,7 +639,7 @@ class MFTCollector:
             return output_path, metadata
 
         except Exception as e:
-            print(f"[MFT] Error collecting USN Journal: {e}")
+            _debug_print(f"[MFT] Error collecting USN Journal: {e}")
             return None
 
     def collect_logfile(self, output_path: Optional[str] = None) -> Optional[Tuple[str, Dict[str, Any]]]:
@@ -710,7 +710,7 @@ class MFTCollector:
             return output_path, metadata
 
         except Exception as e:
-            print(f"[MFT] Error collecting $LogFile: {e}")
+            _debug_print(f"[MFT] Error collecting $LogFile: {e}")
             return None
 
     def scan_deleted_files(
@@ -767,7 +767,7 @@ class MFTCollector:
                     yield mft_info
 
         except Exception as e:
-            print(f"[MFT] Error scanning deleted files: {e}")
+            _debug_print(f"[MFT] Error scanning deleted files: {e}")
 
 
 # Artifact type definitions for MFT-based collection
@@ -807,7 +807,7 @@ MFT_ARTIFACT_TYPES = {
         'files': ['SRUDB.dat'],
         'requires_admin': True,
     },
-    'recyclebin': {
+    'recycle_bin': {
         'name': 'Recycle Bin',
         'description': 'Deleted files metadata',
         'base_path': '$Recycle.Bin',

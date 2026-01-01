@@ -195,7 +195,7 @@ class ADBDeviceMonitor:
                         self.on_disconnect(serial)
 
             except Exception as e:
-                print(f"[ADB Monitor] Error: {e}")
+                _debug_print(f"[ADB Monitor] Error: {e}")
 
             self._stop_event.wait(poll_interval)
 
@@ -429,7 +429,7 @@ class AndroidCollector:
             return result.returncode == 0
 
         except Exception as e:
-            print(f"[ADB Pull] Error: {e}")
+            _debug_print(f"[ADB Pull] Error: {e}")
             return False
 
     def collect(

@@ -17,7 +17,7 @@ Usage:
     collector.select_partition(0)
 
     for file_path, metadata in collector.collect("registry"):
-        print(f"Extracted: {file_path}")
+        _debug_print(f"Extracted: {file_path}")
 """
 
 import logging
@@ -36,6 +36,11 @@ except ImportError:
     ForensicDiskAccessor = None
 
 logger = logging.getLogger(__name__)
+
+# Debug output control
+_DEBUG_OUTPUT = False
+def _debug_print(msg): 
+    if _DEBUG_OUTPUT: _debug_print(msg)
 
 
 # =============================================================================

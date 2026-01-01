@@ -30,6 +30,11 @@ from typing import Generator, Tuple, Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
+# Debug output control
+_DEBUG_OUTPUT = False
+def _debug_print(msg): 
+    if _DEBUG_OUTPUT: _debug_print(msg)
+
 # Try to import ForensicDiskAccessor
 try:
     from collectors.forensic_disk import (
@@ -78,7 +83,7 @@ class ForensicDiskCollector:
     Usage:
         with ForensicDiskCollector(output_dir, 'C') as collector:
             for path, metadata in collector.collect_registry():
-                print(f"Collected: {path}")
+                _debug_print(f"Collected: {path}")
     """
 
     def __init__(

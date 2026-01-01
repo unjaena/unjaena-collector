@@ -69,12 +69,9 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'edge_history': 'browser',
     'firefox': 'browser',
     'browser': 'browser',
-    'browser_chrome': 'browser',  # 레거시 호환
-    'browser_edge': 'browser',    # 레거시 호환
 
     # 파일시스템
     'recycle_bin': 'recycle_bin',
-    'recyclebin': 'recycle_bin',  # 레거시 호환
     'partition': 'mft',
 
     # 실행 흔적
@@ -124,7 +121,14 @@ SERVER_TO_COLLECTOR_MAPPING = {
     # 기타
     'autorun': 'registry',
     'service': 'registry',
-    'scheduled_task': 'registry',
+    'scheduled_task': 'scheduled_task',
+
+    # === Phase 2/3 신규 아티팩트 ===
+    'powershell_history': 'powershell_history',
+    'wer': 'wer',
+    'rdp_cache': 'rdp_cache',
+    'wlan_event': 'wlan_event',
+    'profile_list': 'profile_list',
 
     # === Android 포렌식 ===
     'mobile_android_sms': 'mobile_android_sms',
@@ -1067,13 +1071,17 @@ class CollectorWindow(QMainWindow):
 
         if result.valid:
             # [보안] 원본 세션 토큰은 저장하지 않음 (검증 완료 후 불필요)
-            # 필요한 정보만 유지: session_id, case_id, collection_token
+            # 수집 시작 시 session_id + collection_token으로 세션 검증
             self.session_token = None  # 메모리에서 원본 토큰 제거
             self.session_id = result.session_id
             self.case_id = result.case_id
             self.collection_token = result.collection_token
-            self.server_url = result.server_url or self.config['server_url']
-            self.ws_url = result.ws_url or self.config['ws_url']
+            # Windows에서 localhost는 IPv6(::1)로 해석되어 Docker 연결 실패
+            # 강제로 127.0.0.1로 변환
+            raw_server_url = result.server_url or self.config['server_url']
+            raw_ws_url = result.ws_url or self.config['ws_url']
+            self.server_url = raw_server_url.replace('://localhost', '://127.0.0.1')
+            self.ws_url = raw_ws_url.replace('://localhost', '://127.0.0.1')
             self.allowed_artifacts = result.allowed_artifacts or list(ARTIFACT_TYPES.keys())
 
             self.token_status.setText(f"Valid - Case: {self.case_id[:8]}...")
@@ -1117,6 +1125,46 @@ class CollectorWindow(QMainWindow):
 
     def _start_collection(self):
         """Start the collection process"""
+        # === 세션 유효성 검증 (수집 시작 전 필수) ===
+        # 취소된 케이스, 만료된 세션 등 감지
+        # [보안] 원본 토큰 대신 session_id + collection_token 사용
+        if not self.session_id or not self.collection_token:
+            QMessageBox.warning(
+                self,
+                "세션 필요",
+                "유효한 세션이 없습니다.\n토큰을 입력하고 'Validate Token' 버튼을 눌러주세요."
+            )
+            return
+
+        self._log("수집 시작 전 세션 유효성 검증 중...")
+        validator = TokenValidator(self.config['server_url'])
+        result = validator.validate_session(self.session_id, self.collection_token)
+
+        if not result.can_proceed:
+            reason = result.reason or "알 수 없는 오류"
+            self._log(f"세션 검증 실패: {reason}", error=True)
+            self.token_status.setText("Invalid - 새 토큰 필요")
+            self.token_status.setStyleSheet("color: #f72585;")
+
+            # 사용자에게 새 토큰 발급 안내
+            QMessageBox.warning(
+                self,
+                "세션 검증 실패",
+                f"현재 세션으로 수집을 진행할 수 없습니다.\n\n"
+                f"원인: {reason}\n\n"
+                f"해결 방법:\n"
+                f"1. 웹 플랫폼에서 새 토큰을 발급받으세요.\n"
+                f"2. 새 토큰을 입력하고 'Validate Token'을 클릭하세요."
+            )
+            # 세션 정보 초기화
+            self.session_id = None
+            self.collection_token = None
+            self.collect_btn.setEnabled(False)
+            return
+
+        # 세션 검증 성공
+        self._log(f"세션 검증 성공 (케이스: {result.case_id}, 상태: {result.case_status})")
+
         # 디바이스 선택 확인
         selected_devices = self.device_manager.get_selected_devices()
         if not selected_devices:
@@ -1288,6 +1336,9 @@ class CollectorWindow(QMainWindow):
             self.worker.cancel()
             self._log("Collection cancelled by user")
 
+            # [보안] 서버에 취소 알림 (Redis 활성 수집 상태 정리)
+            self._notify_server_cancel()
+
     def _update_progress(self, stage: int, stage_progress: int, overall_progress: int,
                          message: str, time_remaining: str):
         """
@@ -1346,18 +1397,80 @@ class CollectorWindow(QMainWindow):
     def _collection_finished(self, success: bool, message: str):
         """Handle collection completion"""
         # Re-enable controls
-        self.collect_btn.setEnabled(True)
+        self.collect_btn.setEnabled(False)  # 수집 완료/취소 후 비활성화 (새 토큰 필요)
         self.cancel_btn.setEnabled(False)
         self.validate_btn.setEnabled(True)
 
+        # [보안] 세션 정보 초기화 - 토큰 재사용 방지
+        # 수집 완료/취소 후에는 새 토큰으로 다시 인증해야 함
+        self._clear_session_data()
+
         if success:
             self._log(f"Collection completed: {message}")
-            QMessageBox.information(self, "Success", message)
+            self._log("새로운 수집을 위해서는 새 토큰이 필요합니다.")
+            QMessageBox.information(self, "Success", f"{message}\n\n새로운 수집을 위해서는 새 토큰을 발급받으세요.")
         else:
             self._log(f"Collection failed: {message}", error=True)
-            QMessageBox.critical(self, "Error", message)
+            self._log("새로운 수집을 위해서는 새 토큰이 필요합니다.")
+            QMessageBox.critical(self, "Error", f"{message}\n\n새로운 수집을 위해서는 새 토큰을 발급받으세요.")
 
-        self.status_bar.showMessage("Ready")
+        self.status_bar.showMessage("Ready - 새 토큰 입력 필요")
+        self.token_status.setText("새 토큰 필요")
+        self.token_status.setStyleSheet("color: #ffc107;")
+
+    def _clear_session_data(self):
+        """
+        세션 데이터 초기화 - 토큰 재사용 방지
+
+        수집 완료/취소 후 호출되어 캐시된 세션 정보를 삭제합니다.
+        새로운 수집을 위해서는 새 토큰으로 다시 인증해야 합니다.
+        """
+        self.session_id = None
+        self.case_id = None
+        self.collection_token = None
+        self.server_url = None
+        self.ws_url = None
+        self.allowed_artifacts = []
+
+        # 토큰 입력 필드 초기화
+        if hasattr(self, 'token_input') and self.token_input:
+            self.token_input.clear()
+
+    def _notify_server_cancel(self):
+        """
+        서버에 수집 중단 알림 (Redis 활성 수집 상태 정리)
+
+        취소 시 서버의 active_collection 상태를 정리하여
+        동일 케이스에 대한 새 수집을 허용합니다.
+        실패해도 UI 동작에는 영향 없음 (best-effort).
+        """
+        import requests
+
+        if not self.session_id or not self.collection_token:
+            return
+
+        try:
+            server_url = self.config.get('server_url', '')
+            if not server_url:
+                return
+
+            # 수집도구 전용 abort 엔드포인트 사용
+            abort_url = f"{server_url}/api/v1/collector/collection/abort/{self.session_id}"
+            response = requests.post(
+                abort_url,
+                headers={
+                    'X-Collection-Token': self.collection_token,
+                },
+                timeout=5,
+            )
+
+            if response.status_code == 200:
+                self._log("서버 중단 알림 완료")
+            else:
+                self._log(f"서버 중단 알림 실패: {response.status_code}", error=True)
+        except Exception as e:
+            # 실패해도 무시 - 서버 stale 체크로 자동 정리됨
+            self._log(f"서버 중단 알림 실패 (무시됨): {e}", error=True)
 
     def _log(self, message: str, error: bool = False):
         """Add message to log"""
@@ -1625,14 +1738,11 @@ class CollectionWorker(QThread):
                         )
 
                         try:
-                            files = list(collector.collect(artifact_type))
+                            # 청크 스트리밍: 100개씩 처리하여 GUI 멈춤 방지
+                            CHUNK_SIZE = 100
+                            file_count = 0
 
-                            if not files:
-                                self.log_message.emit(f"⚠️ [{device_name}] {artifact_type}: 파일을 찾을 수 없습니다", True)
-                            else:
-                                self.log_message.emit(f"✓ [{device_name}] {artifact_type}: {len(files)}개 파일 수집됨", False)
-
-                            for file_path, metadata in files:
+                            for file_path, metadata in collector.collect(artifact_type):
                                 if self._cancelled:
                                     break
                                 # 디바이스 정보를 메타데이터에 추가
@@ -1641,6 +1751,16 @@ class CollectionWorker(QThread):
                                 metadata['device_type'] = device.device_type.name
                                 collected_raw_files.append((file_path, artifact_type, metadata))
                                 self.file_collected.emit(Path(file_path).name, True)
+                                file_count += 1
+
+                                # 100개마다 진행률 업데이트 + GUI 이벤트 처리
+                                if file_count % CHUNK_SIZE == 0:
+                                    self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count}개 수집 중...", False)
+
+                            if file_count == 0:
+                                self.log_message.emit(f"⚠️ [{device_name}] {artifact_type}: 파일을 찾을 수 없습니다", True)
+                            else:
+                                self.log_message.emit(f"✓ [{device_name}] {artifact_type}: {file_count}개 파일 수집됨", False)
 
                         except Exception as e:
                             import logging
@@ -1703,18 +1823,25 @@ class CollectionWorker(QThread):
                         elif category == 'ios' and self.ios_backup_path:
                             collect_kwargs['backup_path'] = self.ios_backup_path
 
-                        files = list(collector.collect(artifact_type, **collect_kwargs))
+                        # 청크 스트리밍: 100개씩 처리하여 GUI 멈춤 방지
+                        CHUNK_SIZE = 100
+                        file_count = 0
 
-                        if not files:
-                            self.log_message.emit(f"⚠️ {artifact_type}: 파일을 찾을 수 없습니다", True)
-                        else:
-                            self.log_message.emit(f"✓ {artifact_type}: {len(files)}개 파일 수집됨", False)
-
-                        for file_path, metadata in files:
+                        for file_path, metadata in collector.collect(artifact_type, **collect_kwargs):
                             if self._cancelled:
                                 break
                             collected_raw_files.append((file_path, artifact_type, metadata))
                             self.file_collected.emit(Path(file_path).name, True)
+                            file_count += 1
+
+                            # 100개마다 진행률 업데이트 + GUI 이벤트 처리
+                            if file_count % CHUNK_SIZE == 0:
+                                self.log_message.emit(f"{artifact_type}: {file_count}개 수집 중...", False)
+
+                        if file_count == 0:
+                            self.log_message.emit(f"⚠️ {artifact_type}: 파일을 찾을 수 없습니다", True)
+                        else:
+                            self.log_message.emit(f"✓ {artifact_type}: {file_count}개 파일 수집됨", False)
 
                     except Exception as e:
                         import logging

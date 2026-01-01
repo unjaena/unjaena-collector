@@ -48,7 +48,7 @@ _DEBUG_LOG_FILE = None
 def _debug_log(message: str):
     """콘솔과 파일 모두에 디버그 로그 출력"""
     global _DEBUG_LOG_FILE
-    print(message, flush=True)
+    _debug_print(message, flush=True)
 
     # 파일에도 기록
     try:
@@ -65,6 +65,11 @@ def _debug_log(message: str):
 from .unified_disk_reader import UnifiedDiskReader, FilesystemError
 
 logger = logging.getLogger(__name__)
+
+# Debug output control
+_DEBUG_OUTPUT = False
+def _debug_print(msg): 
+    if _DEBUG_OUTPUT: _debug_print(msg)
 
 
 # ==============================================================================

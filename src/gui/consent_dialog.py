@@ -165,10 +165,10 @@ class ConsentDialog(QDialog):
             <tr>
                 <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px; font-weight: bold;">수집 항목</td>
                 <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    <b>[필수]</b> 시스템 아티팩트(Prefetch, Amcache, ShimCache, UserAssist),
-                    이벤트 로그(Security, System, Application), 레지스트리(SYSTEM, SOFTWARE, SAM, NTUSER.DAT),
-                    파일 시스템 메타데이터(MFT, USN Journal, $LogFile), USB 연결 이력<br>
-                    <b>[선택]</b> 브라우저 기록, 메모리 정보, 네트워크 연결 정보
+                    <b>[시스템]</b> Prefetch, Amcache, UserAssist, 이벤트 로그(Security, System, Application),
+                    레지스트리(SYSTEM, SOFTWARE, SAM, NTUSER.DAT), MFT, USN Journal, $LogFile<br>
+                    <b>[사용자 활동]</b> 브라우저 기록, USB 연결 이력, 휴지통, 바로가기, 점프목록<br>
+                    <b>[문서/이메일]</b> Office 문서(doc/docx/xls/xlsx/ppt/pptx), PDF, 한글(hwp/hwpx), 이메일(pst/ost/eml/msg)
                 </td>
             </tr>
             <tr>
@@ -504,7 +504,9 @@ if __name__ == "__main__":
 
     app = QApplication(sys.argv)
     record = show_consent_dialog()
-    if record:
-        print("동의 완료:", record)
-    else:
-        print("동의 거부 또는 취소")
+    # 테스트 결과 (디버그용 - 비활성화됨)
+    # if record:
+    #     print("동의 완료:", record)
+    # else:
+    #     print("동의 거부 또는 취소")
+    pass

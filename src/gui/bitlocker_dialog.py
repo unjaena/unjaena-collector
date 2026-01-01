@@ -538,14 +538,11 @@ if __name__ == "__main__":
         pybde_available=True
     )
 
-    if result.success:
-        print(f"잠금 해제 시도: {result.key_type}")
-        # 보안: 복구키/비밀번호는 로깅하지 않음
-        if result.key_value:
-            print(f"  값: [REDACTED - {len(result.key_value)}자]")
-        elif result.bek_path:
-            print(f"  BEK 파일: {result.bek_path}")
-    elif result.skip:
-        print("건너뛰기 선택됨")
-    else:
-        print("취소됨")
+    # 테스트 결과 (디버그용 - 비활성화됨)
+    # if result.success:
+    #     print(f"잠금 해제 시도: {result.key_type}")
+    # elif result.skip:
+    #     print("건너뛰기 선택됨")
+    # else:
+    #     print("취소됨")
+    pass

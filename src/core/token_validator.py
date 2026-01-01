@@ -29,6 +29,16 @@ class ValidationResult:
     error: Optional[str] = None
 
 
+@dataclass
+class SessionValidationResult:
+    """Session validation result (for pre-collection check)"""
+    valid: bool
+    case_id: Optional[str] = None
+    case_status: Optional[str] = None
+    reason: Optional[str] = None
+    can_proceed: bool = False
+
+
 # P1 보안: 사용된 토큰 추적 (세션 내 재사용 방지)
 _used_tokens: Set[str] = set()
 _token_timestamps: dict = {}  # 토큰 해시 -> 사용 시간
@@ -198,3 +208,71 @@ class TokenValidator:
             return response.status_code == 200
         except Exception:
             return False
+
+    def validate_session(self, session_id: str, collection_token: str) -> SessionValidationResult:
+        """
+        세션 유효성 검증 (수집 시작 전 확인용)
+        
+        원본 토큰 없이 session_id와 collection_token만으로 세션 상태를 확인합니다.
+        취소된 케이스, 만료된 세션 등을 감지하여 사용자에게 안내합니다.
+        
+        Args:
+            session_id: 수집 세션 ID (인증 시 받은 값)
+            collection_token: 컬렉션 토큰 (인증 시 받은 값)
+        
+        Returns:
+            SessionValidationResult: 세션 유효성 검증 결과
+        """
+        try:
+            response = requests.post(
+                f"{self.server_url}/api/v1/collector/validate-session",
+                json={
+                    "session_id": session_id,
+                    "collection_token": collection_token,
+                },
+                timeout=self.timeout,
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return SessionValidationResult(
+                    valid=data.get("valid", False),
+                    case_id=data.get("case_id"),
+                    case_status=data.get("case_status"),
+                    reason=data.get("reason"),
+                    can_proceed=data.get("can_proceed", False),
+                )
+            else:
+                # 서버 에러
+                try:
+                    error_detail = response.json().get("detail", "")
+                except Exception:
+                    error_detail = response.text[:200] if response.text else ""
+                
+                return SessionValidationResult(
+                    valid=False,
+                    reason=f"서버 오류 ({response.status_code}): {error_detail}",
+                    can_proceed=False,
+                )
+                
+        except requests.exceptions.ConnectionError as e:
+            friendly = translate_error(f"Connection error: {str(e)}")
+            return SessionValidationResult(
+                valid=False,
+                reason=f"{friendly.title}: {friendly.message}",
+                can_proceed=False,
+            )
+        except requests.exceptions.Timeout:
+            friendly = translate_error("Connection timeout")
+            return SessionValidationResult(
+                valid=False,
+                reason=f"{friendly.title}: {friendly.message}",
+                can_proceed=False,
+            )
+        except Exception as e:
+            friendly = translate_error(str(e))
+            return SessionValidationResult(
+                valid=False,
+                reason=f"{friendly.title}: {friendly.message}",
+                can_proceed=False,
+            )

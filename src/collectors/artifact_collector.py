@@ -23,6 +23,16 @@ from typing import Generator, Tuple, Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# Debug Output Control (프로덕션에서는 비활성화)
+# =============================================================================
+_DEBUG_OUTPUT = False  # True로 변경하면 디버그 메시지 출력
+
+def _debug_print(message: str):
+    """디버그 출력 (프로덕션에서는 비활성화)"""
+    if _DEBUG_OUTPUT:
+        print(message)
+
 # Try to import BaseMFTCollector (통합 베이스 클래스)
 try:
     from collectors.base_mft_collector import (
@@ -248,19 +258,6 @@ ARTIFACT_TYPES = {
         'requires_admin': False,
         'collector': 'collect_all_browsers',
     },
-    # Legacy aliases for backward compatibility
-    'browser_chrome': {
-        'name': 'Chrome Browser (Legacy)',
-        'description': 'Alias for browser - Chrome only',
-        'alias_of': 'browser',
-        'filter_browser': 'chrome',
-    },
-    'browser_edge': {
-        'name': 'Edge Browser (Legacy)',
-        'description': 'Alias for browser - Edge only',
-        'alias_of': 'browser',
-        'filter_browser': 'edge',
-    },
     'recent': {
         'name': 'Recent Documents',
         'description': 'Recently accessed files',
@@ -283,12 +280,6 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': True,
         'collector': 'collect_glob',
-    },
-    # Legacy alias for backward compatibility
-    'recyclebin': {
-        'name': 'Recycle Bin (Legacy)',
-        'description': 'Alias for recycle_bin',
-        'alias_of': 'recycle_bin',
     },
     'usb': {
         'name': 'USB History',
@@ -568,9 +559,12 @@ ARTIFACT_TYPES = {
         'requires_admin': False,
         'collector': 'collect_user_glob',
     },
+    # =========================================================================
+    # User Files - 서버 분석 가능한 확장자만 (server_parsing_service.py 기준)
+    # =========================================================================
     'document': {
         'name': 'Documents',
-        'description': 'Office documents, PDFs, HWP files (Full disk scan)',
+        'description': 'Office documents, PDFs, HWP files (server-parseable only)',
         'paths': [
             r'%USERPROFILE%\Documents\**\*.doc',
             r'%USERPROFILE%\Documents\**\*.docx',
@@ -582,69 +576,107 @@ ARTIFACT_TYPES = {
             r'%USERPROFILE%\Documents\**\*.pptx',
         ],
         'mft_config': {
-            # 디지털 포렌식: 전체 디스크 스캔 (user_path 없음)
-            'extensions': ['.doc', '.docx', '.pdf', '.hwp', '.hwpx', '.xls', '.xlsx',
-                          '.ppt', '.pptx', '.txt', '.rtf', '.odt', '.ods', '.odp',
-                          '.csv', '.md', '.json', '.xml', '.html', '.htm'],
+            # 서버 분석 가능: python-docx, openpyxl, pypdf, olefile
+            'extensions': ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+                          '.pdf', '.hwp', '.hwpx'],
         },
         'requires_admin': True,  # MFT 접근 필요
         'collector': 'collect_user_glob',
     },
     'email': {
         'name': 'Email Files',
-        'description': 'Outlook PST/OST, EML, MSG files (Full disk scan)',
+        'description': 'Outlook PST/OST, EML, MSG files',
         'paths': [
-            r'%LOCALAPPDATA%\Microsoft\Outlook\*.ost',
             r'%USERPROFILE%\Documents\Outlook Files\*.pst',
+            r'%USERPROFILE%\AppData\Local\Microsoft\Outlook\*.ost',
             r'%USERPROFILE%\**\*.eml',
             r'%USERPROFILE%\**\*.msg',
         ],
         'mft_config': {
-            # 디지털 포렌식: 전체 디스크 스캔 (user_path 없음)
-            'extensions': ['.pst', '.ost', '.eml', '.msg', '.mbox', '.dbx'],
+            # 서버 분석 가능: email, extract_msg, pypff
+            'extensions': ['.pst', '.ost', '.eml', '.msg'],
         },
         'requires_admin': True,  # MFT 접근 필요
         'collector': 'collect_user_glob',
     },
-    # 'compress' 아티팩트 제거됨 - 서버에서 압축파일 분석 미지원
-    'image': {
-        'name': 'Image Files',
-        'description': 'JPEG, PNG, GIF, BMP, TIFF, HEIC, RAW image files (Full disk scan)',
+
+    # =========================================================================
+    # Phase 2: 명령어 실행 및 크래시 아티팩트
+    # =========================================================================
+    'powershell_history': {
+        'name': 'PowerShell History',
+        'description': 'PowerShell command history (PSReadLine ConsoleHost_history.txt)',
         'paths': [
-            r'%USERPROFILE%\Pictures\**\*.jpg',
-            r'%USERPROFILE%\Pictures\**\*.jpeg',
-            r'%USERPROFILE%\Pictures\**\*.png',
-            r'%USERPROFILE%\Pictures\**\*.gif',
-            r'%USERPROFILE%\Pictures\**\*.bmp',
+            r'%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt',
         ],
         'mft_config': {
-            # 디지털 포렌식: 전체 디스크 스캔 (user_path 없음)
-            'extensions': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif',
-                          '.webp', '.heic', '.heif', '.raw', '.cr2', '.nef', '.arw',
-                          '.svg', '.ico', '.psd', '.ai', '.eps'],
+            'user_path': 'AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine',
+            'files': ['ConsoleHost_history.txt'],
         },
-        'requires_admin': True,  # MFT 접근 필요
-        'collector': 'collect_user_glob',
+        'requires_admin': False,
+        'collector': 'collect_user_files',
     },
-    'video': {
-        'name': 'Video Files',
-        'description': 'MP4, AVI, MKV, MOV, WMV video files (Full disk scan)',
+    'wer': {
+        'name': 'Windows Error Reports',
+        'description': 'Windows Error Reporting (crash dumps, app crash reports)',
         'paths': [
-            r'%USERPROFILE%\Videos\**\*.mp4',
-            r'%USERPROFILE%\Videos\**\*.avi',
-            r'%USERPROFILE%\Videos\**\*.mov',
-            r'%USERPROFILE%\Videos\**\*.wmv',
-            r'%USERPROFILE%\Videos\**\*.mkv',
+            r'C:\ProgramData\Microsoft\Windows\WER\**\*.wer',
+            r'%LOCALAPPDATA%\Microsoft\Windows\WER\**\*.wer',
         ],
         'mft_config': {
-            # 디지털 포렌식: 전체 디스크 스캔 (user_path 없음)
-            'extensions': ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm',
-                          '.m4v', '.mpeg', '.mpg', '.3gp', '.ts', '.mts', '.m2ts',
-                          '.vob', '.rm', '.rmvb', '.asf'],
+            'path_patterns': [
+                'ProgramData/Microsoft/Windows/WER',
+                'AppData/Local/Microsoft/Windows/WER',
+            ],
+            'extensions': ['.wer', '.txt', '.hdmp', '.mdmp'],
         },
-        'requires_admin': True,  # MFT 접근 필요
+        'requires_admin': True,
+        'collector': 'collect_glob',
+    },
+    'rdp_cache': {
+        'name': 'RDP Bitmap Cache',
+        'description': 'Remote Desktop bitmap cache (bcache*.bmc)',
+        'paths': [
+            r'%LOCALAPPDATA%\Microsoft\Terminal Server Client\Cache\bcache*.bmc',
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Local/Microsoft/Terminal Server Client/Cache',
+            'pattern': 'bcache*.bmc',
+        },
+        'requires_admin': False,
         'collector': 'collect_user_glob',
     },
+
+    # =========================================================================
+    # Phase 3: 보완 아티팩트 (네트워크, 프로필)
+    # =========================================================================
+    'wlan_event': {
+        'name': 'WLAN Event Log',
+        'description': 'WiFi connection history (WLAN-AutoConfig event log)',
+        'paths': [
+            r'C:\Windows\System32\winevt\Logs\Microsoft-Windows-WLAN-AutoConfig%4Operational.evtx',
+        ],
+        'mft_config': {
+            'base_path': 'Windows/System32/winevt/Logs',
+            'files': ['Microsoft-Windows-WLAN-AutoConfig%4Operational.evtx'],
+        },
+        'requires_admin': True,
+        'collector': 'collect_files',
+    },
+    'profile_list': {
+        'name': 'User Profile List',
+        'description': 'User profile enumeration (ProfileList in SOFTWARE registry)',
+        'paths': [
+            r'C:\Windows\System32\config\SOFTWARE',
+        ],
+        'mft_config': {
+            'base_path': 'Windows/System32/config',
+            'files': ['SOFTWARE'],
+        },
+        'requires_admin': True,
+        'collector': 'collect_locked_files',
+    },
+    # image, video 제외됨 - 포렌식 관점에서 중요도 낮음 + 해시 계산으로 인한 속도 저하
 }
 
 
@@ -1393,9 +1425,9 @@ class ArtifactCollector:
                     if partition_idx is not None:
                         self.forensic_disk_accessor.select_partition(partition_idx)
                         self.collection_mode = 'forensic_disk_accessor'
-                        print(f"[INFO] ForensicDiskAccessor initialized for {self.volume}: (Drive {drive_number}, Partition {partition_idx})")
+                        _debug_print(f"[INFO] ForensicDiskAccessor initialized for {self.volume}: (Drive {drive_number}, Partition {partition_idx})")
             except Exception as e:
-                print(f"[WARNING] ForensicDiskAccessor unavailable: {e}")
+                _debug_print(f"[WARNING] ForensicDiskAccessor unavailable: {e}")
                 self.forensic_disk_accessor = None
 
         # ==========================================================
@@ -1404,7 +1436,7 @@ class ArtifactCollector:
         if self.collection_mode != 'forensic_disk_accessor' and use_mft and MFT_AVAILABLE:
             try:
                 if self.decrypted_reader:
-                    print("[INFO] Using BitLocker decrypted volume for MFT collection")
+                    _debug_print("[INFO] Using BitLocker decrypted volume for MFT collection")
                     self.mft_collector = MFTCollector(
                         volume,
                         str(output_dir),
@@ -1413,16 +1445,16 @@ class ArtifactCollector:
                 else:
                     self.mft_collector = MFTCollector(volume, str(output_dir))
                 self.collection_mode = 'mft'
-                print("[INFO] MFTCollector (pytsk3) initialized")
+                _debug_print("[INFO] MFTCollector (pytsk3) initialized")
             except Exception as e:
-                print(f"[WARNING] MFT collection unavailable: {e}")
+                _debug_print(f"[WARNING] MFT collection unavailable: {e}")
                 self.mft_collector = None
 
         # ==========================================================
         # 우선순위 3: Legacy (shutil)
         # ==========================================================
         if self.collection_mode == 'legacy':
-            print("[INFO] Using legacy collection method (shutil)")
+            _debug_print("[INFO] Using legacy collection method (shutil)")
 
         # 호환성을 위한 플래그
         self.use_mft = self.collection_mode in ('forensic_disk_accessor', 'mft')
@@ -1493,7 +1525,7 @@ class ArtifactCollector:
             return None
 
         except Exception as e:
-            print(f"[WARNING] Cannot get physical drive number: {e}")
+            _debug_print(f"[WARNING] Cannot get physical drive number: {e}")
             return None
 
     def _find_partition_for_volume(self) -> Optional[int]:
@@ -1517,7 +1549,7 @@ class ArtifactCollector:
             for i, part in enumerate(partitions):
                 # BitLocker 암호화된 파티션 건너뛰기
                 if part.filesystem in ('BitLocker', 'bitlocker'):
-                    print(f"[INFO] Partition {i} is BitLocker encrypted - skipping for ForensicDiskAccessor")
+                    _debug_print(f"[INFO] Partition {i} is BitLocker encrypted - skipping for ForensicDiskAccessor")
                     continue
 
                 # Recovery 파티션 건너뛰기 (Windows 폴더가 없음)
@@ -1550,18 +1582,18 @@ class ArtifactCollector:
                     if has_windows:
                         return best_partition
                     else:
-                        print(f"[INFO] Partition {best_partition} has no Windows folder - trying MFTCollector")
+                        _debug_print(f"[INFO] Partition {best_partition} has no Windows folder - trying MFTCollector")
                         return None
                 except Exception as e:
-                    print(f"[WARNING] Cannot verify partition {best_partition}: {e}")
+                    _debug_print(f"[WARNING] Cannot verify partition {best_partition}: {e}")
                     return None
 
             # NTFS가 없으면 None 반환 (MFTCollector로 폴백)
-            print("[INFO] No suitable NTFS partition found for ForensicDiskAccessor")
+            _debug_print("[INFO] No suitable NTFS partition found for ForensicDiskAccessor")
             return None
 
         except Exception as e:
-            print(f"[WARNING] Cannot find partition: {e}")
+            _debug_print(f"[WARNING] Cannot find partition: {e}")
             return None
 
     def close(self):
@@ -1679,15 +1711,15 @@ class ArtifactCollector:
 
         # Check availability based on category
         if artifact_info.get('requires_mft', False) and not self.use_mft:
-            print(f"[WARNING] {artifact_type} requires MFT collection (pytsk3)")
+            _debug_print(f"[WARNING] {artifact_type} requires MFT collection (pytsk3)")
             return
 
         if artifact_info.get('requires_adb', False) and not ADB_AVAILABLE:
-            print(f"[WARNING] {artifact_type} requires ADB (not in PATH)")
+            _debug_print(f"[WARNING] {artifact_type} requires ADB (not in PATH)")
             return
 
         if artifact_info.get('requires_backup', False) and not IOS_AVAILABLE:
-            print(f"[WARNING] {artifact_type} requires iOS backup support")
+            _debug_print(f"[WARNING] {artifact_type} requires iOS backup support")
             return
 
         # Create artifact-specific output directory
@@ -1811,7 +1843,7 @@ class ArtifactCollector:
                         if progress_callback:
                             progress_callback(result[0])
                 except Exception as e:
-                    print(f"[MFT BROWSER] Firefox profiles error for {user_dir.name}: {e}")
+                    _debug_print(f"[MFT BROWSER] Firefox profiles error for {user_dir.name}: {e}")
             else:
                 # Chrome/Edge: specific files
                 full_base_path = f"Users/{user_dir.name}/{mft_path}"
@@ -1828,7 +1860,7 @@ class ArtifactCollector:
                             if progress_callback:
                                 progress_callback(result[0])
                     except Exception as e:
-                        print(f"[MFT BROWSER] Error collecting {filename} for {user_dir.name}: {e}")
+                        _debug_print(f"[MFT BROWSER] Error collecting {filename} for {user_dir.name}: {e}")
 
     def _collect_browser_legacy(
         self,
@@ -1865,7 +1897,7 @@ class ArtifactCollector:
                         if progress_callback:
                             progress_callback(str(dst_path))
                     except (PermissionError, OSError) as e:
-                        print(f"[BROWSER] Cannot access {expanded_path}: {e}")
+                        _debug_print(f"[BROWSER] Cannot access {expanded_path}: {e}")
 
     def _collect_forensic_disk(
         self,
@@ -1911,7 +1943,7 @@ class ArtifactCollector:
         if artifact_type in {'document', 'image', 'video', 'email'}:
             extensions = mft_config.get('extensions', None)
             if extensions:
-                print(f"[ForensicDisk] Full disk scan for {artifact_type} (Digital Forensics mode)")
+                _debug_print(f"[ForensicDisk] Full disk scan for {artifact_type} (Digital Forensics mode)")
                 yield from self._collect_forensic_disk_pattern(
                     '',  # base_path 무시
                     '*.*',  # pattern
@@ -1981,7 +2013,7 @@ class ArtifactCollector:
         try:
             if method_name == 'collect_mft_raw':
                 # $MFT (inode 0)
-                print("[ForensicDisk] Collecting $MFT (inode 0)...")
+                _debug_print("[ForensicDisk] Collecting $MFT (inode 0)...")
                 data = self.forensic_disk_accessor.read_file_by_inode(0)
 
                 if data:
@@ -2006,7 +2038,7 @@ class ArtifactCollector:
 
             elif method_name == 'collect_usn_journal':
                 # $UsnJrnl:$J - $Extend 폴더 내 $UsnJrnl 파일의 $J ADS
-                print("[ForensicDisk] Collecting $UsnJrnl:$J...")
+                _debug_print("[ForensicDisk] Collecting $UsnJrnl:$J...")
 
                 # $UsnJrnl 수집 - 전용 메서드 사용
                 data = None
@@ -2014,7 +2046,7 @@ class ArtifactCollector:
                     # 전용 메서드 사용 (올바른 $J 스트림 처리)
                     data = self.forensic_disk_accessor.read_usnjrnl_raw()
                 except Exception as e1:
-                    print(f"[DEBUG] read_usnjrnl_raw failed: {e1}")
+                    _debug_print(f"[DEBUG] read_usnjrnl_raw failed: {e1}")
                     # 대체 방법: $Extend 디렉토리에서 직접 찾기
                     try:
                         # $Extend 디렉토리 (inode 11)에서 $UsnJrnl 찾기
@@ -2024,13 +2056,13 @@ class ArtifactCollector:
                                 usnjrnl_inode, stream_name='$J'
                             )
                     except Exception as e2:
-                        print(f"[DEBUG] Alternative USN Journal collection failed: {e2}")
+                        _debug_print(f"[DEBUG] Alternative USN Journal collection failed: {e2}")
 
                 if data and len(data) > 0:
                     # USN Journal이 스파스 파일인 경우 대부분 0으로 채워짐
                     # 실제 데이터가 있는지 확인
                     non_zero_bytes = sum(1 for b in data[:min(len(data), 1024*1024)] if b != 0)
-                    print(f"[ForensicDisk] $UsnJrnl:$J size={len(data)} bytes, non-zero (first 1MB)={non_zero_bytes}")
+                    _debug_print(f"[ForensicDisk] $UsnJrnl:$J size={len(data)} bytes, non-zero (first 1MB)={non_zero_bytes}")
 
                     output_file = artifact_dir / '$UsnJrnl_J'
                     output_file.write_bytes(data)
@@ -2051,11 +2083,11 @@ class ArtifactCollector:
                     if progress_callback:
                         progress_callback(str(output_file))
                 else:
-                    print("[WARNING] $UsnJrnl:$J not found or empty (data is None or 0 bytes)")
+                    _debug_print("[WARNING] $UsnJrnl:$J not found or empty (data is None or 0 bytes)")
 
             elif method_name == 'collect_logfile':
                 # $LogFile (inode 2)
-                print("[ForensicDisk] Collecting $LogFile (inode 2)...")
+                _debug_print("[ForensicDisk] Collecting $LogFile (inode 2)...")
                 data = self.forensic_disk_accessor.read_file_by_inode(2)
 
                 if data:
@@ -2079,7 +2111,7 @@ class ArtifactCollector:
                         progress_callback(str(output_file))
 
         except Exception as e:
-            print(f"[ERROR] ForensicDisk special collection failed ({method_name}): {e}")
+            _debug_print(f"[ERROR] ForensicDisk special collection failed ({method_name}): {e}")
 
     def _collect_forensic_disk_file(
         self,
@@ -2097,7 +2129,7 @@ class ArtifactCollector:
             if not normalized_path.startswith('/'):
                 normalized_path = '/' + normalized_path
 
-            print(f"[ForensicDisk] Reading: {normalized_path}")
+            _debug_print(f"[ForensicDisk] Reading: {normalized_path}")
             data = self.forensic_disk_accessor.read_file(normalized_path)
 
             if data:
@@ -2132,7 +2164,7 @@ class ArtifactCollector:
                     progress_callback(str(output_file))
 
         except Exception as e:
-            print(f"[WARNING] ForensicDisk cannot read {file_path}: {e}")
+            _debug_print(f"[WARNING] ForensicDisk cannot read {file_path}: {e}")
 
     def _collect_forensic_disk_pattern(
         self,
@@ -2170,9 +2202,9 @@ class ArtifactCollector:
         try:
             # MFT 스캔
             if full_disk_scan:
-                print(f"[ForensicDisk] Full disk scan for {artifact_type} (extensions: {extensions})")
+                _debug_print(f"[ForensicDisk] Full disk scan for {artifact_type} (extensions: {extensions})")
             else:
-                print(f"[ForensicDisk] Scanning for pattern: {base_path}/{pattern}")
+                _debug_print(f"[ForensicDisk] Scanning for pattern: {base_path}/{pattern}")
 
             scan_result = self.forensic_disk_accessor.scan_all_files(
                 include_deleted=include_deleted
@@ -2272,12 +2304,12 @@ class ArtifactCollector:
                             progress_callback(str(output_file))
 
                 except Exception as e:
-                    print(f"[WARNING] Cannot read {entry.full_path}: {e}")
+                    _debug_print(f"[WARNING] Cannot read {entry.full_path}: {e}")
 
-            print(f"[ForensicDisk] Pattern collection completed: {collected_count} files (no limits)")
+            _debug_print(f"[ForensicDisk] Pattern collection completed: {collected_count} files (no limits)")
 
         except Exception as e:
-            print(f"[ERROR] ForensicDisk pattern collection failed: {e}")
+            _debug_print(f"[ERROR] ForensicDisk pattern collection failed: {e}")
 
     def _collect_forensic_disk_user_paths(
         self,
@@ -2345,7 +2377,7 @@ class ArtifactCollector:
                         yield result
 
             except Exception as e:
-                print(f"[WARNING] ForensicDisk error for user {user_dir.name}: {e}")
+                _debug_print(f"[WARNING] ForensicDisk error for user {user_dir.name}: {e}")
 
     def _collect_mft(
         self,
@@ -2471,7 +2503,7 @@ class ArtifactCollector:
                             progress_callback(result[0])
 
             except Exception as e:
-                print(f"[MFT] Error collecting from {user_dir.name}: {e}")
+                _debug_print(f"[MFT] Error collecting from {user_dir.name}: {e}")
 
     def _collect_legacy(
         self,
@@ -2521,7 +2553,7 @@ class ArtifactCollector:
             Tuple of (file_path, metadata) for each recovered file
         """
         if not self.use_mft or not self.mft_collector:
-            print("[WARNING] Deleted file recovery requires MFT collection")
+            _debug_print("[WARNING] Deleted file recovery requires MFT collection")
             return
 
         deleted_dir = self.output_dir / 'deleted_files'
@@ -2536,7 +2568,7 @@ class ArtifactCollector:
                 ):
                     yield result
             except Exception as e:
-                print(f"[MFT] Cannot recover deleted file {entry_info.filename}: {e}")
+                _debug_print(f"[MFT] Cannot recover deleted file {entry_info.filename}: {e}")
 
     # =========================================================================
     # Legacy Collection Methods (Fallback)
@@ -2555,7 +2587,7 @@ class ArtifactCollector:
                 shutil.copy2(src_path, dst_path)
                 yield str(dst_path), self._get_metadata(src_path, dst_path, artifact_type)
             except (PermissionError, OSError) as e:
-                print(f"[LEGACY] Cannot access {src_path}: {e}")
+                _debug_print(f"[LEGACY] Cannot access {src_path}: {e}")
                 continue
 
     def collect_files(
@@ -2572,7 +2604,7 @@ class ArtifactCollector:
                 shutil.copy2(src_path, dst_path)
                 yield str(dst_path), self._get_metadata(str(src_path), dst_path, artifact_type)
             except (PermissionError, OSError) as e:
-                print(f"[LEGACY] Cannot access {file_path}: {e}")
+                _debug_print(f"[LEGACY] Cannot access {file_path}: {e}")
 
     def collect_locked_files(
         self,
@@ -2611,8 +2643,8 @@ class ArtifactCollector:
         except Exception:
             pass
 
-        print(f"[LEGACY] Cannot collect locked file {file_path}")
-        print("[INFO] Consider using MFT collection for locked files")
+        _debug_print(f"[LEGACY] Cannot collect locked file {file_path}")
+        _debug_print("[INFO] Consider using MFT collection for locked files")
 
     def collect_user_files(
         self,
@@ -2630,7 +2662,7 @@ class ArtifactCollector:
                 shutil.copy2(src_path, dst_path)
                 yield str(dst_path), self._get_metadata(expanded_path, dst_path, artifact_type)
             except (PermissionError, OSError) as e:
-                print(f"[LEGACY] Cannot access {expanded_path}: {e}")
+                _debug_print(f"[LEGACY] Cannot access {expanded_path}: {e}")
 
     def collect_user_glob(
         self,
@@ -2646,7 +2678,7 @@ class ArtifactCollector:
                 shutil.copy2(src_path, dst_path)
                 yield str(dst_path), self._get_metadata(src_path, dst_path, artifact_type)
             except (PermissionError, OSError) as e:
-                print(f"[LEGACY] Cannot access {src_path}: {e}")
+                _debug_print(f"[LEGACY] Cannot access {src_path}: {e}")
                 continue
 
     def collect_ntuser(
@@ -2714,7 +2746,7 @@ class ArtifactCollector:
                             result[1]['artifact_type'] = 'shellbags'
                             yield str(final_path), result[1]
                         except Exception as e:
-                            print(f"[WARNING] Failed to rename UsrClass.dat for {user_dir.name}: {e}")
+                            _debug_print(f"[WARNING] Failed to rename UsrClass.dat for {user_dir.name}: {e}")
                             yield result[0], result[1]
 
     def collect_all_browsers(
@@ -2758,7 +2790,7 @@ class ArtifactCollector:
                             metadata['browser_id'] = browser_id
                             yield str(dst_path), metadata
                         except (PermissionError, OSError) as e:
-                            print(f"[BROWSER] Cannot access {expanded_path}: {e}")
+                            _debug_print(f"[BROWSER] Cannot access {expanded_path}: {e}")
 
     def _collect_firefox_profiles(
         self,
@@ -2797,7 +2829,7 @@ class ArtifactCollector:
                         metadata['profile'] = profile_name
                         yield str(dst_path), metadata
                     except (PermissionError, OSError) as e:
-                        print(f"[FIREFOX] Cannot access {src_path}: {e}")
+                        _debug_print(f"[FIREFOX] Cannot access {src_path}: {e}")
 
     def _get_metadata(
         self,
@@ -2880,7 +2912,7 @@ class ArtifactCollector:
             }
 
             if artifact_key not in method_map:
-                print(f"[ANDROID] Unknown artifact key: {artifact_key}")
+                _debug_print(f"[ANDROID] Unknown artifact key: {artifact_key}")
                 return
 
             method = method_map[artifact_key]
@@ -2895,7 +2927,7 @@ class ArtifactCollector:
                 yield file_path, file_metadata
 
         except Exception as e:
-            print(f"[ANDROID] Collection failed for {artifact_type}: {e}")
+            _debug_print(f"[ANDROID] Collection failed for {artifact_type}: {e}")
 
     # =========================================================================
     # iOS Forensics Collection Methods
@@ -2928,19 +2960,19 @@ class ArtifactCollector:
         if not backup_path:
             backups = find_ios_backups()
             if not backups:
-                print("[iOS] No iOS backups found on this system")
+                _debug_print("[iOS] No iOS backups found on this system")
                 return
             # Use the most recent backup
             backup_path = str(backups[0].path)
-            print(f"[iOS] Using backup: {backups[0].device_name} ({backups[0].ios_version})")
+            _debug_print(f"[iOS] Using backup: {backups[0].device_name} ({backups[0].ios_version})")
 
         try:
             collector = iOSCollector(backup_path, str(artifact_dir))
 
             # Check if backup is encrypted
             if collector.is_encrypted:
-                print(f"[iOS] Backup is encrypted - cannot extract artifacts")
-                print("[iOS] Please create an unencrypted backup or provide decryption key")
+                _debug_print(f"[iOS] Backup is encrypted - cannot extract artifacts")
+                _debug_print("[iOS] Please create an unencrypted backup or provide decryption key")
                 return
 
             # Map artifact_key to collector method
@@ -2955,7 +2987,7 @@ class ArtifactCollector:
             }
 
             if artifact_key not in method_map:
-                print(f"[iOS] Unknown artifact key: {artifact_key}")
+                _debug_print(f"[iOS] Unknown artifact key: {artifact_key}")
                 return
 
             method = method_map[artifact_key]
@@ -2970,7 +3002,7 @@ class ArtifactCollector:
                 yield file_path, file_metadata
 
         except Exception as e:
-            print(f"[iOS] Collection failed for {artifact_type}: {e}")
+            _debug_print(f"[iOS] Collection failed for {artifact_type}: {e}")
 
     def _get_vss_path(self, file_path: str) -> Optional[str]:
         """Get path to file in latest Volume Shadow Copy"""
@@ -3017,20 +3049,20 @@ def get_collection_mode() -> str:
 if __name__ == "__main__":
     import sys
 
-    print(f"Collection mode: {get_collection_mode()}")
-    print(f"MFT available: {MFT_AVAILABLE}")
+    _debug_print(f"Collection mode: {get_collection_mode()}")
+    _debug_print(f"MFT available: {MFT_AVAILABLE}")
 
     if len(sys.argv) > 1 and sys.argv[1] == '--test':
         import tempfile
 
         with tempfile.TemporaryDirectory() as temp_dir:
             collector = ArtifactCollector(temp_dir)
-            print(f"\nUsing {collector.collection_mode} collection method")
+            _debug_print(f"\nUsing {collector.collection_mode} collection method")
 
-            print("\nAvailable artifacts:")
+            _debug_print("\nAvailable artifacts:")
             for artifact in collector.get_available_artifacts():
                 status = "OK" if artifact['available'] else "N/A"
                 admin = " [ADMIN]" if artifact['requires_admin'] else ""
-                print(f"  [{status}] {artifact['type']}: {artifact['name']}{admin}")
+                _debug_print(f"  [{status}] {artifact['type']}: {artifact['name']}{admin}")
 
             collector.close()

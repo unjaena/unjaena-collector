@@ -8,10 +8,12 @@ import asyncio
 import json
 import aiohttp
 import websockets
+import requests  # 동기 업로드용
 from pathlib import Path
 from datetime import datetime
 from typing import Callable, Optional
 from dataclasses import dataclass
+import os
 
 from utils.error_messages import translate_error, UserFriendlyError
 
@@ -172,7 +174,12 @@ class RealTimeUploader:
             )
 
         try:
-            async with aiohttp.ClientSession() as session:
+            # 파일 크기 기반 동적 타임아웃 계산 (최소 5분, 최대 30분)
+            # 10MB/s 업로드 속도 가정 + 여유 시간 2분
+            upload_timeout = max(300, min(1800, (file_size / (10 * 1024 * 1024)) + 120))
+            timeout = aiohttp.ClientTimeout(total=upload_timeout)
+
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 with open(file_path, 'rb') as f:
                     data = aiohttp.FormData()
                     data.add_field(
@@ -257,18 +264,138 @@ class RealTimeUploader:
 
 class SyncUploader:
     """
-    Synchronous wrapper for RealTimeUploader.
+    Synchronous uploader using requests library.
 
-    Use this for integration with PyQt's event loop.
+    PyQt QThread와 호환되도록 asyncio 대신 requests 사용.
+    asyncio.run()은 QThread 내에서 블로킹 문제를 일으킬 수 있음.
     """
 
-    def __init__(self, *args, **kwargs):
-        self.uploader = RealTimeUploader(*args, **kwargs)
+    # 기본 최대 파일 크기 (10GB)
+    DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024
 
-    def upload_file(self, *args, **kwargs) -> UploadResult:
-        """Synchronous file upload."""
-        return asyncio.run(self.uploader.upload_file(*args, **kwargs))
+    def __init__(
+        self,
+        server_url: str,
+        ws_url: str,
+        session_id: str,
+        collection_token: str,
+        case_id: str = None,
+        consent_record: dict = None,
+        max_file_size: int = None,
+    ):
+        self.server_url = server_url.rstrip('/')
+        self.ws_url = ws_url.rstrip('/')
+        self.session_id = session_id
+        self.collection_token = collection_token
+        self.case_id = case_id
+        self.consent_record = consent_record
+        self.max_file_size = max_file_size or self.DEFAULT_MAX_FILE_SIZE
 
-    def upload_batch(self, *args, **kwargs) -> list:
-        """Synchronous batch upload."""
-        return asyncio.run(self.uploader.upload_batch(*args, **kwargs))
+    def upload_file(
+        self,
+        file_path: str,
+        artifact_type: str,
+        metadata: dict,
+        progress_callback: Callable[[float], None] = None,
+    ) -> UploadResult:
+        """
+        동기 파일 업로드 (requests 사용).
+
+        PyQt QThread에서 안전하게 호출 가능.
+        """
+        # 파일 크기 검증
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError as e:
+            return UploadResult.from_error(f"Cannot access file: {e}")
+
+        if file_size > self.max_file_size:
+            max_size_gb = self.max_file_size / (1024 * 1024 * 1024)
+            file_size_gb = file_size / (1024 * 1024 * 1024)
+            return UploadResult(
+                success=False,
+                error=f"파일 크기({file_size_gb:.2f}GB)가 최대 허용 크기({max_size_gb:.1f}GB)를 초과합니다.",
+                error_title="파일 크기 초과",
+                error_solution="파일을 분할하거나 관리자에게 문의하세요.",
+                is_recoverable=False,
+            )
+
+        if file_size == 0:
+            return UploadResult(
+                success=False,
+                error="빈 파일은 업로드할 수 없습니다.",
+                error_title="빈 파일",
+                error_solution="파일 내용을 확인하세요.",
+                is_recoverable=False,
+            )
+
+        # 파일 크기 기반 동적 타임아웃 (최소 5분, 최대 30분)
+        # 1MB/s 업로드 속도 가정 + 여유 시간 2분
+        upload_timeout = max(300, min(1800, (file_size / (1 * 1024 * 1024)) + 120))
+
+        try:
+            with open(file_path, 'rb') as f:
+                files = {
+                    'file': (Path(file_path).name, f, 'application/octet-stream')
+                }
+                data = {
+                    'artifact_type': artifact_type,
+                    'metadata': json.dumps(metadata),
+                }
+                if self.case_id:
+                    data['case_id'] = self.case_id
+                if self.consent_record:
+                    data['consent_record'] = json.dumps(self.consent_record)
+
+                headers = {
+                    'X-Session-ID': self.session_id,
+                    'X-Collection-Token': self.collection_token,
+                }
+
+                response = requests.post(
+                    f"{self.server_url}/api/v1/collector/raw-files/upload",
+                    files=files,
+                    data=data,
+                    headers=headers,
+                    timeout=upload_timeout,
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    return UploadResult(
+                        success=True,
+                        artifact_id=result.get('artifact_id'),
+                    )
+                else:
+                    error_text = response.text
+                    return UploadResult.from_error(
+                        f"Upload failed ({response.status_code}): {error_text}"
+                    )
+
+        except requests.exceptions.Timeout:
+            return UploadResult.from_error(f"Upload timeout after {upload_timeout}s")
+        except requests.exceptions.ConnectionError as e:
+            return UploadResult.from_error(f"Connection error: {str(e)}")
+        except Exception as e:
+            return UploadResult.from_error(f"Upload error: {str(e)}")
+
+    def upload_batch(
+        self,
+        files: list,
+        progress_callback: Callable[[float, str], None] = None,
+    ) -> list:
+        """배치 업로드."""
+        results = []
+        total = len(files)
+
+        for i, (file_path, artifact_type, metadata) in enumerate(files):
+            progress = i / total
+            filename = Path(file_path).name
+
+            if progress_callback:
+                progress_callback(progress, filename)
+
+            result = self.upload_file(file_path, artifact_type, metadata)
+            results.append(result)
+
+        return results

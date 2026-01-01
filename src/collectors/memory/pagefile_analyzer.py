@@ -30,6 +30,11 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Debug output control
+_DEBUG_OUTPUT = False
+def _debug_print(msg): 
+    if _DEBUG_OUTPUT: _debug_print(msg)
+
 
 class PagefileAnalyzer:
     """pagefile.sys 분석기"""
@@ -157,7 +162,7 @@ class PagefileAnalyzer:
                 'page_num': int,
             }
         """
-        print(f"[Pagefile] 문자열 추출 시작 (min_len={min_length})...")
+        _debug_print(f"[Pagefile] 문자열 추출 시작 (min_len={min_length})...")
 
         # ASCII 문자열 패턴
         ascii_pattern = re.compile(
@@ -212,7 +217,7 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 1024  # 경계 중복 처리
 
-        print(f"[Pagefile] 총 {total_strings:,}개 문자열 추출")
+        _debug_print(f"[Pagefile] 총 {total_strings:,}개 문자열 추출")
 
     def find_urls(self, unique_only: bool = True) -> List[Dict]:
         """
@@ -224,7 +229,7 @@ class PagefileAnalyzer:
         Returns:
             URL 정보 리스트
         """
-        print("[Pagefile] URL 검색 중...")
+        _debug_print("[Pagefile] URL 검색 중...")
 
         urls = []
         seen: Set[bytes] = set()
@@ -257,7 +262,7 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 2048
 
-        print(f"[Pagefile] {len(urls):,}개 URL 발견")
+        _debug_print(f"[Pagefile] {len(urls):,}개 URL 발견")
         return urls
 
     def find_emails(self, unique_only: bool = True) -> List[Dict]:
@@ -270,7 +275,7 @@ class PagefileAnalyzer:
         Returns:
             이메일 정보 리스트
         """
-        print("[Pagefile] 이메일 주소 검색 중...")
+        _debug_print("[Pagefile] 이메일 주소 검색 중...")
 
         emails = []
         seen: Set[bytes] = set()
@@ -298,7 +303,7 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 512
 
-        print(f"[Pagefile] {len(emails):,}개 이메일 주소 발견")
+        _debug_print(f"[Pagefile] {len(emails):,}개 이메일 주소 발견")
         return emails
 
     def find_ip_addresses(self, unique_only: bool = True) -> List[Dict]:
@@ -308,7 +313,7 @@ class PagefileAnalyzer:
         Returns:
             IP 주소 정보 리스트
         """
-        print("[Pagefile] IP 주소 검색 중...")
+        _debug_print("[Pagefile] IP 주소 검색 중...")
 
         ips = []
         seen: Set[bytes] = set()
@@ -360,7 +365,7 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 256
 
-        print(f"[Pagefile] {len(ips):,}개 IP 주소 발견")
+        _debug_print(f"[Pagefile] {len(ips):,}개 IP 주소 발견")
         return ips
 
     def find_file_paths(self, unique_only: bool = True) -> List[Dict]:
@@ -370,7 +375,7 @@ class PagefileAnalyzer:
         Returns:
             파일 경로 정보 리스트
         """
-        print("[Pagefile] 파일 경로 검색 중...")
+        _debug_print("[Pagefile] 파일 경로 검색 중...")
 
         paths = []
         seen: Set[bytes] = set()
@@ -406,7 +411,7 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 1024
 
-        print(f"[Pagefile] {len(paths):,}개 파일 경로 발견")
+        _debug_print(f"[Pagefile] {len(paths):,}개 파일 경로 발견")
         return paths
 
     def find_registry_keys(self, unique_only: bool = True) -> List[Dict]:
@@ -416,7 +421,7 @@ class PagefileAnalyzer:
         Returns:
             레지스트리 키 정보 리스트
         """
-        print("[Pagefile] 레지스트리 키 검색 중...")
+        _debug_print("[Pagefile] 레지스트리 키 검색 중...")
 
         keys = []
         seen: Set[bytes] = set()
@@ -447,7 +452,7 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 1024
 
-        print(f"[Pagefile] {len(keys):,}개 레지스트리 키 발견")
+        _debug_print(f"[Pagefile] {len(keys):,}개 레지스트리 키 발견")
         return keys
 
     def find_sensitive_data(self) -> Dict[str, List]:
@@ -457,7 +462,7 @@ class PagefileAnalyzer:
         Returns:
             민감 데이터 카테고리별 리스트
         """
-        print("[Pagefile] 민감 데이터 검색 중...")
+        _debug_print("[Pagefile] 민감 데이터 검색 중...")
 
         results = {
             'credit_cards': [],
@@ -503,7 +508,7 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 256
 
-        print(f"[Pagefile] 민감 데이터: CC={len(results['credit_cards'])}, "
+        _debug_print(f"[Pagefile] 민감 데이터: CC={len(results['credit_cards'])}, "
               f"SSN={len(results['ssn'])}, GUID={len(results['guids'])}")
 
         return results
@@ -515,7 +520,7 @@ class PagefileAnalyzer:
         Returns:
             분석 결과 딕셔너리
         """
-        print(f"[Pagefile] 전체 분석 시작 (크기: {self.file_size / 1024 / 1024:.1f} MB)...")
+        _debug_print(f"[Pagefile] 전체 분석 시작 (크기: {self.file_size / 1024 / 1024:.1f} MB)...")
 
         results = {
             'file_path': self.pagefile_path,
@@ -541,9 +546,9 @@ class PagefileAnalyzer:
             'total_ssns': len(results['sensitive_data']['ssn']),
         }
 
-        print(f"[Pagefile] 분석 완료:")
+        _debug_print(f"[Pagefile] 분석 완료:")
         for key, value in results['summary'].items():
-            print(f"  - {key}: {value:,}")
+            _debug_print(f"  - {key}: {value:,}")
 
         return results
 
@@ -587,7 +592,7 @@ class PagefileAnalyzer:
             if rules_count == 0:
                 return {'error': 'No YARA rules loaded', 'total_matches': 0}
 
-            print(f"[Pagefile] YARA 스캔 시작 ({rules_count}개 룰 파일)...")
+            _debug_print(f"[Pagefile] YARA 스캔 시작 ({rules_count}개 룰 파일)...")
 
             results = scanner.scan_pagefile(
                 self,
@@ -600,13 +605,13 @@ class PagefileAnalyzer:
             high = len(results.get('high_matches', []))
             medium = len(results.get('medium_matches', []))
 
-            print(f"[Pagefile] YARA 스캔 완료: {total}개 매치")
+            _debug_print(f"[Pagefile] YARA 스캔 완료: {total}개 매치")
             if critical > 0:
-                print(f"  [CRITICAL] {critical}개 치명적 탐지")
+                _debug_print(f"  [CRITICAL] {critical}개 치명적 탐지")
             if high > 0:
-                print(f"  [HIGH] {high}개 높음 심각도 탐지")
+                _debug_print(f"  [HIGH] {high}개 높음 심각도 탐지")
             if medium > 0:
-                print(f"  [MEDIUM] {medium}개 중간 심각도 탐지")
+                _debug_print(f"  [MEDIUM] {medium}개 중간 심각도 탐지")
 
             return results
 
@@ -630,7 +635,7 @@ def analyze_pagefile_from_image(img_info, pagefile_offset: int, pagefile_size: i
     Returns:
         분석 결과
     """
-    print(f"[Pagefile] 이미지에서 pagefile 읽기 (offset={pagefile_offset}, size={pagefile_size})...")
+    _debug_print(f"[Pagefile] 이미지에서 pagefile 읽기 (offset={pagefile_offset}, size={pagefile_size})...")
 
     # 데이터 읽기
     pagefile_data = img_info.read(pagefile_offset, pagefile_size)
@@ -674,7 +679,7 @@ def create_pagefile_analyzer_raw_disk(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    print(f"[Pagefile] Raw Disk Access로 {pagefile_name} 읽기 시작...")
+    _debug_print(f"[Pagefile] Raw Disk Access로 {pagefile_name} 읽기 시작...")
 
     try:
         with ForensicDiskAccessor.from_physical_disk(drive_number) as disk:
@@ -703,12 +708,12 @@ def create_pagefile_analyzer_raw_disk(
                     return None
 
                 disk.select_partition(ntfs_idx)
-                print(f"[Pagefile] 파티션 {ntfs_idx} 선택 (NTFS)")
+                _debug_print(f"[Pagefile] 파티션 {ntfs_idx} 선택 (NTFS)")
 
             # pagefile.sys 스트리밍 읽기
             pagefile_path = f'/{pagefile_name}'
 
-            print(f"[Pagefile] {pagefile_name} 데이터 스트리밍 중...")
+            _debug_print(f"[Pagefile] {pagefile_name} 데이터 스트리밍 중...")
 
             # 대용량 파일이므로 스트리밍으로 읽기
             chunks = []
@@ -717,16 +722,16 @@ def create_pagefile_analyzer_raw_disk(
             for chunk in disk.stream_file(pagefile_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                print(f"[Pagefile] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Pagefile] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
 
             pagefile_data = b''.join(chunks)
-            print(f"[Pagefile] 총 {len(pagefile_data) / 1024 / 1024:.1f} MB 읽기 완료 [raw disk]")
+            _debug_print(f"[Pagefile] 총 {len(pagefile_data) / 1024 / 1024:.1f} MB 읽기 완료 [raw disk]")
 
             return PagefileAnalyzer(pagefile_data=pagefile_data)
 
     except Exception as e:
         logger.error(f"Raw disk pagefile read error: {e}")
-        print(f"[Pagefile] Raw disk error: {e}")
+        _debug_print(f"[Pagefile] Raw disk error: {e}")
         return None
 
 
@@ -757,8 +762,8 @@ def create_pagefile_analyzer_e01(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    print(f"[Pagefile] E01 이미지에서 {pagefile_name} 읽기 시작...")
-    print(f"[Pagefile] E01 경로: {e01_path}")
+    _debug_print(f"[Pagefile] E01 이미지에서 {pagefile_name} 읽기 시작...")
+    _debug_print(f"[Pagefile] E01 경로: {e01_path}")
 
     try:
         with ForensicDiskAccessor.from_e01(e01_path) as disk:
@@ -787,12 +792,12 @@ def create_pagefile_analyzer_e01(
                     return None
 
                 disk.select_partition(ntfs_idx)
-                print(f"[Pagefile] 파티션 {ntfs_idx} 선택 (NTFS)")
+                _debug_print(f"[Pagefile] 파티션 {ntfs_idx} 선택 (NTFS)")
 
             # pagefile.sys 스트리밍 읽기
             pagefile_path = f'/{pagefile_name}'
 
-            print(f"[Pagefile] {pagefile_name} 데이터 스트리밍 중...")
+            _debug_print(f"[Pagefile] {pagefile_name} 데이터 스트리밍 중...")
 
             chunks = []
             total_size = 0
@@ -800,16 +805,16 @@ def create_pagefile_analyzer_e01(
             for chunk in disk.stream_file(pagefile_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                print(f"[Pagefile] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Pagefile] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
 
             pagefile_data = b''.join(chunks)
-            print(f"[Pagefile] 총 {len(pagefile_data) / 1024 / 1024:.1f} MB 읽기 완료 [E01]")
+            _debug_print(f"[Pagefile] 총 {len(pagefile_data) / 1024 / 1024:.1f} MB 읽기 완료 [E01]")
 
             return PagefileAnalyzer(pagefile_data=pagefile_data)
 
     except Exception as e:
         logger.error(f"E01 pagefile read error: {e}")
-        print(f"[Pagefile] E01 error: {e}")
+        _debug_print(f"[Pagefile] E01 error: {e}")
         return None
 
 

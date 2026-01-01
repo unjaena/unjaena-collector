@@ -47,8 +47,10 @@ def get_secure_config() -> dict:
     allow_insecure = os.environ.get('COLLECTOR_ALLOW_INSECURE', 'true').lower() == 'true'
 
     # [테스트 모드] 기본 URL을 HTTP/WS로 변경 (인증서 없이 테스트 가능)
-    server_url = os.environ.get('COLLECTOR_SERVER_URL', 'http://localhost:8000')
-    ws_url = os.environ.get('COLLECTOR_WS_URL', 'ws://localhost:8000')
+    # NOTE: Windows에서 'localhost'가 IPv6(::1)로 해석되어 Docker 연결 실패할 수 있음
+    # 127.0.0.1 사용으로 IPv4 명시적 지정
+    server_url = os.environ.get('COLLECTOR_SERVER_URL', 'http://127.0.0.1:8000')
+    ws_url = os.environ.get('COLLECTOR_WS_URL', 'ws://127.0.0.1:8000')
 
     # 프로덕션 모드에서만 HTTPS/WSS 강제
     if not dev_mode and not allow_insecure:

@@ -158,7 +158,7 @@ def find_ios_backups() -> List[BackupInfo]:
                 if backup_info:
                     backups.append(backup_info)
             except Exception as e:
-                print(f"[iOS] Error parsing backup {item.name}: {e}")
+                _debug_print(f"[iOS] Error parsing backup {item.name}: {e}")
 
     return sorted(backups, key=lambda b: b.backup_date, reverse=True)
 
@@ -262,7 +262,7 @@ class iOSBackupParser:
             return row[0] if row else None
 
         except Exception as e:
-            print(f"[iOS] Manifest.db query error: {e}")
+            _debug_print(f"[iOS] Manifest.db query error: {e}")
             return None
 
     def _get_file_hash_legacy(self, domain: str, relative_path: str) -> Optional[str]:
@@ -344,7 +344,7 @@ class iOSBackupParser:
             conn.close()
 
         except Exception as e:
-            print(f"[iOS] Error listing files: {e}")
+            _debug_print(f"[iOS] Error listing files: {e}")
 
     def _list_files_legacy(
         self,
