@@ -95,6 +95,7 @@ ARTIFACT_MFT_FILTERS = {
     'amcache': {
         'files': {'amcache.hve'},
         'path_pattern': r'windows/appcompat/programs/',
+        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
         'include_deleted': True,
         'description': 'Application compatibility cache',
     },
@@ -139,6 +140,7 @@ ARTIFACT_MFT_FILTERS = {
             r'appdata/local/microsoft/edge/',
             r'appdata/roaming/mozilla/firefox/',
         ],
+        'path_optional': True,  # MFT 스캔 시 경로 없어도 파일명만으로 수집
         'include_deleted': True,
         'description': 'Browser history, cookies, credentials',
     },
@@ -149,6 +151,7 @@ ARTIFACT_MFT_FILTERS = {
     'usb': {
         'files': {'setupapi.dev.log'},
         'path_pattern': r'windows/inf/',
+        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
         'include_deleted': True,
         'description': 'USB device connection history',
     },
@@ -200,6 +203,7 @@ ARTIFACT_MFT_FILTERS = {
     'srum': {
         'files': {'srudb.dat'},
         'path_patterns': [r'windows/system32/sru/'],
+        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
         'include_deleted': True,
         'description': 'System Resource Usage Monitor',
     },
@@ -255,6 +259,7 @@ ARTIFACT_MFT_FILTERS = {
     'powershell_history': {
         'files': {'consolehost_history.txt'},
         'path_pattern': r'appdata/roaming/microsoft/windows/powershell/psreadline/',
+        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
         'include_deleted': True,
         'description': 'PowerShell command history (PSReadLine)',
     },
@@ -280,6 +285,7 @@ ARTIFACT_MFT_FILTERS = {
     'wlan_event': {
         'files': {'microsoft-windows-wlan-autoconfig%4operational.evtx'},
         'path_pattern': r'windows/system32/winevt/logs/',
+        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
         'include_deleted': True,
         'description': 'WLAN Auto-Config event log (WiFi connection history)',
     },
@@ -526,6 +532,7 @@ class BaseMFTCollector(ABC):
         path_pattern = mft_filter.get('path_pattern')
         path_patterns = mft_filter.get('path_patterns', [])
         name_pattern = mft_filter.get('name_pattern')
+        path_optional = mft_filter.get('path_optional', False)  # 경로 없어도 파일명만으로 수집
 
         # 경로 패턴 컴파일
         compiled_patterns = []
@@ -573,12 +580,17 @@ class BaseMFTCollector(ABC):
 
             # 1. 파일명 일치 검사
             if target_files and filename_lower in target_files:
-                if compiled_patterns:
+                if compiled_patterns and full_path_lower:
+                    # 경로가 있으면 경로 패턴도 확인
                     for pattern in compiled_patterns:
                         if pattern.search(full_path_lower):
                             matched = True
                             break
-                else:
+                elif path_optional:
+                    # path_optional=True면 파일명만으로 수집 (MFT 경로 복원 안됐을 때)
+                    matched = True
+                elif not compiled_patterns:
+                    # 경로 패턴 없으면 파일명만으로 수집
                     matched = True
 
             # 2. 확장자 일치 검사
@@ -586,12 +598,12 @@ class BaseMFTCollector(ABC):
                 if '.' in filename_lower:
                     ext = '.' + filename_lower.rsplit('.', 1)[-1]
                     if ext in extensions:
-                        if compiled_patterns:
+                        if compiled_patterns and full_path_lower:
                             for pattern in compiled_patterns:
                                 if pattern.search(full_path_lower):
                                     matched = True
                                     break
-                        else:
+                        elif path_optional or not compiled_patterns:
                             matched = True
 
             # 3. 경로 패턴만 검사

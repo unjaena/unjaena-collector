@@ -1991,6 +1991,15 @@ class CollectionWorker(QThread):
             self.finished.emit(False, f"오류 발생: {str(e)}")
 
         finally:
+            # 임시 디렉토리 정리 (수집된 파일들 삭제)
+            if output_dir and os.path.exists(output_dir):
+                try:
+                    import shutil
+                    shutil.rmtree(output_dir)
+                    self.log_message.emit("임시 파일 정리 완료", False)
+                except Exception as e:
+                    self.log_message.emit(f"임시 파일 정리 중 오류: {e}", True)
+
             # BitLocker decryptor 리소스 정리
             if self.bitlocker_decryptor:
                 try:
