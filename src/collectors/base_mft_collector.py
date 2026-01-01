@@ -34,27 +34,15 @@ from typing import Dict, List, Any, Optional, Generator, Tuple, Set
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# Debug Logging to File
+# Debug Logging (disabled in production)
 # =============================================================================
-_DEBUG_LOG_FILE = None
 
 def _debug_log(message: str):
-    """콘솔과 파일 모두에 디버그 로그 출력"""
-    global _DEBUG_LOG_FILE
-    print(message, flush=True)
-
-    # 파일에도 기록
-    try:
-        if _DEBUG_LOG_FILE is None:
-            import tempfile
-            log_path = Path(tempfile.gettempdir()) / "mft_collector_debug.log"
-            _DEBUG_LOG_FILE = open(log_path, 'a', encoding='utf-8')
-            _debug_log(f"[LOG FILE] {log_path}")
-
-        _DEBUG_LOG_FILE.write(f"{datetime.now().isoformat()} {message}\n")
-        _DEBUG_LOG_FILE.flush()
-    except:
-        pass
+    """디버그 로그 (프로덕션에서는 비활성화)"""
+    # 프로덕션에서는 출력하지 않음
+    # 디버그 필요시 아래 주석 해제
+    # logger.debug(message)
+    pass
 
 # =============================================================================
 # Data Classes
@@ -196,9 +184,14 @@ ARTIFACT_MFT_FILTERS = {
     # Recycle Bin
     # =========================================================================
     'recycle_bin': {
-        'path_pattern': r'\$recycle\.bin/',
+        # 휴지통 경로 패턴 (다양한 형태 지원)
+        'path_patterns': [
+            r'\$recycle\.bin[/\\]',     # 표준: $Recycle.Bin/ 또는 $Recycle.Bin\
+            r'recycle\.bin[/\\]',       # $ 없는 형태
+            r'\$recycle\.bin$',         # 경로 끝이 $Recycle.Bin인 경우
+        ],
         'include_deleted': True,
-        'description': 'Deleted files in Recycle Bin',
+        'description': 'Deleted files in Recycle Bin ($I metadata + $R files)',
     },
 
     # =========================================================================
@@ -233,48 +226,74 @@ ARTIFACT_MFT_FILTERS = {
     },
 
     # =========================================================================
-    # User Files (Full Disk Scan)
+    # User Files - 서버 분석 가능한 확장자만 (server_parsing_service.py 기준)
     # =========================================================================
     'document': {
         'extensions': {
-            '.doc', '.docx', '.pdf', '.hwp', '.hwpx', '.xls', '.xlsx',
-            '.ppt', '.pptx', '.txt', '.rtf', '.odt', '.ods', '.odp',
-            '.csv', '.md', '.json', '.xml', '.html', '.htm',
+            '.doc', '.docx',      # Word (python-docx, olefile)
+            '.xls', '.xlsx',      # Excel (openpyxl, olefile)
+            '.ppt', '.pptx',      # PowerPoint (olefile)
+            '.pdf',               # PDF (pypdf)
+            '.hwp', '.hwpx',      # 한글 (olefile)
         },
         'include_deleted': True,
         'include_system_folders': True,
         'full_disk_scan': True,
-        'description': 'Office documents, PDFs, text files',
+        'description': 'Office documents, PDFs (server-parseable only)',
     },
     'email': {
-        'extensions': {'.pst', '.ost', '.eml', '.msg', '.mbox', '.dbx'},
+        'extensions': {'.eml', '.msg', '.pst', '.ost'},  # email, extract_msg, pypff
         'include_deleted': True,
         'include_system_folders': True,
         'full_disk_scan': True,
-        'description': 'Email files (Outlook, Thunderbird)',
+        'description': 'Email files (.eml, .msg, .pst, .ost)',
     },
-    'image': {
-        'extensions': {
-            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif',
-            '.webp', '.heic', '.heif', '.raw', '.cr2', '.nef', '.arw',
-            '.svg', '.ico', '.psd', '.ai', '.eps',
-        },
+
+    # =========================================================================
+    # Command History & Execution Artifacts (Phase 2)
+    # =========================================================================
+    'powershell_history': {
+        'files': {'consolehost_history.txt'},
+        'path_pattern': r'appdata/roaming/microsoft/windows/powershell/psreadline/',
         'include_deleted': True,
-        'include_system_folders': True,
-        'full_disk_scan': True,
-        'description': 'Image files',
+        'description': 'PowerShell command history (PSReadLine)',
     },
-    'video': {
-        'extensions': {
-            '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm',
-            '.m4v', '.mpeg', '.mpg', '.3gp', '.ts', '.mts', '.m2ts',
-            '.vob', '.rm', '.rmvb', '.asf',
-        },
+    'wer': {
+        'path_patterns': [
+            r'programdata/microsoft/windows/wer/',
+            r'appdata/local/microsoft/windows/wer/',
+        ],
+        'extensions': {'.wer', '.txt', '.hdmp', '.mdmp'},
         'include_deleted': True,
-        'include_system_folders': True,
-        'full_disk_scan': True,
-        'description': 'Video files',
+        'description': 'Windows Error Reporting (crash dumps, reports)',
     },
+    'rdp_cache': {
+        'path_pattern': r'appdata/local/microsoft/terminal server client/cache/',
+        'name_pattern': r'(bcache|cache).*\.(bmc|bin)',
+        'include_deleted': True,
+        'description': 'RDP Bitmap Cache (remote desktop thumbnails)',
+    },
+
+    # =========================================================================
+    # Phase 3: 보완 아티팩트
+    # =========================================================================
+    'wlan_event': {
+        'files': {'microsoft-windows-wlan-autoconfig%4operational.evtx'},
+        'path_pattern': r'windows/system32/winevt/logs/',
+        'include_deleted': True,
+        'description': 'WLAN Auto-Config event log (WiFi connection history)',
+    },
+    'profile_list': {
+        # ProfileList는 SOFTWARE 레지스트리에 포함됨
+        # registry 수집에서 자동으로 처리됨
+        'files': {'software'},
+        'path_pattern': r'windows/system32/config/',
+        'include_deleted': True,
+        'description': 'User profile list (SOFTWARE registry)',
+    },
+    # Zone.Identifier는 ADS로 MFT 수집 시 별도 처리 필요
+    # 현재 MFT 수집기는 ADS 추출 지원 안함 - 향후 구현
+    # image, video 제외됨 - 포렌식 관점에서 중요도 낮음 + 해시 계산으로 인한 속도 저하
 }
 
 
