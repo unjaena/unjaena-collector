@@ -1231,7 +1231,11 @@ class LocalMFTCollector(_LocalMFTBase):
         SKIP_SUBDIRS = {
             'winsxs', 'installer', 'assembly', 'servicing',
             'softwaredistribution', 'catroot', 'catroot2',
+            # 포렌식 수집 임시 디렉토리 제외 (E01 추출 파일이 로컬 수집에 포함되지 않도록)
+            'e01_extract', 'e01_preview_',
         }
+        # 특정 패턴으로 시작하는 디렉토리 제외
+        SKIP_PREFIXES = ('forensic_', 'e01_preview_')
 
         # 사용자 폴더 우선 수집
         users_dir = os.path.join(volume_root, 'Users')
@@ -1258,7 +1262,12 @@ class LocalMFTCollector(_LocalMFTBase):
             logger.info(f"[{source}] Scanning [{dir_idx}/{total_dirs}] {scan_dir}")
 
             for root, dirs, files in os.walk(scan_dir):
-                dirs[:] = [d for d in dirs if d.lower() not in SKIP_SUBDIRS]
+                # 제외할 디렉토리 필터링
+                dirs[:] = [
+                    d for d in dirs
+                    if d.lower() not in SKIP_SUBDIRS
+                    and not any(d.lower().startswith(prefix) for prefix in SKIP_PREFIXES)
+                ]
 
                 try:
                     for filename in files:

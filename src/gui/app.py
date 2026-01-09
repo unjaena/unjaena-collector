@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QProgressBar, QListWidget, QListWidgetItem,
     QLineEdit, QCheckBox, QGroupBox, QMessageBox, QFrame, QTextEdit,
     QStatusBar, QSplitter, QStackedWidget, QScrollArea, QTabWidget,
-    QComboBox
+    QComboBox, QApplication
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QElapsedTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
@@ -1176,6 +1176,24 @@ class CollectorWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Please select at least one artifact type")
             return
 
+        # 선택된 디바이스 확인 (여러 개일 경우 명확히 표시)
+        if len(selected_devices) > 1:
+            device_list = "\n".join([f"  • {d.display_name}" for d in selected_devices])
+            confirm = QMessageBox.question(
+                self,
+                "수집 대상 확인",
+                f"다음 {len(selected_devices)}개 디바이스에서 수집합니다:\n\n{device_list}\n\n"
+                f"선택된 아티팩트: {len(selected)}개\n\n"
+                f"계속하시겠습니까?\n\n"
+                f"(특정 디바이스만 수집하려면 '아니오'를 선택하고\n"
+                f"원하지 않는 디바이스의 체크를 해제하세요)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                self._log("수집 취소됨: 사용자가 디바이스 선택을 재확인하려고 합니다")
+                return
+
         self._log(f"Starting collection from {len(selected_devices)} device(s)")
 
         # 법적 동의 확인 (필수)
@@ -1228,69 +1246,138 @@ class CollectorWindow(QMainWindow):
                 )
 
                 if dialog_result.success and not dialog_result.skip:
-                    # 복호화 시도
-                    self._log(f"BitLocker 복호화 시도 중... (키 타입: {dialog_result.key_type})")
+                    # 자동 해제 모드 (manage-bde)
+                    if dialog_result.auto_decrypt:
+                        self._log("BitLocker 자동 해제 모드 선택됨 (manage-bde)")
+                        try:
+                            from utils.bitlocker import disable_bitlocker, get_bitlocker_status
 
-                    try:
-                        decryptor = BitLockerDecryptor.from_physical_disk(
-                            drive_number=0,
-                            partition_index=bitlocker_result.partition_index
-                        )
+                            # 진행 다이얼로그 표시
+                            from PyQt6.QtWidgets import QProgressDialog
+                            progress = QProgressDialog(
+                                "BitLocker 암호화를 해제하고 있습니다...\n"
+                                "디스크 크기에 따라 수 분~수 시간이 소요될 수 있습니다.",
+                                "취소",
+                                0, 100,
+                                self
+                            )
+                            progress.setWindowTitle("BitLocker 해제 중")
+                            progress.setWindowModality(Qt.WindowModality.WindowModal)
+                            progress.setMinimumDuration(0)
+                            progress.setValue(0)
+                            progress.show()
 
-                        # 키 타입에 따라 복호화
-                        if dialog_result.key_type == "recovery_password":
-                            unlock_result = decryptor.unlock_with_recovery_password(
-                                dialog_result.key_value
-                            )
-                        elif dialog_result.key_type == "password":
-                            unlock_result = decryptor.unlock_with_password(
-                                dialog_result.key_value
-                            )
-                        elif dialog_result.key_type == "bek_file":
-                            unlock_result = decryptor.unlock_with_bek_file(
-                                dialog_result.bek_path
-                            )
-                        else:
-                            unlock_result = None
+                            # 콜백으로 진행률 업데이트
+                            def update_progress(percentage, message):
+                                if progress.wasCanceled():
+                                    return
+                                progress.setLabelText(message)
+                                progress.setValue(int(percentage))
+                                QApplication.processEvents()
 
-                        if unlock_result and unlock_result.success:
-                            bitlocker_decryptor = decryptor
-                            bitlocker_info = unlock_result.volume_info
-                            self._log("BitLocker 복호화 성공! 암호화된 볼륨에서 수집을 진행합니다.")
-                        else:
-                            error_msg = unlock_result.error_message if unlock_result else "Unknown error"
-                            self._log(f"BitLocker 복호화 실패: {error_msg}", error=True)
+                            # BitLocker 해제 실행
+                            result = disable_bitlocker(
+                                drive="C:",
+                                progress_callback=update_progress,
+                                wait_for_completion=True,
+                                check_interval=5
+                            )
+
+                            progress.close()
+
+                            if result.success:
+                                self._log("BitLocker 해제 완료! MFT 기반 수집을 진행합니다.")
+                                # 자동 해제 플래그 설정 (수집 완료 후 재암호화용)
+                                self._bitlocker_auto_decrypt_used = True
+                            else:
+                                self._log(f"BitLocker 해제 실패: {result.error}", error=True)
+                                QMessageBox.warning(
+                                    self,
+                                    "BitLocker 해제 실패",
+                                    f"BitLocker 해제에 실패했습니다:\n{result.error}\n\n"
+                                    "이전 방식(디렉토리 폴백)으로 수집을 진행합니다."
+                                )
+                                self._bitlocker_auto_decrypt_used = False
+
+                        except Exception as e:
+                            self._log(f"BitLocker 자동 해제 오류: {e}", error=True)
                             QMessageBox.warning(
                                 self,
-                                "BitLocker 복호화 실패",
-                                f"복호화에 실패했습니다: {error_msg}\n\n"
-                                "이전 방식(암호화된 상태)으로 수집을 진행합니다."
+                                "오류",
+                                f"BitLocker 해제 중 오류가 발생했습니다:\n{e}\n\n"
+                                "이전 방식으로 수집을 진행합니다."
                             )
-                            # decryptor 정리
-                            decryptor.close()
+                            self._bitlocker_auto_decrypt_used = False
+                    else:
+                        # pybde 기반 복호화 시도
+                        self._log(f"BitLocker 복호화 시도 중... (키 타입: {dialog_result.key_type})")
 
-                    except BitLockerError as e:
-                        self._log(f"BitLocker 오류: {e}", error=True)
-                        QMessageBox.warning(
-                            self,
-                            "BitLocker 오류",
-                            f"BitLocker 처리 중 오류가 발생했습니다:\n{e}\n\n"
-                            "이전 방식으로 수집을 진행합니다."
-                        )
-                    except Exception as e:
-                        self._log(f"예상치 못한 오류: {e}", error=True)
-                        QMessageBox.warning(
-                            self,
-                            "오류",
-                            f"오류가 발생했습니다:\n{e}\n\n"
-                            "이전 방식으로 수집을 진행합니다."
-                        )
+                        try:
+                            decryptor = BitLockerDecryptor.from_physical_disk(
+                                drive_number=0,
+                                partition_index=bitlocker_result.partition_index
+                            )
+
+                            # 키 타입에 따라 복호화
+                            if dialog_result.key_type == "recovery_password":
+                                unlock_result = decryptor.unlock_with_recovery_password(
+                                    dialog_result.key_value
+                                )
+                            elif dialog_result.key_type == "password":
+                                unlock_result = decryptor.unlock_with_password(
+                                    dialog_result.key_value
+                                )
+                            elif dialog_result.key_type == "bek_file":
+                                unlock_result = decryptor.unlock_with_bek_file(
+                                    dialog_result.bek_path
+                                )
+                            else:
+                                unlock_result = None
+
+                            if unlock_result and unlock_result.success:
+                                bitlocker_decryptor = decryptor
+                                bitlocker_info = unlock_result.volume_info
+                                self._log("BitLocker 복호화 성공! 암호화된 볼륨에서 수집을 진행합니다.")
+                            else:
+                                error_msg = unlock_result.error_message if unlock_result else "Unknown error"
+                                self._log(f"BitLocker 복호화 실패: {error_msg}", error=True)
+                                QMessageBox.warning(
+                                    self,
+                                    "BitLocker 복호화 실패",
+                                    f"복호화에 실패했습니다: {error_msg}\n\n"
+                                    "이전 방식(암호화된 상태)으로 수집을 진행합니다."
+                                )
+                                # decryptor 정리
+                                decryptor.close()
+
+                        except BitLockerError as e:
+                            self._log(f"BitLocker 오류: {e}", error=True)
+                            QMessageBox.warning(
+                                self,
+                                "BitLocker 오류",
+                                f"BitLocker 처리 중 오류가 발생했습니다:\n{e}\n\n"
+                                "이전 방식으로 수집을 진행합니다."
+                            )
+                        except Exception as e:
+                            self._log(f"예상치 못한 오류: {e}", error=True)
+                            QMessageBox.warning(
+                                self,
+                                "오류",
+                                f"오류가 발생했습니다:\n{e}\n\n"
+                                "이전 방식으로 수집을 진행합니다."
+                            )
 
                 elif dialog_result.skip:
                     self._log("BitLocker 복호화를 건너뛰고 암호화된 상태로 수집을 진행합니다.")
                 else:
-                    # 취소됨
-                    self._log("BitLocker 다이얼로그가 취소되었습니다.")
+                    # 취소됨 - 수집 중단
+                    self._log("BitLocker 다이얼로그가 취소되었습니다. 수집을 중단합니다.")
+                    QMessageBox.information(
+                        self,
+                        "수집 취소",
+                        "BitLocker 설정이 취소되어 수집을 진행하지 않습니다."
+                    )
+                    return
             else:
                 self._log("BitLocker 암호화 볼륨이 감지되지 않았습니다.")
 
@@ -1396,6 +1483,11 @@ class CollectorWindow(QMainWindow):
 
     def _collection_finished(self, success: bool, message: str):
         """Handle collection completion"""
+        # BitLocker 자동 해제 사용 시 재암호화
+        if getattr(self, '_bitlocker_auto_decrypt_used', False):
+            self._reenable_bitlocker()
+            self._bitlocker_auto_decrypt_used = False
+
         # Re-enable controls
         self.collect_btn.setEnabled(False)  # 수집 완료/취소 후 비활성화 (새 토큰 필요)
         self.cancel_btn.setEnabled(False)
@@ -1417,6 +1509,65 @@ class CollectorWindow(QMainWindow):
         self.status_bar.showMessage("Ready - 새 토큰 입력 필요")
         self.token_status.setText("새 토큰 필요")
         self.token_status.setStyleSheet("color: #ffc107;")
+
+    def _reenable_bitlocker(self):
+        """수집 완료 후 BitLocker 재암호화"""
+        self._log("BitLocker 재암호화 시작...")
+
+        try:
+            from utils.bitlocker import enable_bitlocker
+
+            # 진행 다이얼로그 표시
+            from PyQt6.QtWidgets import QProgressDialog
+            progress = QProgressDialog(
+                "BitLocker 암호화를 다시 활성화하고 있습니다...\n"
+                "백그라운드에서 암호화가 진행됩니다.",
+                None,  # 취소 버튼 없음 (보안상 필수)
+                0, 0,
+                self
+            )
+            progress.setWindowTitle("BitLocker 재암호화")
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.show()
+            QApplication.processEvents()
+
+            # BitLocker 재암호화 시작 (백그라운드 - 완료 대기 안함)
+            result = enable_bitlocker(
+                drive="C:",
+                wait_for_completion=False  # 백그라운드에서 암호화 진행
+            )
+
+            progress.close()
+
+            if result.success:
+                self._log("BitLocker 재암호화가 시작되었습니다. 백그라운드에서 진행됩니다.")
+                QMessageBox.information(
+                    self,
+                    "BitLocker 재암호화",
+                    "BitLocker 암호화가 백그라운드에서 시작되었습니다.\n\n"
+                    "암호화 진행 상황은 Windows 설정에서 확인할 수 있습니다.\n"
+                    "(설정 > 개인 정보 및 보안 > 장치 암호화)"
+                )
+            else:
+                self._log(f"BitLocker 재암호화 실패: {result.error}", error=True)
+                QMessageBox.warning(
+                    self,
+                    "BitLocker 재암호화 실패",
+                    f"BitLocker 재암호화에 실패했습니다:\n{result.error}\n\n"
+                    "수동으로 BitLocker를 다시 활성화해 주세요:\n"
+                    "manage-bde -on C:"
+                )
+
+        except Exception as e:
+            self._log(f"BitLocker 재암호화 오류: {e}", error=True)
+            QMessageBox.warning(
+                self,
+                "오류",
+                f"BitLocker 재암호화 중 오류가 발생했습니다:\n{e}\n\n"
+                "수동으로 BitLocker를 다시 활성화해 주세요:\n"
+                "manage-bde -on C:"
+            )
 
     def _clear_session_data(self):
         """
@@ -1450,7 +1601,8 @@ class CollectorWindow(QMainWindow):
             return
 
         try:
-            server_url = self.config.get('server_url', '')
+            # 인증 후 저장된 server_url 우선 사용, 없으면 config에서 가져오기
+            server_url = getattr(self, 'server_url', None) or self.config.get('server_url', '')
             if not server_url:
                 return
 
@@ -1493,6 +1645,10 @@ class CollectorWindow(QMainWindow):
         if hasattr(self, 'worker') and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait(3000)  # 최대 3초 대기
+        else:
+            # 수집 중이 아니더라도 활성 세션이 있으면 서버에 알림
+            # (토큰 인증 후 수집 시작 전 종료한 경우)
+            self._notify_server_cancel()
 
         super().closeEvent(event)
 
@@ -1559,6 +1715,26 @@ class CollectionWorker(QThread):
     def cancel(self):
         """Cancel the collection"""
         self._cancelled = True
+        # 서버에 abort 신호 전송 (활성 수집 플래그 정리)
+        self._abort_session()
+
+    def _abort_session(self):
+        """서버에 세션 중단 알림 (활성 수집 플래그 정리)"""
+        if not self.session_id or not self.collection_token:
+            return
+        try:
+            abort_url = f"{self.server_url}/api/v1/collector/collection/abort/{self.session_id}"
+            requests.post(
+                abort_url,
+                headers={
+                    'X-Collection-Token': self.collection_token,
+                    'Content-Type': 'application/json',
+                },
+                json={'reason': 'collector_closed'},
+                timeout=5  # 빠른 타임아웃 (종료 시 기다리지 않기 위해)
+            )
+        except Exception:
+            pass  # 실패해도 무시 (종료 중이므로)
 
     def _calculate_overall_progress(self, stage: int, stage_progress: int) -> int:
         """전체 진행률 계산"""

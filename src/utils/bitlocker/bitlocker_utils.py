@@ -369,3 +369,332 @@ def validate_recovery_password(password: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+# =============================================================================
+# manage-bde 기반 BitLocker 자동 해제/재암호화
+# =============================================================================
+
+@dataclass
+class ManageBdeResult:
+    """manage-bde 실행 결과"""
+    success: bool = False
+    message: str = ""
+    percentage: float = 0.0  # 암호화/복호화 진행률
+    protection_status: str = ""  # On, Off, Unknown
+    error: Optional[str] = None
+
+
+def check_admin_privileges() -> bool:
+    """관리자 권한 확인"""
+    import sys
+    if sys.platform != 'win32':
+        return False
+
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def get_bitlocker_status(drive: str = "C:") -> ManageBdeResult:
+    """
+    manage-bde를 사용하여 BitLocker 상태 확인
+
+    Args:
+        drive: 드라이브 문자 (예: "C:")
+
+    Returns:
+        ManageBdeResult
+    """
+    import subprocess
+    import re
+    import sys
+
+    if sys.platform != 'win32':
+        return ManageBdeResult(
+            success=False,
+            error="manage-bde is only available on Windows"
+        )
+
+    try:
+        result = subprocess.run(
+            ['manage-bde', '-status', drive],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+
+        output = result.stdout + result.stderr
+
+        # 보호 상태 파싱
+        protection_status = "Unknown"
+        if "Protection On" in output or "보호 설정" in output:
+            protection_status = "On"
+        elif "Protection Off" in output or "보호 해제" in output:
+            protection_status = "Off"
+
+        # 암호화 비율 파싱
+        percentage = 0.0
+        percentage_match = re.search(r'(\d+(?:\.\d+)?)\s*%', output)
+        if percentage_match:
+            percentage = float(percentage_match.group(1))
+
+        # 암호화 상태 확인
+        is_encrypted = "Fully Encrypted" in output or "완전히 암호화됨" in output
+        is_decrypted = "Fully Decrypted" in output or "완전히 해독됨" in output or percentage == 0.0
+
+        if is_encrypted:
+            message = "fully_encrypted"
+        elif is_decrypted:
+            message = "fully_decrypted"
+        else:
+            message = "in_progress"
+
+        return ManageBdeResult(
+            success=True,
+            message=message,
+            percentage=percentage,
+            protection_status=protection_status
+        )
+
+    except subprocess.TimeoutExpired:
+        return ManageBdeResult(success=False, error="manage-bde timeout")
+    except FileNotFoundError:
+        return ManageBdeResult(success=False, error="manage-bde not found")
+    except Exception as e:
+        return ManageBdeResult(success=False, error=str(e))
+
+
+def disable_bitlocker(
+    drive: str = "C:",
+    progress_callback: Optional[callable] = None,
+    wait_for_completion: bool = True,
+    check_interval: int = 10
+) -> ManageBdeResult:
+    """
+    BitLocker 암호화 해제 (manage-bde -off)
+
+    Args:
+        drive: 드라이브 문자 (예: "C:")
+        progress_callback: 진행률 콜백 함수 (percentage: float, message: str)
+        wait_for_completion: 완료까지 대기 여부
+        check_interval: 상태 확인 간격 (초)
+
+    Returns:
+        ManageBdeResult
+    """
+    import subprocess
+    import time
+    import sys
+
+    if sys.platform != 'win32':
+        return ManageBdeResult(
+            success=False,
+            error="manage-bde is only available on Windows"
+        )
+
+    if not check_admin_privileges():
+        return ManageBdeResult(
+            success=False,
+            error="Administrator privileges required"
+        )
+
+    # 현재 상태 확인
+    status = get_bitlocker_status(drive)
+    if not status.success:
+        return status
+
+    if status.message == "fully_decrypted":
+        logger.info(f"Drive {drive} is already decrypted")
+        return ManageBdeResult(
+            success=True,
+            message="already_decrypted",
+            percentage=0.0,
+            protection_status="Off"
+        )
+
+    try:
+        # BitLocker 해제 시작
+        logger.info(f"Starting BitLocker decryption on {drive}")
+        if progress_callback:
+            progress_callback(0.0, f"BitLocker 해제 시작: {drive}")
+
+        result = subprocess.run(
+            ['manage-bde', '-off', drive],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+
+        if result.returncode != 0:
+            error_msg = result.stderr or result.stdout
+            return ManageBdeResult(
+                success=False,
+                error=f"manage-bde -off failed: {error_msg}"
+            )
+
+        if not wait_for_completion:
+            return ManageBdeResult(
+                success=True,
+                message="decryption_started",
+                protection_status="Off"
+            )
+
+        # 완료까지 대기
+        while True:
+            time.sleep(check_interval)
+            status = get_bitlocker_status(drive)
+
+            if not status.success:
+                return status
+
+            remaining = 100.0 - status.percentage if status.percentage > 0 else 0.0
+            logger.info(f"BitLocker decryption progress: {remaining:.1f}% remaining")
+
+            if progress_callback:
+                progress_callback(remaining, f"복호화 진행 중: {remaining:.1f}% 남음")
+
+            if status.message == "fully_decrypted" or status.percentage == 0.0:
+                logger.info(f"BitLocker decryption completed on {drive}")
+                if progress_callback:
+                    progress_callback(100.0, "복호화 완료")
+                return ManageBdeResult(
+                    success=True,
+                    message="decryption_completed",
+                    percentage=0.0,
+                    protection_status="Off"
+                )
+
+    except subprocess.TimeoutExpired:
+        return ManageBdeResult(success=False, error="manage-bde timeout")
+    except Exception as e:
+        return ManageBdeResult(success=False, error=str(e))
+
+
+def enable_bitlocker(
+    drive: str = "C:",
+    progress_callback: Optional[callable] = None,
+    wait_for_completion: bool = False,
+    check_interval: int = 10
+) -> ManageBdeResult:
+    """
+    BitLocker 암호화 활성화 (manage-bde -on)
+
+    Args:
+        drive: 드라이브 문자 (예: "C:")
+        progress_callback: 진행률 콜백 함수 (percentage: float, message: str)
+        wait_for_completion: 완료까지 대기 여부 (기본: False - 백그라운드 암호화)
+        check_interval: 상태 확인 간격 (초)
+
+    Returns:
+        ManageBdeResult
+
+    Note:
+        재암호화는 TPM이 있는 경우 자동으로 키를 사용합니다.
+        TPM이 없거나 복구 키가 필요한 경우 추가 설정이 필요할 수 있습니다.
+    """
+    import subprocess
+    import time
+    import sys
+
+    if sys.platform != 'win32':
+        return ManageBdeResult(
+            success=False,
+            error="manage-bde is only available on Windows"
+        )
+
+    if not check_admin_privileges():
+        return ManageBdeResult(
+            success=False,
+            error="Administrator privileges required"
+        )
+
+    # 현재 상태 확인
+    status = get_bitlocker_status(drive)
+    if not status.success:
+        return status
+
+    if status.message == "fully_encrypted":
+        logger.info(f"Drive {drive} is already encrypted")
+        return ManageBdeResult(
+            success=True,
+            message="already_encrypted",
+            percentage=100.0,
+            protection_status="On"
+        )
+
+    try:
+        # BitLocker 암호화 시작 (TPM 사용)
+        logger.info(f"Starting BitLocker encryption on {drive}")
+        if progress_callback:
+            progress_callback(0.0, f"BitLocker 암호화 시작: {drive}")
+
+        # -UsedSpaceOnly: 사용된 공간만 암호화 (빠름)
+        # -SkipHardwareTest: 하드웨어 테스트 건너뛰기
+        result = subprocess.run(
+            ['manage-bde', '-on', drive, '-UsedSpaceOnly', '-SkipHardwareTest'],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+
+        # TPM 없이 실패할 경우 복구 키 기반 암호화 시도
+        if result.returncode != 0:
+            # 복구 비밀번호 생성 및 암호화 시도
+            result = subprocess.run(
+                ['manage-bde', '-on', drive, '-RecoveryPassword', '-UsedSpaceOnly', '-SkipHardwareTest'],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+
+        if result.returncode != 0:
+            error_msg = result.stderr or result.stdout
+            return ManageBdeResult(
+                success=False,
+                error=f"manage-bde -on failed: {error_msg}"
+            )
+
+        logger.info(f"BitLocker encryption started on {drive} (running in background)")
+
+        if not wait_for_completion:
+            return ManageBdeResult(
+                success=True,
+                message="encryption_started",
+                protection_status="On"
+            )
+
+        # 완료까지 대기
+        while True:
+            time.sleep(check_interval)
+            status = get_bitlocker_status(drive)
+
+            if not status.success:
+                return status
+
+            logger.info(f"BitLocker encryption progress: {status.percentage:.1f}%")
+
+            if progress_callback:
+                progress_callback(status.percentage, f"암호화 진행 중: {status.percentage:.1f}%")
+
+            if status.message == "fully_encrypted" or status.percentage >= 100.0:
+                logger.info(f"BitLocker encryption completed on {drive}")
+                if progress_callback:
+                    progress_callback(100.0, "암호화 완료")
+                return ManageBdeResult(
+                    success=True,
+                    message="encryption_completed",
+                    percentage=100.0,
+                    protection_status="On"
+                )
+
+    except subprocess.TimeoutExpired:
+        return ManageBdeResult(success=False, error="manage-bde timeout")
+    except Exception as e:
+        return ManageBdeResult(success=False, error=str(e))

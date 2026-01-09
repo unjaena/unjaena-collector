@@ -23,10 +23,11 @@ from gui.styles import COLORS
 class BitLockerDialogResult:
     """BitLocker 다이얼로그 결과"""
     success: bool = False
-    key_type: str = ""          # 'recovery_password' | 'password' | 'bek_file'
+    key_type: str = ""          # 'recovery_password' | 'password' | 'bek_file' | 'auto_decrypt'
     key_value: str = ""         # Recovery password 또는 password
     bek_path: str = ""          # BEK 파일 경로
     skip: bool = False          # 건너뛰기 (이전 방식 진행)
+    auto_decrypt: bool = False  # manage-bde 자동 해제 모드
 
 
 class BitLockerDialog(QDialog):
@@ -57,8 +58,7 @@ class BitLockerDialog(QDialog):
     def setup_ui(self):
         """UI 초기화"""
         self.setWindowTitle("BitLocker 볼륨 감지됨")
-        self.setMinimumSize(500, 400)
-        self.setMaximumSize(600, 500)
+        self.setMinimumSize(520, 580)
         self.setModal(True)
         self.setStyleSheet(self._get_stylesheet())
 
@@ -151,6 +151,27 @@ class BitLockerDialog(QDialog):
         bek_desc.setObjectName("keyDesc")
         key_layout.addWidget(bek_desc)
 
+        # 구분선
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet(f"background-color: {COLORS['border_subtle']};")
+        key_layout.addWidget(separator)
+
+        # 자동 해제 옵션 (manage-bde)
+        self.radio_auto_decrypt = QRadioButton("🔓 자동 해제 후 수집 (manage-bde)")
+        self.radio_auto_decrypt.setEnabled(True)  # 항상 사용 가능 (Windows 기본 기능)
+        self.key_type_group.addButton(self.radio_auto_decrypt)
+        key_layout.addWidget(self.radio_auto_decrypt)
+
+        auto_desc = QLabel(
+            "   ⚠️ 시스템 BitLocker를 임시 해제 후 수집, 완료 후 재암호화\n"
+            "   • 관리자 권한 필요\n"
+            "   • 디스크 크기에 따라 수 분~수 시간 소요"
+        )
+        auto_desc.setObjectName("keyDesc")
+        auto_desc.setWordWrap(True)
+        key_layout.addWidget(auto_desc)
+
         layout.addWidget(key_group)
 
         # 입력 필드 영역
@@ -219,6 +240,7 @@ class BitLockerDialog(QDialog):
         self.radio_recovery.toggled.connect(self._on_key_type_changed)
         self.radio_password.toggled.connect(self._on_key_type_changed)
         self.radio_bek.toggled.connect(self._on_key_type_changed)
+        self.radio_auto_decrypt.toggled.connect(self._on_key_type_changed)
 
     def _format_partition_info(self) -> str:
         """파티션 정보 포맷팅"""
@@ -259,6 +281,21 @@ class BitLockerDialog(QDialog):
             self.key_input.clear()
             self.bek_input.setEnabled(True)
             self.bek_browse_btn.setEnabled(True)
+
+        elif self.radio_auto_decrypt.isChecked():
+            self.key_input_label.setText("자동 해제:")
+            self.key_input.setEnabled(False)
+            self.key_input.clear()
+            self.key_input.setPlaceholderText("키 입력 불필요")
+            self.bek_input.setEnabled(False)
+            self.bek_browse_btn.setEnabled(False)
+            self.unlock_btn.setText("해제 시작")
+            self.unlock_btn.setEnabled(True)  # 자동 해제는 pybde 불필요
+
+        # 자동 해제가 아닌 경우 버튼 텍스트/상태 복원
+        if not self.radio_auto_decrypt.isChecked():
+            self.unlock_btn.setText("잠금 해제")
+            self.unlock_btn.setEnabled(self.pybde_available)
 
         self.error_label.hide()
 
@@ -309,6 +346,19 @@ class BitLockerDialog(QDialog):
                 self._show_error("BEK 파일이 존재하지 않습니다.")
                 return False
 
+        elif self.radio_auto_decrypt.isChecked():
+            # 관리자 권한 확인
+            try:
+                from utils.bitlocker import check_admin_privileges
+                if not check_admin_privileges():
+                    self._show_error(
+                        "관리자 권한이 필요합니다.\n"
+                        "수집도구를 관리자 권한으로 다시 실행하세요."
+                    )
+                    return False
+            except ImportError:
+                pass  # 모듈 없으면 일단 진행
+
         return True
 
     def _on_unlock(self):
@@ -334,6 +384,26 @@ class BitLockerDialog(QDialog):
         elif self.radio_bek.isChecked():
             self.result.key_type = "bek_file"
             self.result.bek_path = self.bek_input.text().strip()
+
+        elif self.radio_auto_decrypt.isChecked():
+            # 확인 다이얼로그
+            reply = QMessageBox.warning(
+                self,
+                "BitLocker 자동 해제 확인",
+                "⚠️ 주의: 시스템의 BitLocker 암호화가 해제됩니다.\n\n"
+                "• 디스크 크기에 따라 수 분~수 시간이 소요됩니다.\n"
+                "• 수집 완료 후 자동으로 재암호화됩니다.\n"
+                "• 작업 중 시스템을 종료하지 마세요.\n\n"
+                "계속하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            self.result.key_type = "auto_decrypt"
+            self.result.auto_decrypt = True
 
         self.accept()
 
@@ -409,14 +479,29 @@ class BitLockerDialog(QDialog):
                 color: {COLORS['text_primary']};
                 background-color: transparent;
                 font-size: 11px;
-                padding: 2px 0;
+                padding: 4px 0;
+                spacing: 8px;
             }}
             QRadioButton::indicator {{
-                width: 14px;
-                height: 14px;
+                width: 16px;
+                height: 16px;
+                border: 2px solid {COLORS['border_default']};
+                border-radius: 9px;
+                background-color: {COLORS['bg_tertiary']};
+            }}
+            QRadioButton::indicator:checked {{
+                background-color: {COLORS['brand_primary']};
+                border-color: {COLORS['brand_primary']};
+            }}
+            QRadioButton::indicator:hover {{
+                border-color: {COLORS['brand_accent']};
             }}
             QRadioButton:disabled {{
                 color: {COLORS['text_tertiary']};
+            }}
+            QRadioButton::indicator:disabled {{
+                border-color: {COLORS['border_subtle']};
+                background-color: {COLORS['bg_secondary']};
             }}
             #keyDesc {{
                 color: {COLORS['text_secondary']};

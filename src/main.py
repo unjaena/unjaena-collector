@@ -41,16 +41,16 @@ def get_secure_config() -> dict:
         COLLECTOR_DEV_MODE=true
         COLLECTOR_ALLOW_INSECURE=true
     """
-    # [테스트 모드] 기본값을 개발 모드(HTTP)로 설정
-    # 프로덕션 배포 시 환경변수로 dev_mode=false 설정 필요
-    dev_mode = os.environ.get('COLLECTOR_DEV_MODE', 'true').lower() == 'true'
-    allow_insecure = os.environ.get('COLLECTOR_ALLOW_INSECURE', 'true').lower() == 'true'
+    # [보안] 기본값을 프로덕션 모드(HTTPS)로 설정
+    # 개발 환경에서만 환경변수로 dev_mode=true 설정
+    dev_mode = os.environ.get('COLLECTOR_DEV_MODE', 'false').lower() == 'true'
+    allow_insecure = os.environ.get('COLLECTOR_ALLOW_INSECURE', 'false').lower() == 'true'
 
-    # [테스트 모드] 기본 URL을 HTTP/WS로 변경 (인증서 없이 테스트 가능)
+    # [보안] 기본 URL을 HTTPS/WSS로 설정
+    # 개발 환경에서는 환경변수로 HTTP URL 지정 가능
     # NOTE: Windows에서 'localhost'가 IPv6(::1)로 해석되어 Docker 연결 실패할 수 있음
-    # 127.0.0.1 사용으로 IPv4 명시적 지정
-    server_url = os.environ.get('COLLECTOR_SERVER_URL', 'http://127.0.0.1:8000')
-    ws_url = os.environ.get('COLLECTOR_WS_URL', 'ws://127.0.0.1:8000')
+    server_url = os.environ.get('COLLECTOR_SERVER_URL', 'https://127.0.0.1:8000')
+    ws_url = os.environ.get('COLLECTOR_WS_URL', 'wss://127.0.0.1:8000')
 
     # 프로덕션 모드에서만 HTTPS/WSS 강제
     if not dev_mode and not allow_insecure:

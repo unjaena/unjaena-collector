@@ -69,7 +69,13 @@ from .bitlocker_utils import (
     is_pybde_installed,
     format_recovery_password,
     validate_recovery_password,
-    BitLockerVolumeDetectionResult
+    BitLockerVolumeDetectionResult,
+    # manage-bde 기반 자동 해제/재암호화
+    ManageBdeResult,
+    check_admin_privileges,
+    get_bitlocker_status,
+    disable_bitlocker,
+    enable_bitlocker
 )
 
 # 디스크 백엔드
@@ -109,6 +115,12 @@ __all__ = [
     'is_pybde_available',
     'format_recovery_password',
     'validate_recovery_password',
+    # manage-bde 기반 자동 해제/재암호화
+    'ManageBdeResult',
+    'check_admin_privileges',
+    'get_bitlocker_status',
+    'disable_bitlocker',
+    'enable_bitlocker',
 
     # 디스크 백엔드
     'PhysicalDiskBackend',

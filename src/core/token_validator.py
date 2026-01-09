@@ -147,7 +147,11 @@ class TokenValidator:
                 # M1 보안: 서버 에러 정보 노출 방지 - 사용자 친화적 메시지로 변환
                 status_code = response.status_code
                 try:
-                    error_detail = response.json().get('detail', '')
+                    error_json = response.json()
+                    error_detail = error_json.get('detail', '')
+                    # detail이 dict인 경우 (409 에러 등) message 필드 추출
+                    if isinstance(error_detail, dict):
+                        error_detail = error_detail.get('message', str(error_detail))
                 except Exception:
                     error_detail = ''
 
@@ -158,6 +162,9 @@ class TokenValidator:
                     user_message = "접근 권한이 없습니다. 관리자에게 문의하세요."
                 elif status_code == 404:
                     user_message = "요청한 리소스를 찾을 수 없습니다."
+                elif status_code == 409:
+                    # 동시 수집 충돌 - 서버의 상세 메시지 사용
+                    user_message = error_detail if error_detail else "수집 세션 충돌이 발생했습니다. 잠시 후 다시 시도하세요."
                 elif status_code == 429:
                     user_message = "너무 많은 요청이 발생했습니다. 잠시 후 다시 시도하세요."
                 elif status_code >= 500:
@@ -168,7 +175,7 @@ class TokenValidator:
                 # 디버깅용 로그 (사용자에게는 노출하지 않음)
                 import logging
                 logging.getLogger(__name__).warning(
-                    f"[TokenValidator] Server error: status={status_code}, detail={error_detail[:200] if error_detail else 'N/A'}"
+                    f"[TokenValidator] Server error: status={status_code}, detail={str(error_detail)[:200] if error_detail else 'N/A'}"
                 )
 
                 return ValidationResult(

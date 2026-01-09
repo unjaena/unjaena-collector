@@ -163,6 +163,16 @@ ERROR_PATTERNS: List[Dict] = [
         "is_recoverable": False,
     },
 
+    # 동시 수집 관련 (409 Conflict)
+    {
+        "pattern": r"(409|concurrent_collection|case_collection_in_progress|이미.*수집.*진행)",
+        "title": "수집 세션 충돌",
+        "message": "이 케이스에 이미 수집이 진행 중이거나 이전 수집 세션이 정리되지 않았습니다.",
+        "solution": "1. 잠시 기다렸다가 다시 시도하세요 (5분 후 자동 정리됨).\n2. 웹 플랫폼에서 케이스를 취소 후 새로 토큰을 발급받으세요.\n3. 문제가 지속되면 관리자에게 문의하세요.",
+        "error_code": "COLLECT_CONFLICT",
+        "is_recoverable": True,
+    },
+
     # 서버 관련
     {
         "pattern": r"(500|Internal Server Error|서버 오류)",

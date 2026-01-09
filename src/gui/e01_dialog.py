@@ -11,6 +11,8 @@ Features:
 """
 
 import logging
+import tempfile
+import shutil
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -44,12 +46,15 @@ class PartitionAnalyzer(QThread):
 
     def run(self):
         """파티션 분석 실행"""
+        temp_dir = None
         try:
             self.progress_update.emit("Loading image...")
 
             from collectors.e01_artifact_collector import E01ArtifactCollector
 
-            collector = E01ArtifactCollector(self.file_path)
+            # 임시 디렉토리 사용 (로컬 수집 시 E01 파일이 포함되지 않도록)
+            temp_dir = tempfile.mkdtemp(prefix="e01_preview_")
+            collector = E01ArtifactCollector(self.file_path, output_dir=temp_dir)
 
             self.progress_update.emit("Analyzing partitions...")
             partitions = collector.list_partitions()
@@ -61,6 +66,14 @@ class PartitionAnalyzer(QThread):
         except Exception as e:
             logger.error(f"Partition analysis failed: {e}")
             self.analysis_failed.emit(str(e))
+
+        finally:
+            # 임시 디렉토리 정리
+            if temp_dir and Path(temp_dir).exists():
+                try:
+                    shutil.rmtree(temp_dir)
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup temp directory: {e}")
 
 
 # =============================================================================

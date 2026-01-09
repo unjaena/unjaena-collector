@@ -21,6 +21,7 @@ Usage:
 """
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import Generator, Tuple, Dict, Any, List, Optional
 from dataclasses import dataclass
@@ -263,11 +264,15 @@ class E01ArtifactCollector(BaseMFTCollector):
         Args:
             e01_path: E01 이미지 파일 경로 (첫 번째 세그먼트)
             output_dir: 추출된 아티팩트 저장 디렉토리
+                       (None인 경우 시스템 임시 디렉토리 사용)
         """
         self.e01_path = Path(e01_path)
+        self._owns_temp_dir = False
 
         if output_dir is None:
-            output_dir = str(Path.cwd() / 'e01_extract')
+            # 임시 디렉토리 사용 (로컬 수집 시 E01 파일이 포함되지 않도록)
+            output_dir = tempfile.mkdtemp(prefix="e01_extract_")
+            self._owns_temp_dir = True
 
         super().__init__(output_dir)
 
@@ -453,3 +458,12 @@ class E01ArtifactCollector(BaseMFTCollector):
         self._selected_partition = None
         self._partitions = []
         self._user_folders = []
+
+        # 임시 디렉토리 정리 (우리가 생성한 경우만)
+        if self._owns_temp_dir and self.output_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(self.output_dir)
+                logger.debug(f"Cleaned up temp directory: {self.output_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp directory {self.output_dir}: {e}")

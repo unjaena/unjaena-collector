@@ -155,6 +155,11 @@ class DeviceProgressCard(QFrame):
         if current_artifact:
             self.current_task_label.setText(f"Collecting: {current_artifact}")
 
+    def set_current_file(self, file_path: str):
+        """현재 수집 중인 파일 경로 업데이트"""
+        if file_path:
+            self.current_task_label.setText(f"Collecting: {file_path}")
+
     def set_collected_count(self, count: int):
         """수집 개수 업데이트"""
         self.count_label.setText(f"{count} files")
@@ -443,13 +448,16 @@ class MultiProgressPanel(QWidget):
     def _on_artifact_collected(self, device_id: str, file_path: str):
         """아티팩트 수집됨"""
         if device_id in self.device_cards:
+            card = self.device_cards[device_id]
+
+            # 현재 수집 중인 파일 경로 표시
+            card.set_current_file(file_path)
+
             # 카드의 수집 개수 업데이트
             if self._collector:
                 task = self._collector.get_task(device_id)
                 if task:
-                    self.device_cards[device_id].set_collected_count(
-                        len(task.collected_files)
-                    )
+                    card.set_collected_count(len(task.collected_files))
 
             # 전체 파일 수 업데이트
             if self._collector:
