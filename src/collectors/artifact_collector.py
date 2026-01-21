@@ -94,6 +94,32 @@ except ImportError:
     find_ios_backups = None
     BackupInfo = None
 
+# Try to import Linux collector
+try:
+    from collectors.linux_collector import (
+        LinuxCollector, LINUX_ARTIFACT_TYPES,
+        check_linux_target
+    )
+    LINUX_AVAILABLE = True
+except ImportError:
+    LINUX_AVAILABLE = False
+    LINUX_ARTIFACT_TYPES = {}
+    LinuxCollector = None
+    check_linux_target = None
+
+# Try to import macOS collector
+try:
+    from collectors.macos_collector import (
+        macOSCollector, MACOS_ARTIFACT_TYPES,
+        check_macos_target
+    )
+    MACOS_AVAILABLE = True
+except ImportError:
+    MACOS_AVAILABLE = False
+    MACOS_ARTIFACT_TYPES = {}
+    macOSCollector = None
+    check_macos_target = None
+
 
 # =============================================================================
 # C4 보안: 경로 탈출 공격 방어 유틸리티
@@ -272,14 +298,14 @@ ARTIFACT_TYPES = {
     'recycle_bin': {
         'name': 'Recycle Bin',
         'description': 'Deleted files metadata',
-        'paths': [r'C:\$Recycle.Bin\*\$I*'],
+        'paths': [r'C:\$Recycle.Bin'],  # 휴지통 루트 경로
         'mft_config': {
             'base_path': '$Recycle.Bin',
             'pattern': '$I*',
             'recursive': True,
         },
         'requires_admin': True,
-        'collector': 'collect_glob',
+        'collector': 'collect_recycle_bin',  # [2026-01] 전용 콜렉터 사용
     },
     'usb': {
         'name': 'USB History',
@@ -802,6 +828,184 @@ ARTIFACT_TYPES = {
         'collector': 'collect_locked_files',
         'forensic_value': 'BITS 다운로드 URL, 작업 생성 시간 (MITRE T1197)',
     },
+
+    # =========================================================================
+    # Linux Forensics Artifacts (Phase 3.1)
+    # =========================================================================
+    'linux_auth_log': {
+        'name': 'Linux Authentication Log',
+        'description': 'Authentication events (login, sudo, ssh)',
+        'category': 'linux',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1078',
+        'kill_chain_phase': 'initial_access',
+        'collector': 'collect_linux',
+    },
+    'linux_bash_history': {
+        'name': 'Linux Bash History',
+        'description': 'Bash command history per user',
+        'category': 'linux',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1059.004',
+        'kill_chain_phase': 'execution',
+        'collector': 'collect_linux',
+    },
+    'linux_crontab': {
+        'name': 'Linux Crontab',
+        'description': 'Scheduled tasks via cron',
+        'category': 'linux',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1053.003',
+        'kill_chain_phase': 'persistence',
+        'collector': 'collect_linux',
+    },
+    'linux_ssh_authorized_keys': {
+        'name': 'SSH Authorized Keys',
+        'description': 'Authorized public keys for SSH access',
+        'category': 'linux',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1098.004',
+        'kill_chain_phase': 'persistence',
+        'collector': 'collect_linux',
+    },
+    'linux_syslog': {
+        'name': 'Linux System Log',
+        'description': 'General system events and daemon logs',
+        'category': 'linux',
+        'paths': [],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1070.002',
+        'kill_chain_phase': 'defense_evasion',
+        'collector': 'collect_linux',
+    },
+    'linux_passwd': {
+        'name': 'Linux Passwd File',
+        'description': 'User account information',
+        'category': 'linux',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1087.001',
+        'kill_chain_phase': 'discovery',
+        'collector': 'collect_linux',
+    },
+    'linux_systemd_service': {
+        'name': 'Linux Systemd Services',
+        'description': 'Systemd service unit files',
+        'category': 'linux',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1543.002',
+        'kill_chain_phase': 'persistence',
+        'collector': 'collect_linux',
+    },
+    'linux_wtmp': {
+        'name': 'Linux Login Records',
+        'description': 'Login/logout history (wtmp)',
+        'category': 'linux',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1078',
+        'kill_chain_phase': 'initial_access',
+        'collector': 'collect_linux',
+    },
+
+    # =========================================================================
+    # macOS Forensics Artifacts (Phase 3.1)
+    # =========================================================================
+    'macos_unified_log': {
+        'name': 'macOS Unified Log',
+        'description': 'Unified logging system (log show)',
+        'category': 'macos',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1070.002',
+        'kill_chain_phase': 'defense_evasion',
+        'collector': 'collect_macos',
+    },
+    'macos_launch_agent': {
+        'name': 'macOS Launch Agents',
+        'description': 'User-level LaunchAgent plist files',
+        'category': 'macos',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1543.001',
+        'kill_chain_phase': 'persistence',
+        'collector': 'collect_macos',
+    },
+    'macos_launch_daemon': {
+        'name': 'macOS Launch Daemons',
+        'description': 'System-level LaunchDaemon plist files',
+        'category': 'macos',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1543.004',
+        'kill_chain_phase': 'persistence',
+        'collector': 'collect_macos',
+    },
+    'macos_zsh_history': {
+        'name': 'macOS Zsh History',
+        'description': 'Zsh shell command history',
+        'category': 'macos',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1059.004',
+        'kill_chain_phase': 'execution',
+        'collector': 'collect_macos',
+    },
+    'macos_tcc_db': {
+        'name': 'macOS TCC Database',
+        'description': 'Transparency, Consent, and Control permissions',
+        'category': 'macos',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1548.004',
+        'kill_chain_phase': 'privilege_escalation',
+        'collector': 'collect_macos',
+    },
+    'macos_knowledgec': {
+        'name': 'macOS KnowledgeC Database',
+        'description': 'User activity, app usage tracking',
+        'category': 'macos',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1087.001',
+        'kill_chain_phase': 'discovery',
+        'collector': 'collect_macos',
+    },
+    'macos_fseventsd': {
+        'name': 'macOS FSEvents',
+        'description': 'File system events log',
+        'category': 'macos',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1070.004',
+        'kill_chain_phase': 'defense_evasion',
+        'collector': 'collect_macos',
+    },
+    'macos_safari_history': {
+        'name': 'macOS Safari History',
+        'description': 'Safari browser history database',
+        'category': 'macos',
+        'paths': [],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1185',
+        'kill_chain_phase': 'collection',
+        'collector': 'collect_macos',
+    },
+    'macos_keychain': {
+        'name': 'macOS Keychain',
+        'description': 'User and system keychain files',
+        'category': 'macos',
+        'paths': [],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1555.001',
+        'kill_chain_phase': 'credential_access',
+        'collector': 'collect_macos',
+    },
 }
 
 
@@ -1289,6 +1493,92 @@ class LocalMFTCollector(_LocalMFTBase):
                             yield result
                             if progress_callback:
                                 progress_callback(result[0])
+
+        elif collector_type == 'collect_recycle_bin':
+            # [2026-01-20] 휴지통 전용 수집 - 시스템 폴더 권한 처리 개선
+            # Windows 경로 형식 사용 (백슬래시)
+            recycle_bin_path = None
+
+            # 대소문자 변형 시도 (Windows는 대소문자 구분 안함, 하지만 명시적으로 시도)
+            variants = ['$Recycle.Bin', '$RECYCLE.BIN', '$recycle.bin', 'RECYCLER']
+            for variant in variants:
+                # 백슬래시 사용
+                test_path = Path(f"{self.volume}:\\{variant}")
+                logger.debug(f"[RecycleBin] Checking path: {test_path}")
+                try:
+                    if test_path.exists():
+                        recycle_bin_path = test_path
+                        logger.info(f"[RecycleBin] Found at: {recycle_bin_path}")
+                        break
+                except (PermissionError, OSError) as e:
+                    logger.debug(f"[RecycleBin] Cannot check {test_path}: {e}")
+                    continue
+
+            if recycle_bin_path is None:
+                logger.warning(f"[RecycleBin] $Recycle.Bin not found on {self.volume}:")
+                _debug_print(f"[RecycleBin] $Recycle.Bin not found on {self.volume}:")
+            else:
+                try:
+                    # 각 사용자 SID 폴더 순회
+                    sid_folders = list(recycle_bin_path.iterdir())
+                    logger.info(f"[RecycleBin] Found {len(sid_folders)} folders in Recycle Bin")
+
+                    for sid_folder in sid_folders:
+                        if sid_folder.is_dir() and sid_folder.name.startswith('S-1-'):
+                            logger.debug(f"[RecycleBin] Processing SID folder: {sid_folder.name}")
+                            _debug_print(f"[RecycleBin] Processing SID folder: {sid_folder.name}")
+                            try:
+                                # $I 파일 (메타데이터) 및 $R 파일 수집
+                                entries = list(sid_folder.iterdir())
+                                logger.debug(f"[RecycleBin] Found {len(entries)} entries in {sid_folder.name}")
+
+                                for entry in entries:
+                                    # $I 파일 (메타데이터) 수집
+                                    if entry.name.startswith('$I') and entry.is_file():
+                                        try:
+                                            result = self._copy_file_with_metadata(
+                                                str(entry), artifact_dir, artifact_type
+                                            )
+                                            if result:
+                                                collected_count += 1
+                                                logger.info(f"[RecycleBin] Collected: {entry.name}")
+                                                yield result
+                                                if progress_callback:
+                                                    progress_callback(result[0])
+
+                                                # 해당 $R 파일도 수집 시도
+                                                r_file = sid_folder / entry.name.replace('$I', '$R')
+                                                if r_file.exists():
+                                                    r_result = self._copy_file_with_metadata(
+                                                        str(r_file), artifact_dir, artifact_type
+                                                    )
+                                                    if r_result:
+                                                        collected_count += 1
+                                                        logger.info(f"[RecycleBin] Collected: {r_file.name}")
+                                                        yield r_result
+                                        except PermissionError as pe:
+                                            logger.warning(f"[RecycleBin] Permission denied: {entry} - {pe}")
+                                            _debug_print(f"[RecycleBin] Permission denied: {entry} - {pe}")
+                                            continue
+                                        except OSError as oe:
+                                            logger.warning(f"[RecycleBin] OS error: {entry} - {oe}")
+                                            _debug_print(f"[RecycleBin] OS error: {entry} - {oe}")
+                                            continue
+                            except PermissionError as pe:
+                                logger.warning(f"[RecycleBin] Cannot access SID folder: {sid_folder} - {pe}")
+                                _debug_print(f"[RecycleBin] Cannot access SID folder: {sid_folder}")
+                                continue
+                            except OSError as oe:
+                                logger.warning(f"[RecycleBin] OS error on SID folder: {sid_folder} - {oe}")
+                                continue
+
+                    logger.info(f"[RecycleBin] Collection complete: {collected_count} files")
+
+                except PermissionError as e:
+                    logger.error(f"[RecycleBin] Cannot access Recycle Bin: {e} - requires admin privileges")
+                    _debug_print(f"[RecycleBin] Cannot access Recycle Bin: {e}")
+                except OSError as e:
+                    logger.error(f"[RecycleBin] OS error accessing Recycle Bin: {e}")
 
         else:
             # 기본: paths 있으면 수집 시도
@@ -1870,6 +2160,16 @@ class ArtifactCollector:
             )
         elif category == 'ios':
             yield from self._collect_ios(
+                artifact_type, artifact_info, artifact_dir,
+                progress_callback, **kwargs
+            )
+        elif category == 'linux':
+            yield from self._collect_linux(
+                artifact_type, artifact_info, artifact_dir,
+                progress_callback, **kwargs
+            )
+        elif category == 'macos':
+            yield from self._collect_macos(
                 artifact_type, artifact_info, artifact_dir,
                 progress_callback, **kwargs
             )
@@ -3268,6 +3568,116 @@ class ArtifactCollector:
 
         except Exception as e:
             _debug_print(f"[iOS] Collection failed for {artifact_type}: {e}")
+
+    # =========================================================================
+    # Linux Forensics Collection Methods
+    # =========================================================================
+
+    def _collect_linux(
+        self,
+        artifact_type: str,
+        artifact_info: Dict[str, Any],
+        artifact_dir: Path,
+        progress_callback: Optional[callable],
+        **kwargs
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Collect Linux forensics artifacts.
+
+        Args:
+            artifact_type: Type of Linux artifact (e.g., 'linux_auth_log')
+            artifact_info: Artifact configuration
+            artifact_dir: Output directory
+            progress_callback: Progress callback
+            **kwargs: target_root for mounted filesystem (default: '/')
+        """
+        if not LINUX_AVAILABLE or LinuxCollector is None:
+            _debug_print(f"[LINUX] LinuxCollector not available")
+            return
+
+        target_root = kwargs.get('target_root', '/')
+
+        try:
+            collector = LinuxCollector(str(artifact_dir), target_root=target_root)
+
+            for relative_path, content, metadata in collector.collect(artifact_type):
+                # Write content to output directory
+                output_path = artifact_dir / relative_path.replace('/', os.sep)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(content)
+
+                # Build result metadata
+                file_metadata = {
+                    'artifact_type': artifact_type,
+                    'collection_method': 'linux_collector',
+                    'target_root': target_root,
+                    'collected_at': datetime.utcnow().isoformat(),
+                    'file_size': len(content),
+                    **metadata
+                }
+
+                yield str(output_path), file_metadata
+
+                if progress_callback:
+                    progress_callback(f"Collected: {relative_path}")
+
+        except Exception as e:
+            _debug_print(f"[LINUX] Collection failed for {artifact_type}: {e}")
+
+    # =========================================================================
+    # macOS Forensics Collection Methods
+    # =========================================================================
+
+    def _collect_macos(
+        self,
+        artifact_type: str,
+        artifact_info: Dict[str, Any],
+        artifact_dir: Path,
+        progress_callback: Optional[callable],
+        **kwargs
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Collect macOS forensics artifacts.
+
+        Args:
+            artifact_type: Type of macOS artifact (e.g., 'macos_launch_agent')
+            artifact_info: Artifact configuration
+            artifact_dir: Output directory
+            progress_callback: Progress callback
+            **kwargs: target_root for mounted filesystem (default: '/')
+        """
+        if not MACOS_AVAILABLE or macOSCollector is None:
+            _debug_print(f"[MACOS] macOSCollector not available")
+            return
+
+        target_root = kwargs.get('target_root', '/')
+
+        try:
+            collector = macOSCollector(str(artifact_dir), target_root=target_root)
+
+            for relative_path, content, metadata in collector.collect(artifact_type):
+                # Write content to output directory
+                output_path = artifact_dir / relative_path.replace('/', os.sep)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(content)
+
+                # Build result metadata
+                file_metadata = {
+                    'artifact_type': artifact_type,
+                    'collection_method': 'macos_collector',
+                    'target_root': target_root,
+                    'collected_at': datetime.utcnow().isoformat(),
+                    'file_size': len(content),
+                    **metadata
+                }
+
+                yield str(output_path), file_metadata
+
+                if progress_callback:
+                    progress_callback(f"Collected: {relative_path}")
+
+        except Exception as e:
+            _debug_print(f"[MACOS] Collection failed for {artifact_type}: {e}")
 
     def _get_vss_path(self, file_path: str) -> Optional[str]:
         """Get path to file in latest Volume Shadow Copy"""
