@@ -15,17 +15,27 @@ iOS 기기 포렌식 수집 모듈.
 - mobile_ios_location: 위치 기록
 - mobile_ios_backup: 백업 메타데이터
 
+[2026-01 신규 - 메신저 앱]
+- mobile_ios_kakaotalk: KakaoTalk 메시지 (원본, 복호화는 서버에서)
+- mobile_ios_kakaotalk_attachments: KakaoTalk 첨부파일
+- mobile_ios_kakaotalk_profile: KakaoTalk 프로필/친구 목록
+
 [기기 직접 연결 - libimobiledevice]
 - mobile_ios_device_info: 기기 정보
 - mobile_ios_syslog: 시스템 로그
 - mobile_ios_crash_logs: 크래시 리포트
 - mobile_ios_installed_apps: 설치된 앱 목록
 - mobile_ios_device_backup: 새 백업 생성
+- mobile_ios_unified_logs: Apple Unified Logs (sysdiagnose)
 
 Requirements:
     - biplist>=1.0.3 (for binary plist parsing)
     - plistlib (stdlib)
     - libimobiledevice (optional, for device connection)
+
+License:
+    - This module is open source and uses libimobiledevice (LGPL-2.1)
+    - Decryption logic is NOT included here (server-only)
 """
 import os
 import re
@@ -178,6 +188,50 @@ IOS_ARTIFACT_TYPES = {
         'requires_device': True,
         'tool': 'idevicebackup2',
         'collection_method': 'device',
+    },
+
+    # =========================================================================
+    # [2026-01] Messaging App Artifacts
+    # =========================================================================
+
+    'mobile_ios_kakaotalk': {
+        'name': 'KakaoTalk Messages (Raw)',
+        'description': 'KakaoTalk 메시지 데이터베이스 (원본, 복호화는 서버에서 처리)',
+        'manifest_domain': 'AppDomain-com.kakao.KakaoTalk',
+        'manifest_path': 'Documents/Message/Message.sqlite',
+        # NOTE: Database is encrypted. Decryption is handled server-side only.
+        # Collector extracts raw file without decryption.
+    },
+    'mobile_ios_kakaotalk_attachments': {
+        'name': 'KakaoTalk Attachments',
+        'description': 'KakaoTalk 첨부파일 (이미지, 동영상, 파일)',
+        'manifest_domain': 'AppDomain-com.kakao.KakaoTalk',
+        'manifest_path': 'Documents/Message/Attachment/*',
+        'pattern': True,
+    },
+    'mobile_ios_kakaotalk_profile': {
+        'name': 'KakaoTalk Profile Data',
+        'description': 'KakaoTalk 프로필 및 친구 목록',
+        'manifest_domain': 'AppDomain-com.kakao.KakaoTalk',
+        'manifest_paths': [
+            'Library/Preferences/com.kakao.KakaoTalk.plist',
+            'Documents/Profile.sqlite',
+            'Documents/Talk.sqlite',
+        ],
+    },
+
+    # =========================================================================
+    # [2026-01] Apple Unified Logs (sysdiagnose)
+    # =========================================================================
+
+    'mobile_ios_unified_logs': {
+        'name': 'Apple Unified Logs',
+        'description': 'Apple Unified Logging System (sysdiagnose 로그)',
+        'requires_device': True,
+        'tool': 'sysdiagnose',
+        'collection_method': 'device',
+        # NOTE: Requires sysdiagnose archive from device
+        # Settings > Privacy > Analytics > Analytics Data
     },
 }
 
