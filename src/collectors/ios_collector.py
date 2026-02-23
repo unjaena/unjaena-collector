@@ -1,40 +1,45 @@
 """
 iOS Forensics Collector Module
 
-iOS 기기 포렌식 수집 모듈.
-- iTunes/Finder 백업 파싱
-- libimobiledevice 기기 직접 연결 (idevice 명령어)
+iOS device forensic collection module.
+- iTunes/Finder backup parsing
+- pymobiledevice3 direct device connection (Pure Python)
 
-수집 가능 아티팩트:
-[백업 기반]
-- mobile_ios_sms: iMessage/SMS 메시지
-- mobile_ios_call: 통화 기록
-- mobile_ios_contacts: 연락처
-- mobile_ios_app: 앱 데이터
-- mobile_ios_safari: Safari 브라우저 데이터
-- mobile_ios_location: 위치 기록
-- mobile_ios_backup: 백업 메타데이터
+Collectible Artifacts:
+[Backup-based]
+- mobile_ios_sms: iMessage/SMS messages
+- mobile_ios_call: Call history
+- mobile_ios_contacts: Contacts
+- mobile_ios_safari: Safari browser data
+- mobile_ios_location: Location history
+- mobile_ios_backup: Backup metadata
 
-[2026-01 신규 - 메신저 앱]
-- mobile_ios_kakaotalk: KakaoTalk 메시지 (원본, 복호화는 서버에서)
-- mobile_ios_kakaotalk_attachments: KakaoTalk 첨부파일
-- mobile_ios_kakaotalk_profile: KakaoTalk 프로필/친구 목록
+[2026-01 New - Messenger Apps]
+- mobile_ios_kakaotalk: KakaoTalk messages
+- mobile_ios_whatsapp: WhatsApp messages
+- mobile_ios_messenger: Facebook Messenger messages
+- mobile_ios_telegram: Telegram messages
+- mobile_ios_line: LINE messages
+- mobile_ios_instagram: Instagram messages
+- mobile_ios_skype: Skype messages
+- mobile_ios_snapchat: Snapchat messages
 
-[기기 직접 연결 - libimobiledevice]
-- mobile_ios_device_info: 기기 정보
-- mobile_ios_syslog: 시스템 로그
-- mobile_ios_crash_logs: 크래시 리포트
-- mobile_ios_installed_apps: 설치된 앱 목록
-- mobile_ios_device_backup: 새 백업 생성
+[Direct Device Connection - pymobiledevice3]
+- mobile_ios_device_info: Device information
+- mobile_ios_syslog: System log
+- mobile_ios_crash_logs: Crash reports
+- mobile_ios_installed_apps: Installed app list
+- mobile_ios_device_backup: Create new backup
 - mobile_ios_unified_logs: Apple Unified Logs (sysdiagnose)
 
 Requirements:
     - biplist>=1.0.3 (for binary plist parsing)
     - plistlib (stdlib)
-    - libimobiledevice (optional, for device connection)
+    - pymobiledevice3 (optional, for device connection)
 
 License:
-    - This module is open source and uses libimobiledevice (LGPL-2.1)
+    - This module is open source
+    - pymobiledevice3 is GPL-3.0 licensed
     - Decryption logic is NOT included here (server-only)
 """
 import os
@@ -45,6 +50,7 @@ import shutil
 import plistlib
 import subprocess
 import threading
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Generator, Tuple, Dict, Any, Optional, List, Callable
@@ -59,100 +65,8 @@ except ImportError:
 
 
 # =============================================================================
-# libimobiledevice Tools Path Resolution
+# pymobiledevice3 Availability Check
 # =============================================================================
-
-def get_bundled_tools_dir() -> Optional[Path]:
-    """
-    Get path to bundled libimobiledevice tools directory.
-
-    Returns:
-        Path to bundled tools directory, or None if not found
-    """
-    # Check relative to this file: collectors/ios_collector.py -> tools/libimobiledevice/
-    collector_dir = Path(__file__).parent  # collectors/
-    src_dir = collector_dir.parent          # src/
-    collector_root = src_dir.parent         # collector/
-    bundled_dir = collector_root / "tools" / "libimobiledevice"
-
-    if bundled_dir.exists():
-        return bundled_dir
-
-    # Alternative: check relative to working directory
-    alt_bundled = Path("tools") / "libimobiledevice"
-    if alt_bundled.exists():
-        return alt_bundled
-
-    return None
-
-
-def get_tool_path(tool_name: str) -> Optional[str]:
-    """
-    Get full path to a libimobiledevice tool.
-
-    Priority:
-    1. Bundled tools (collector/tools/libimobiledevice/)
-    2. System PATH
-
-    Args:
-        tool_name: Name of tool (e.g., 'ideviceinfo')
-
-    Returns:
-        Full path to tool executable, or tool name if using system PATH
-    """
-    # Check bundled directory first
-    bundled_dir = get_bundled_tools_dir()
-    if bundled_dir:
-        if os.name == 'nt':
-            tool_path = bundled_dir / f"{tool_name}.exe"
-        else:
-            tool_path = bundled_dir / tool_name
-
-        if tool_path.exists():
-            return str(tool_path)
-
-    # Fall back to system PATH
-    return tool_name
-
-
-# Check for libimobiledevice tools
-def check_libimobiledevice_available() -> Dict[str, bool]:
-    """
-    Check availability of libimobiledevice tools.
-
-    Checks bundled directory first, then system PATH.
-    """
-    tools = {
-        'idevice_id': False,
-        'ideviceinfo': False,
-        'idevicesyslog': False,
-        'idevicecrashreport': False,
-        'ideviceinstaller': False,
-        'idevicebackup2': False,
-    }
-
-    bundled_dir = get_bundled_tools_dir()
-    if bundled_dir:
-        _debug_print(f"[iOS] Bundled libimobiledevice found: {bundled_dir}")
-
-    for tool in tools:
-        tool_path = get_tool_path(tool)
-        try:
-            cmd = [tool_path, '--version'] if tool != 'idevice_id' else [tool_path, '-l']
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            )
-            tools[tool] = result.returncode == 0 or b'usage' in result.stderr.lower()
-            if tools[tool]:
-                _debug_print(f"[iOS] {tool}: OK ({tool_path})")
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-
-    return tools
-
 
 def _debug_print(msg: str) -> None:
     """Debug print (only in verbose mode)"""
@@ -160,13 +74,91 @@ def _debug_print(msg: str) -> None:
         print(msg)
 
 
-LIBIMOBILEDEVICE_TOOLS = check_libimobiledevice_available()
-LIBIMOBILEDEVICE_AVAILABLE = any(LIBIMOBILEDEVICE_TOOLS.values())
+logger = logging.getLogger(__name__)
+
+
+def _validate_ios_file_hash(file_hash: str) -> bool:
+    """
+    [SECURITY] Validate iOS backup file hash format.
+
+    iOS backup files are stored using SHA1 hash of domain-path.
+    Valid format: 40 hexadecimal characters.
+    """
+    if not file_hash:
+        return False
+    # Must be exactly 40 hex characters (SHA1)
+    if not re.match(r'^[a-fA-F0-9]{40}$', file_hash):
+        logger.warning(f"[SECURITY] Invalid iOS file hash format: {file_hash[:50]}")
+        return False
+    return True
+
+
+def _validate_path_within_backup(path: Path, backup_base: Path) -> bool:
+    """
+    [SECURITY] Validate that resolved path stays within backup directory.
+
+    Prevents symlink attacks and path traversal.
+    """
+    try:
+        resolved_path = path.resolve()
+        resolved_base = backup_base.resolve()
+        resolved_path.relative_to(resolved_base)
+        return True
+    except (ValueError, OSError):
+        logger.warning(f"[SECURITY] Path escape detected: {path}")
+        return False
+
+
+# Windows-invalid filename characters (control chars 0x00-0x1F + reserved chars)
+_INVALID_FILENAME_RE = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
+
+
+def _sanitize_filename(filename: str) -> str:
+    """
+    Replace characters invalid on Windows filesystems with underscores.
+    Handles control characters (tab, null, etc.) and reserved chars (<>:"/\\|?*).
+    """
+    sanitized = _INVALID_FILENAME_RE.sub('_', filename)
+    if sanitized != filename:
+        logger.debug(f"Sanitized filename: '{filename}' -> '{sanitized}'")
+    return sanitized
+
+
+def _derive_forensic_password(udid: str) -> str:
+    """
+    Derive a deterministic forensic backup password from device UDID.
+
+    Uses HMAC-SHA256 so the same UDID always produces the same password.
+    This allows recovery after crash: re-derive the password to restore
+    the device's encryption state.
+    """
+    import hmac
+    key = b"ai-df-forensic-collector-v1"
+    digest = hmac.new(key, udid.encode(), hashlib.sha256).hexdigest()
+    return f"f0r_{digest[:20]}"
+
+
+# Check for pymobiledevice3
+PYMOBILEDEVICE3_AVAILABLE = False
+try:
+    from pymobiledevice3.usbmux import list_devices
+    from pymobiledevice3.lockdown import LockdownClient, create_using_usbmux
+    from pymobiledevice3.services.diagnostics import DiagnosticsService
+    from pymobiledevice3.services.syslog import SyslogService
+    from pymobiledevice3.services.crash_reports import CrashReportsManager
+    from pymobiledevice3.services.installation_proxy import InstallationProxyService
+    from pymobiledevice3.services.mobilebackup2 import Mobilebackup2Service
+    PYMOBILEDEVICE3_AVAILABLE = True
+    _debug_print("[iOS] pymobiledevice3 available")
+except ImportError as e:
+    _debug_print(f"[iOS] pymobiledevice3 not available: {e}")
+except Exception as e:
+    _debug_print(f"[iOS] pymobiledevice3 import error: {e}")
 
 
 @dataclass
 class BackupInfo:
-    """iOS 백업 정보"""
+    """iOS backup information"""
     path: Path
     device_name: str
     device_id: str
@@ -175,6 +167,44 @@ class BackupInfo:
     backup_date: datetime
     encrypted: bool
     size_mb: float
+
+
+# =========================================================================
+# Pattern-based collection filtering
+# Only upload files with forensically relevant extensions
+# =========================================================================
+
+# Database/data file extensions (parsers can process these)
+_FORENSIC_EXTENSIONS = {
+    '.db', '.sqlite', '.sqlite3', '.sqlitedb', '.storedata',
+    '.mdb', '.edb', '.ldb',
+    '.dat', '.data',
+    '.plist', '.json', '.xml',
+    '.binarycookies',
+    '.log', '.txt', '.csv',
+}
+
+# Media extensions (for attachment-type artifacts only)
+_MEDIA_EXTENSIONS = {
+    '.jpg', '.jpeg', '.png', '.gif', '.heic', '.heif', '.webp', '.bmp', '.tiff',
+    '.mp4', '.mov', '.m4v', '.avi', '.3gp',
+    '.mp3', '.m4a', '.aac', '.wav', '.caf', '.amr', '.opus',
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.zip', '.rar', '.7z',
+    '.vcf',
+}
+
+# Attachment artifacts - allow media files in addition to DB files
+_ATTACHMENT_ARTIFACTS = {
+    'mobile_ios_whatsapp_attachments',
+    'mobile_ios_fb_messenger_attachments',
+    'mobile_ios_telegram_attachments',
+    'mobile_ios_line_attachments',
+    'mobile_ios_snapchat_memories',
+}
+
+# Artifact types to skip entirely (reserved for future use)
+_SKIP_ARTIFACTS = set()
 
 
 # iOS artifact type definitions
@@ -197,12 +227,6 @@ IOS_ARTIFACT_TYPES = {
         'manifest_domain': 'HomeDomain',
         'manifest_path': 'Library/AddressBook/AddressBook.sqlitedb',
     },
-    'mobile_ios_app': {
-        'name': 'App Data',
-        'description': 'Application data and preferences',
-        'manifest_domain': 'AppDomain-*',
-        'pattern': True,
-    },
     'mobile_ios_safari': {
         'name': 'Safari',
         'description': 'Browser history, bookmarks, and tabs',
@@ -212,6 +236,30 @@ IOS_ARTIFACT_TYPES = {
             'Library/Safari/Bookmarks.db',
             'Library/Safari/BrowserState.db',
         ],
+    },
+    'mobile_ios_safari_tracking': {
+        'name': 'Safari Domain Tracking',
+        'description': 'Safari ITP observations (domain visits, redirects)',
+        'manifest_domain': 'AppDomain-com.apple.mobilesafari',
+        'manifest_path': 'Library/WebKit/WebsiteData/ResourceLoadStatistics/observations.db',
+    },
+    'mobile_ios_chrome_tracking': {
+        'name': 'Chrome Domain Tracking',
+        'description': 'Chrome WebKit ITP observations (domain visits, redirects)',
+        'manifest_domain': 'AppDomain-com.google.chrome.ios',
+        'manifest_path': 'Library/WebKit/WebsiteData/ResourceLoadStatistics/observations.db',
+    },
+    'mobile_ios_naver_search': {
+        'name': 'Naver Search History',
+        'description': 'Naver Search app browsing history, bookmarks, QR scans',
+        'manifest_domain': 'AppDomain-com.nhncorp.NaverSearch',
+        'manifest_path': 'Documents/NSearch/history.db',
+    },
+    'mobile_ios_navermap_history': {
+        'name': 'NaverMap History',
+        'description': 'NaverMap search and route history with GPS coordinates',
+        'manifest_domain': 'AppDomain-com.nhncorp.NaverMap',
+        'manifest_path': 'Documents/NMap/cache/History.sqlite',
     },
     'mobile_ios_location': {
         'name': 'Location History',
@@ -226,42 +274,42 @@ IOS_ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # Device Direct Connection Artifacts (libimobiledevice)
+    # Device Direct Connection Artifacts (pymobiledevice3)
     # =========================================================================
 
     'mobile_ios_device_info': {
         'name': 'Device Information',
         'description': 'iOS device info (UDID, model, iOS version)',
         'requires_device': True,
-        'tool': 'ideviceinfo',
+        'service': 'lockdown',
         'collection_method': 'device',
     },
     'mobile_ios_syslog': {
         'name': 'System Log',
         'description': 'Real-time iOS system log',
         'requires_device': True,
-        'tool': 'idevicesyslog',
+        'service': 'syslog',
         'collection_method': 'device',
     },
     'mobile_ios_crash_logs': {
         'name': 'Crash Reports',
         'description': 'Application crash reports',
         'requires_device': True,
-        'tool': 'idevicecrashreport',
+        'service': 'crash_reports',
         'collection_method': 'device',
     },
     'mobile_ios_installed_apps': {
         'name': 'Installed Apps',
         'description': 'List of installed applications',
         'requires_device': True,
-        'tool': 'ideviceinstaller',
+        'service': 'installation_proxy',
         'collection_method': 'device',
     },
     'mobile_ios_device_backup': {
         'name': 'Create Backup',
         'description': 'Create new iOS backup from device',
         'requires_device': True,
-        'tool': 'idevicebackup2',
+        'service': 'mobilebackup2',
         'collection_method': 'device',
     },
 
@@ -271,28 +319,150 @@ IOS_ARTIFACT_TYPES = {
 
     'mobile_ios_kakaotalk': {
         'name': 'KakaoTalk Messages (Raw)',
-        'description': 'KakaoTalk 메시지 데이터베이스 (원본, 복호화는 서버에서 처리)',
-        'manifest_domain': 'AppDomain-com.kakao.KakaoTalk',
-        'manifest_path': 'Documents/Message/Message.sqlite',
+        'description': 'KakaoTalk message database (raw, decryption handled on server)',
+        'manifest_domain': 'AppDomain-com.iwilab.KakaoTalk',
+        'manifest_path': 'Library/PrivateDocuments/Message.sqlite',
         # NOTE: Database is encrypted. Decryption is handled server-side only.
         # Collector extracts raw file without decryption.
     },
-    'mobile_ios_kakaotalk_attachments': {
-        'name': 'KakaoTalk Attachments',
-        'description': 'KakaoTalk 첨부파일 (이미지, 동영상, 파일)',
-        'manifest_domain': 'AppDomain-com.kakao.KakaoTalk',
-        'manifest_path': 'Documents/Message/Attachment/*',
-        'pattern': True,
-    },
+    # mobile_ios_kakaotalk_attachments: REMOVED (2026-02-22)
+    # Filenames are random hashes with no chat/sender context linkage.
+    # Large volume (GBs) with minimal forensic value.
     'mobile_ios_kakaotalk_profile': {
         'name': 'KakaoTalk Profile Data',
-        'description': 'KakaoTalk 프로필 및 친구 목록',
-        'manifest_domain': 'AppDomain-com.kakao.KakaoTalk',
+        'description': 'KakaoTalk profile, friend list, and contact data',
+        'manifest_domain': 'AppDomain-com.iwilab.KakaoTalk',
         'manifest_paths': [
-            'Library/Preferences/com.kakao.KakaoTalk.plist',
-            'Documents/Profile.sqlite',
-            'Documents/Talk.sqlite',
+            'Library/PrivateDocuments/Talk.sqlite',
+            'Library/PrivateDocuments/DrawerContact.sqlite',
         ],
+    },
+
+    # WhatsApp
+    # NOTE: WhatsApp stores ALL databases in AppDomainGroup (shared container),
+    # NOT in AppDomain. AppDomain only has preferences/cookies.
+    'mobile_ios_whatsapp': {
+        'name': 'WhatsApp Messages',
+        'description': 'WhatsApp message database',
+        'manifest_domain': 'AppDomainGroup-group.net.whatsapp.WhatsApp.shared',
+        'manifest_paths': [
+            'ChatStorage.sqlite',
+            'ContactsV2.sqlite',
+            'CallHistory.sqlite',
+        ],
+    },
+    'mobile_ios_whatsapp_attachments': {
+        'name': 'WhatsApp Attachments',
+        'description': 'WhatsApp attachments (images, videos, voice)',
+        'manifest_domain': 'AppDomainGroup-group.net.whatsapp.WhatsApp.shared',
+        'manifest_path': 'Message/Media/*',
+        'pattern': True,
+    },
+
+    # Facebook Messenger
+    'mobile_ios_fb_messenger': {
+        'name': 'Facebook Messenger Messages',
+        'description': 'Facebook Messenger message database',
+        'manifest_domain': 'AppDomain-com.facebook.Messenger',
+        'manifest_paths': [
+            'lightspeed-*.db',
+            'messenger_*.db',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_fb_messenger_attachments': {
+        'name': 'Facebook Messenger Attachments',
+        'description': 'Facebook Messenger attachments',
+        'manifest_domain': 'AppDomain-com.facebook.Messenger',
+        'manifest_path': 'Attachments/*',
+        'pattern': True,
+    },
+
+    # Telegram
+    # NOTE: Telegram iOS does NOT use SQLite for chat storage.
+    # It uses custom binary format (LMDB). Chat data is stored server-side
+    # and only cached locally in non-standard formats.
+    # We collect available metadata/caches; actual messages require LMDB parser.
+    'mobile_ios_telegram': {
+        'name': 'Telegram Data',
+        'description': 'Telegram local data (LMDB format, not SQLite)',
+        'manifest_domain': 'AppDomain-ph.telegra.Telegraph',
+        'manifest_paths': [
+            'Documents/legacy/photoeditorcache_v1/data.mdb',
+            'Library/Preferences/ph.telegra.Telegraph.plist',
+            'Library/Cookies/Cookies.binarycookies',
+        ],
+    },
+    'mobile_ios_telegram_attachments': {
+        'name': 'Telegram Cached Media',
+        'description': 'Telegram cached media and painting data',
+        'manifest_domain': 'AppDomain-ph.telegra.Telegraph',
+        'manifest_path': 'Documents/legacy/*',
+        'pattern': True,
+    },
+
+    # LINE
+    # NOTE: LINE stores databases in AppDomainGroup (shared container),
+    # NOT in AppDomain-jp.naver.line.
+    'mobile_ios_line': {
+        'name': 'LINE Messages',
+        'description': 'LINE message database',
+        'manifest_domain': 'AppDomainGroup-group.com.linecorp.line',
+        'manifest_paths': [
+            'Library/Application Support/PrivateStore/P_*/Messages/Line.sqlite',
+            'Library/Application Support/PrivateStore/P_*/Messages/UserDataModel.sqlite',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_line_attachments': {
+        'name': 'LINE Attachments',
+        'description': 'LINE attachments',
+        'manifest_domain': 'AppDomainGroup-group.com.linecorp.line',
+        'manifest_path': 'Library/Application Support/PrivateStore/P_*/Messages/Data/*',
+        'pattern': True,
+    },
+
+    # Instagram
+    'mobile_ios_instagram': {
+        'name': 'Instagram Messages',
+        'description': 'Instagram DM message database',
+        'manifest_domain': 'AppDomain-com.burbn.instagram',
+        'manifest_paths': [
+            'direct_*.db',
+            'message_*.db',
+        ],
+        'pattern': True,
+    },
+
+    # Skype
+    'mobile_ios_skype': {
+        'name': 'Skype Messages',
+        'description': 'Skype message database',
+        'manifest_domain': 'AppDomain-com.skype.skype',
+        'manifest_paths': [
+            's4l-*.db',
+            'main.db',
+        ],
+        'pattern': True,
+    },
+
+    # Snapchat
+    'mobile_ios_snapchat': {
+        'name': 'Snapchat Messages',
+        'description': 'Snapchat messages and Memories',
+        'manifest_domain': 'AppDomain-com.toyopagroup.picaboo',
+        'manifest_paths': [
+            'arroyo.db',
+            'snapchat.db',
+            'contentManager.db',
+        ],
+    },
+    'mobile_ios_snapchat_memories': {
+        'name': 'Snapchat Memories',
+        'description': 'Snapchat Memories media',
+        'manifest_domain': 'AppDomain-com.toyopagroup.picaboo',
+        'manifest_path': 'SCContent/*',
+        'pattern': True,
     },
 
     # =========================================================================
@@ -301,12 +471,870 @@ IOS_ARTIFACT_TYPES = {
 
     'mobile_ios_unified_logs': {
         'name': 'Apple Unified Logs',
-        'description': 'Apple Unified Logging System (sysdiagnose 로그)',
+        'description': 'Apple Unified Logging System (sysdiagnose logs)',
         'requires_device': True,
         'tool': 'sysdiagnose',
         'collection_method': 'device',
         # NOTE: Requires sysdiagnose archive from device
         # Settings > Privacy > Analytics > Analytics Data
+    },
+
+    # =========================================================================
+    # [2026-02-03] Additional Global Messenger Apps
+    # NOTE: Parsing/decryption performed on server
+    # =========================================================================
+
+    'mobile_ios_wechat': {
+        'name': 'WeChat Messages',
+        'description': 'WeChat messages (SQLCipher encrypted, 1.41B MAU)',
+        'manifest_domain': 'AppDomain-com.tencent.xin',
+        'manifest_paths': [
+            'Documents/*/DB/MM.sqlite',
+            'Documents/*/DB/WCDB_Contact.sqlite',
+            # Messages are sharded across multiple SQLite files
+            'Documents/*/DB/message_*.sqlite',
+            'Documents/*/fts/fts_message.db',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_viber': {
+        'name': 'Viber Messages',
+        'description': 'Viber messages and call history (230M MAU)',
+        'manifest_domain': 'AppDomain-com.viber',
+        'manifest_paths': [
+            'Contacts.data',
+            'ViberDatabase/*',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_signal': {
+        'name': 'Signal Messages',
+        'description': 'Signal messages (SQLCipher + GRDB encrypted, 100M MAU)',
+        'manifest_domain': 'AppDomain-org.whispersystems.signal',
+        'manifest_paths': [
+            'grdb/signal.sqlite',
+            'signal.sqlite',
+        ],
+    },
+    'mobile_ios_discord': {
+        'name': 'Discord Cache',
+        'description': 'Discord local cache (cloud-based, 200M+ MAU)',
+        'manifest_domain': 'AppDomain-com.hammerandchisel.discord',
+        'manifest_paths': [
+            'Library/Caches/*',
+            'Documents/*',
+        ],
+        'pattern': True,
+    },
+
+    # =========================================================================
+    # [2026-02-03] Additional Global SNS Apps
+    # NOTE: Parsing performed on server
+    # =========================================================================
+
+    'mobile_ios_facebook': {
+        'name': 'Facebook Posts',
+        'description': 'Facebook posts, timeline (3.05B MAU)',
+        'manifest_domain': 'AppDomain-com.facebook.Facebook',
+        'manifest_paths': [
+            'fb_posts.db',
+            'FBHomeDB.db',
+            'interstitial_data.db',
+        ],
+    },
+    'mobile_ios_tiktok': {
+        'name': 'TikTok Data',
+        'description': 'TikTok video metadata and DM (1.5B MAU)',
+        'manifest_domain': 'AppDomain-com.zhiliaoapp.musically',
+        'manifest_paths': [
+            'Documents/db*.sqlite',
+            'Documents/AwemeIM*.db',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_reddit': {
+        'name': 'Reddit Data',
+        'description': 'Reddit posts, comments, DM (1.1B MAU)',
+        'manifest_domain': 'AppDomain-com.reddit.Reddit',
+        'manifest_paths': [
+            '*.db',
+            '*.sqlite',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_twitter': {
+        'name': 'Twitter/X Data',
+        'description': 'Twitter/X tweets, DM (586M MAU)',
+        'manifest_domain': 'AppDomain-com.atebits.Tweetie2',
+        'manifest_paths': [
+            '*.db',
+            'TwitterDatabase*',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_pinterest': {
+        'name': 'Pinterest Data',
+        'description': 'Pinterest pins, boards (553M MAU)',
+        'manifest_domain': 'AppDomain-pinterest',
+        'manifest_paths': [
+            '*.sqlite',
+            'Cache.db',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_linkedin': {
+        'name': 'LinkedIn Data',
+        'description': 'LinkedIn connections, messages (386M MAU)',
+        'manifest_domain': 'AppDomain-com.linkedin.LinkedIn',
+        'manifest_paths': [
+            '*.db',
+            'LinkedInDatabase*',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_threads': {
+        'name': 'Threads Data',
+        'description': 'Threads posts, replies (320M MAU, Meta)',
+        'manifest_domain': 'AppDomain-com.burbn.barcelona',
+        'manifest_paths': [
+            '*.db',
+            'threads_*.sqlite',
+        ],
+        'pattern': True,
+    },
+
+    # =========================================================================
+    # [2026-02-09] P0 - Core iOS System Artifacts
+    # =========================================================================
+
+    'mobile_ios_notes': {
+        'name': 'Notes',
+        'description': 'Apple Notes app data',
+        'manifest_domain': 'AppDomainGroup-group.com.apple.notes',
+        'manifest_path': 'NoteStore.sqlite',
+    },
+    'mobile_ios_photos': {
+        'name': 'Photos Database',
+        'description': 'Photo library metadata and albums',
+        'manifest_domain': 'MediaDomain',
+        'manifest_path': 'PhotoData/Photos.sqlite',
+    },
+    'mobile_ios_calendar': {
+        'name': 'Calendar',
+        'description': 'Calendar events and reminders',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/Calendar/Calendar.sqlitedb',
+    },
+    'mobile_ios_reminders': {
+        'name': 'Reminders',
+        'description': 'Reminders app tasks',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/Reminders/Reminders.sqlite',
+    },
+    'mobile_ios_knowledgec': {
+        'name': 'KnowledgeC',
+        'description': 'Device usage and app activity database',
+        'manifest_domain': 'RootDomain',
+        'manifest_path': 'Library/CoreDuet/Knowledge/knowledgeC.db',
+    },
+
+    # =========================================================================
+    # [2026-02-09] P1 - User Behavior Analysis Artifacts
+    # =========================================================================
+
+    'mobile_ios_health': {
+        'name': 'Health Data',
+        'description': 'HealthKit database (encrypted backup only)',
+        'manifest_domain': 'HealthDomain',
+        'manifest_path': 'healthdb_secure.sqlite',
+        'requires_encrypted': True,
+    },
+    'mobile_ios_screentime': {
+        'name': 'Screen Time',
+        'description': 'Screen time usage statistics',
+        'manifest_domain': 'RootDomain',
+        'manifest_path': 'Library/Application Support/com.apple.remotemanagementd/RMAdminStore-Local.sqlite',
+    },
+    'mobile_ios_voicememos': {
+        'name': 'Voice Memos',
+        'description': 'Voice memo recordings metadata',
+        'manifest_domain': 'MediaDomain',
+        'manifest_path': 'Recordings/CloudRecordings.db',
+    },
+    'mobile_ios_maps': {
+        'name': 'Apple Maps',
+        'description': 'Maps search history and recent locations',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/Maps/GeoHistory.mapsdata',
+    },
+    'mobile_ios_safari_bookmarks': {
+        'name': 'Safari Bookmarks',
+        'description': 'Safari bookmarks and reading list',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/Safari/Bookmarks.db',
+    },
+
+    # =========================================================================
+    # [2026-02-09] P2 - Device/Network Artifacts
+    # =========================================================================
+
+    'mobile_ios_wifi': {
+        'name': 'WiFi History',
+        'description': 'Connected WiFi networks (SSID, BSSID, timestamps)',
+        'manifest_domain': 'SystemPreferencesDomain',
+        'manifest_path': 'SystemConfiguration/com.apple.wifi.plist',
+    },
+    'mobile_ios_bluetooth': {
+        'name': 'Bluetooth Devices',
+        'description': 'Paired Bluetooth devices history',
+        'manifest_domain': 'SystemPreferencesDomain',
+        'manifest_path': 'com.apple.MobileBluetooth.devices.plist',
+    },
+    'mobile_ios_findmy': {
+        'name': 'Find My',
+        'description': 'Find My device locations and history',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/com.apple.icloud.searchparty/searchparty.db',
+    },
+    'mobile_ios_wallet': {
+        'name': 'Wallet Passes',
+        'description': 'Wallet passes (boarding passes, tickets, cards)',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/Passes/passes23.sqlite',
+    },
+    'mobile_ios_spotlight': {
+        'name': 'Spotlight Search',
+        'description': 'Spotlight search history and shortcuts',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/Preferences/com.apple.Spotlight.plist',
+    },
+    'mobile_ios_siri': {
+        'name': 'Siri History',
+        'description': 'Siri voice commands and queries',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/Assistant/assistant.sqlite',
+    },
+
+    # =========================================================================
+    # [2026-02-20] WhatsApp Specialized Artifacts
+    # =========================================================================
+
+    'mobile_ios_whatsapp_contacts': {
+        'name': 'WhatsApp Contacts',
+        'description': 'WhatsApp contact database (ContactsV2)',
+        'manifest_domain': 'AppDomainGroup-group.net.whatsapp.WhatsApp.shared',
+        'manifest_path': 'ContactsV2.sqlite',
+    },
+    'mobile_ios_whatsapp_calls': {
+        'name': 'WhatsApp Calls',
+        'description': 'WhatsApp call history database',
+        'manifest_domain': 'AppDomainGroup-group.net.whatsapp.WhatsApp.shared',
+        'manifest_path': 'CallHistory.sqlite',
+    },
+    'mobile_ios_whatsapp_media': {
+        'name': 'WhatsApp Media Metadata',
+        'description': 'WhatsApp media items metadata from ChatStorage',
+        'manifest_domain': 'AppDomainGroup-group.net.whatsapp.WhatsApp.shared',
+        'manifest_path': 'ChatStorage.sqlite',
+    },
+
+    # =========================================================================
+    # [2026-02-20] iOS System DB Artifacts (high forensic value)
+    # =========================================================================
+
+    'mobile_ios_data_usage': {
+        'name': 'Data Usage Statistics',
+        'description': 'Per-app WiFi/cellular data transfer volumes',
+        'manifest_domain': 'WirelessDomain',
+        'manifest_paths': [
+            'Library/Databases/DataUsage.sqlite',
+            'Library/Databases/CellularUsage.db',
+        ],
+    },
+    'mobile_ios_tcc': {
+        'name': 'App Permission Records (TCC)',
+        'description': 'App permission grants for camera, mic, contacts, location',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/TCC/TCC.db',
+    },
+    'mobile_ios_accounts': {
+        'name': 'Configured Accounts',
+        'description': 'iCloud, Google, SNS login accounts on device',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/Accounts/Accounts3.sqlite',
+    },
+    'mobile_ios_app_state': {
+        'name': 'App State',
+        'description': 'App install/run state and last active time',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/FrontBoard/applicationState.db',
+    },
+    'mobile_ios_voicemail': {
+        'name': 'Voicemail',
+        'description': 'Voicemail records with caller and transcription',
+        'manifest_domain': 'HomeDomain',
+        'manifest_path': 'Library/Voicemail/voicemail.db',
+    },
+
+    # =========================================================================
+    # [2026-02-20] iOS System Plist Artifacts (location/network evidence)
+    # =========================================================================
+
+    'mobile_ios_location_services': {
+        'name': 'Location Services Clients',
+        'description': 'Per-app location access authorization and last access time',
+        'manifest_domain': 'RootDomain',
+        'manifest_path': 'Library/Caches/locationd/clients.plist',
+    },
+    'mobile_ios_vpn': {
+        'name': 'VPN Profiles',
+        'description': 'VPN/Network Extension configurations',
+        'manifest_domain': 'SystemPreferencesDomain',
+        'manifest_path': 'com.apple.networkextension.plist',
+    },
+    'mobile_ios_google_search': {
+        'name': 'Google Search History',
+        'description': 'Google Search app query history',
+        'manifest_domain': 'AppDomain-com.google.GoogleMobile',
+        'manifest_path': 'Library/GoogleMobile/searchhistory.db',
+    },
+
+    # =========================================================================
+    # [2026-02-20] Messenger Auxiliary DB Artifacts
+    # =========================================================================
+
+    'mobile_ios_kakaotalk_links': {
+        'name': 'KakaoTalk Shared Links',
+        'description': 'URLs shared in KakaoTalk chats',
+        'manifest_domain': 'AppDomain-com.iwilab.KakaoTalk',
+        'manifest_path': 'Library/PrivateDocuments/link.sqlite',
+    },
+    'mobile_ios_kakaotalk_search': {
+        'name': 'KakaoTalk Search History',
+        'description': 'In-chat search keyword history',
+        'manifest_domain': 'AppDomain-com.iwilab.KakaoTalk',
+        'manifest_path': 'Library/PrivateDocuments/keyword.sqlite',
+    },
+    'mobile_ios_line_openchat': {
+        'name': 'LINE OpenChat',
+        'description': 'LINE OpenChat rooms and messages',
+        'manifest_domain': 'AppDomainGroup-group.com.linecorp.line',
+        'manifest_paths': [
+            'Library/Application Support/PrivateStore/P_*/LineSquare.sqlite',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_line_events': {
+        'name': 'LINE Events',
+        'description': 'LINE calendar events',
+        'manifest_domain': 'AppDomainGroup-group.com.linecorp.line',
+        'manifest_paths': [
+            'Library/Application Support/PrivateStore/P_*/CalenderEvents.sqlite',
+        ],
+        'pattern': True,
+    },
+    'mobile_ios_wechat_channels': {
+        'name': 'WeChat Channels',
+        'description': 'WeChat Channels/Discover data',
+        'manifest_domain': 'AppDomain-com.tencent.xin',
+        'manifest_paths': [
+            'Documents/*/DB/WCDB_Contact.sqlite',
+            'Documents/*/finder_main.db',
+        ],
+        'pattern': True,
+    },
+
+    # =========================================================================
+    # [2026-02-20] Microsoft Apps
+    # =========================================================================
+
+    'mobile_ios_ms_teams': {
+        'name': 'Microsoft Teams',
+        'description': 'Teams messages and meetings',
+        'manifest_domain': 'AppDomain-com.microsoft.skype.teams',
+        'manifest_paths': [
+            'Library/Application Support/AriaStorage.db',
+            'Library/Application Support/registryDB',
+        ],
+    },
+    'mobile_ios_outlook': {
+        'name': 'Outlook Email',
+        'description': 'Outlook email metadata',
+        'manifest_domain': 'AppDomain-com.microsoft.Office.Outlook',
+        'manifest_paths': [
+            'Library/MainDB/direct-db.sqlite',
+            'Library/MainDB/Outlook.sqlite',
+        ],
+    },
+    'mobile_ios_ms_authenticator': {
+        'name': 'MS Authenticator',
+        'description': 'Microsoft Authenticator credentials',
+        'manifest_domain': 'AppDomain-com.microsoft.azureauthenticator',
+        'manifest_paths': [
+            'Documents/VerifiableCredentialWalletDataModel.sqlite',
+        ],
+    },
+
+    # ================================================================
+    # [2026-02-20] iOS 한국 앱 → 앱별 개별 수집 타입
+    # ================================================================
+
+    # 금융
+    'mobile_ios_kakaobank': {
+        'name': 'KakaoBank',
+        'description': 'KakaoBank mobile banking app data',
+        'manifest_domain': 'AppDomain-com.kakaobank.channel',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_upbit': {
+        'name': 'Upbit',
+        'description': 'Upbit cryptocurrency exchange app data',
+        'manifest_domain': 'AppDomain-com.dunamu.upbit',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_banksalad': {
+        'name': 'BankSalad',
+        'description': 'BankSalad financial management app data',
+        'manifest_domain': 'AppDomain-com.rainist.banksalad2',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_shinhan': {
+        'name': 'ShinhanBank',
+        'description': 'Shinhan Bank mobile banking app data',
+        'manifest_domain': 'AppDomain-com.shinhan.sbank',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_wooribank': {
+        'name': 'WooriBank',
+        'description': 'Woori Bank mobile banking app data',
+        'manifest_domain': 'AppDomain-com.wooribank.smart.npib',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_kbstar': {
+        'name': 'KB Star',
+        'description': 'KB Kookmin Bank mobile banking app data',
+        'manifest_domain': 'AppDomain-com.kbstar.kbbank',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_hanabank': {
+        'name': 'HanaBank',
+        'description': 'Hana Bank mobile banking app data',
+        'manifest_domain': 'AppDomain-com.kebhana.hanapush',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_ibk': {
+        'name': 'IBK',
+        'description': 'IBK Industrial Bank app data',
+        'manifest_domain': 'AppDomain-com.ibk.ios.ionebank',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_nhbank': {
+        'name': 'NH Bank',
+        'description': 'NH Nonghyup Bank app data',
+        'manifest_domain': 'AppDomain-com.nonghyup.nhallonebank',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_kbank': {
+        'name': 'K bank',
+        'description': 'K bank digital bank app data',
+        'manifest_domain': 'AppDomain-com.kbankwith.smartbank',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_kakaopay': {
+        'name': 'KakaoPay',
+        'description': 'KakaoPay mobile payment app data',
+        'manifest_domain': 'AppDomain-com.kakaopay.payapp.store',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_monimo': {
+        'name': 'monimo',
+        'description': 'Samsung Card monimo app data',
+        'manifest_domain': 'AppDomain-com.samsungcard.mpocket',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_hyundaicard': {
+        'name': 'Hyundai Card',
+        'description': 'Hyundai Card app data',
+        'manifest_domain': 'AppDomain-com.hyundaicard.hcappcard',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_kbpay': {
+        'name': 'KB Pay',
+        'description': 'KB Pay card app data',
+        'manifest_domain': 'AppDomain-com.kbcard.cxh.appcard',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_oksavings': {
+        'name': 'OK Savings',
+        'description': 'OK Savings Bank app data',
+        'manifest_domain': 'AppDomain-com.cabsoft.oksavingbank',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_dbsavings': {
+        'name': 'DB Savings',
+        'description': 'DB Savings Bank app data',
+        'manifest_domain': 'AppDomain-com.idbsb.smartbank.ios',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_fint': {
+        'name': 'Fint',
+        'description': 'Fint investment app data',
+        'manifest_domain': 'AppDomain-com.dco.fint',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_hantu': {
+        'name': 'Korea Investment',
+        'description': 'Korea Investment & Securities app data',
+        'manifest_domain': 'AppDomain-com.truefriend.neosmartirenewal',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+
+    # 내비/교통
+    'mobile_ios_tmap': {
+        'name': 'TMAP',
+        'description': 'TMAP navigation history and GPS data',
+        'manifest_domain': 'AppDomain-com.SKTelecom.TMap',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_kakaomap': {
+        'name': 'KakaoMap',
+        'description': 'KakaoMap navigation and location data',
+        'manifest_domain': 'AppDomain-net.daum.maps',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_navermap': {
+        'name': 'NaverMap',
+        'description': 'NaverMap navigation history and GPS coordinates',
+        'manifest_domain': 'AppDomain-com.nhncorp.NaverMap',
+        'manifest_paths': ['*.sqlite'],
+        'pattern': True,
+    },
+    'mobile_ios_kakaobus': {
+        'name': 'KakaoBus',
+        'description': 'KakaoBus transit favorites and stops',
+        'manifest_domain': 'AppDomain-com.kakao.kakaobus',
+        'manifest_paths': ['kakaobus-ios.sqlite'],
+    },
+    'mobile_ios_kakaotaxi': {
+        'name': 'Kakao T',
+        'description': 'Kakao T ride history with GPS coordinates',
+        'manifest_domain': 'AppDomain-com.kakao.kataxi',
+        'manifest_paths': ['*.sqlite'],
+        'pattern': True,
+    },
+    'mobile_ios_kakaometro': {
+        'name': 'KakaoMetro',
+        'description': 'KakaoMetro subway station usage and favorites',
+        'manifest_domain': 'AppDomain-com.kakao.metro',
+        'manifest_paths': ['subwaystation.sqlite'],
+    },
+    'mobile_ios_kpass': {
+        'name': 'K-Pass',
+        'description': 'K-Pass transit card data',
+        'manifest_domain': 'AppDomain-kr.or.kotsa.watc',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_asiana': {
+        'name': 'Asiana Airlines',
+        'description': 'Asiana Airlines app flight data',
+        'manifest_domain': 'AppDomain-com.asiana.asianaapp',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+
+    # 쇼핑/배달
+    'mobile_ios_coupang': {
+        'name': 'Coupang',
+        'description': 'Coupang shopping app user and group data',
+        'manifest_domain': 'AppDomain-com.coupang.Coupang',
+        'manifest_paths': ['*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_baemin': {
+        'name': 'Baemin',
+        'description': 'Baemin delivery order history',
+        'manifest_domain': 'AppDomain-com.jawebs.baedal',
+        'manifest_paths': ['baro_pay_history.db'],
+    },
+    'mobile_ios_karrot': {
+        'name': 'Karrot',
+        'description': 'Karrot (Danggeun Market) trading data',
+        'manifest_domain': 'AppDomain-com.towneers.www',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_coupangeats': {
+        'name': 'Coupang Eats',
+        'description': 'Coupang Eats food delivery data',
+        'manifest_domain': 'AppDomain-com.coupang.coupang-eats',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_yanolja': {
+        'name': 'Yanolja',
+        'description': 'Yanolja accommodation booking data',
+        'manifest_domain': 'AppDomain-com.yanolja.motel',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+
+    # 브라우저
+    'mobile_ios_chrome': {
+        'name': 'Chrome',
+        'description': 'Chrome iOS browsing history, searches, downloads',
+        'manifest_domain': 'AppDomain-com.google.chrome.ios',
+        'manifest_paths': ['History'],
+        'pattern': True,
+    },
+
+    # 이메일
+    'mobile_ios_gmail': {
+        'name': 'Gmail',
+        'description': 'Gmail iOS email metadata',
+        'manifest_domain': 'AppDomain-com.google.Gmail',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+
+    # 오피스
+    'mobile_ios_excel': {
+        'name': 'Excel',
+        'description': 'Microsoft Excel iOS data',
+        'manifest_domain': 'AppDomain-com.microsoft.Office.Excel',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_pages': {
+        'name': 'Pages',
+        'description': 'Apple Pages document data',
+        'manifest_domain': 'AppDomain-com.apple.Pages',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_numbers': {
+        'name': 'Numbers',
+        'description': 'Apple Numbers spreadsheet data',
+        'manifest_domain': 'AppDomain-com.apple.Numbers',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_keynote': {
+        'name': 'Keynote',
+        'description': 'Apple Keynote presentation data',
+        'manifest_domain': 'AppDomain-com.apple.Keynote',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_m365': {
+        'name': 'Microsoft 365',
+        'description': 'Microsoft 365 mobile app data',
+        'manifest_domain': 'AppDomain-com.microsoft.officemobile',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_gdrive': {
+        'name': 'Google Drive',
+        'description': 'Google Drive cloud storage data',
+        'manifest_domain': 'AppDomain-com.google.Drive',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_polaris': {
+        'name': 'Polaris Office',
+        'description': 'Polaris Office document data',
+        'manifest_domain': 'AppDomain-kr.co.infraware.office.link',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+
+    # 스트리밍
+    'mobile_ios_youtube': {
+        'name': 'YouTube',
+        'description': 'YouTube watch and upload history',
+        'manifest_domain': 'AppDomain-com.google.ios.youtube',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_netflix': {
+        'name': 'Netflix',
+        'description': 'Netflix viewing history',
+        'manifest_domain': 'AppDomain-com.netflix.Netflix',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_coupangplay': {
+        'name': 'Coupang Play',
+        'description': 'Coupang Play streaming history',
+        'manifest_domain': 'AppDomain-com.coupang.play',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+
+    # 유틸리티
+    'mobile_ios_jikbang': {
+        'name': 'Jikbang',
+        'description': 'Jikbang real estate search data',
+        'manifest_domain': 'AppDomain-com.chbreeze.jikbang4i',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_dabang': {
+        'name': 'Dabang',
+        'description': 'Dabang real estate search data',
+        'manifest_domain': 'AppDomain-kr.co.station3.Dabang',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_govt24': {
+        'name': 'Government 24',
+        'description': 'Government 24 service data',
+        'manifest_domain': 'AppDomain-kr.go.dcsc.minwon24',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_wetax': {
+        'name': 'Wetax',
+        'description': 'Smart Wetax tax service data',
+        'manifest_domain': 'AppDomain-kr.go.wetax.ios',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_nhis': {
+        'name': 'NHIS',
+        'description': 'National Health Insurance Service data',
+        'manifest_domain': 'AppDomain-kr.or.nhic.www',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_whowho': {
+        'name': 'WhoWho',
+        'description': 'WhoWho caller ID data',
+        'manifest_domain': 'AppDomain-com.ktcs.whowho',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_aparteye': {
+        'name': 'ApartEye',
+        'description': 'ApartEye apartment management data',
+        'manifest_domain': 'AppDomain-aptip.app',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_millie': {
+        'name': 'Millie',
+        'description': 'Millie e-book reading data',
+        'manifest_domain': 'AppDomain-kr.co.millie.MillieShelf',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_metlife': {
+        'name': 'MetLife',
+        'description': 'MetLife insurance app data',
+        'manifest_domain': 'AppDomain-com.metlife.korea.business.ccp',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_papago': {
+        'name': 'Papago',
+        'description': 'Naver Papago translation history',
+        'manifest_domain': 'AppDomain-com.naver.NaverTranslate',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_strava': {
+        'name': 'Strava',
+        'description': 'Strava fitness activity and GPS data',
+        'manifest_domain': 'AppDomain-com.strava.stravaride',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+
+    # ================================================================
+    # [2026-02-23] 누락 앱 추가 (서버 파서 있으나 수집 정의 없던 9개)
+    # ================================================================
+    'mobile_ios_band': {
+        'name': 'BAND',
+        'description': 'BAND community and group messaging app data',
+        'manifest_domain': 'AppDomain-com.nhncorp.m2app',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_starbucks': {
+        'name': 'Starbucks Korea',
+        'description': 'Starbucks Korea order and loyalty card data',
+        'manifest_domain': 'AppDomain-com.starbucks.starbucksKR',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_samjeomssam': {
+        'name': 'Samjeomssam',
+        'description': 'Samjeomssam (삼쩜삼) tax refund service data',
+        'manifest_domain': 'AppDomain-co.jobis.szs',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_soomgo': {
+        'name': 'Soomgo',
+        'description': 'Soomgo (숨고) professional service marketplace data',
+        'manifest_domain': 'AppDomain-com.Soomgo',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_mobilefax': {
+        'name': 'MobileFax',
+        'description': 'SK MobileFax sent/received fax history',
+        'manifest_domain': 'AppDomain-com.sktelink.mobilefax',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_hiworks': {
+        'name': 'HiWorks',
+        'description': 'HiWorks groupware messages and schedule data',
+        'manifest_domain': 'AppDomain-hiworks.co.kr',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_google_slides': {
+        'name': 'Google Slides',
+        'description': 'Google Slides presentation metadata',
+        'manifest_domain': 'AppDomain-com.google.Slides',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_google_docs': {
+        'name': 'Google Docs',
+        'description': 'Google Docs document metadata',
+        'manifest_domain': 'AppDomain-com.google.Docs',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_samsung_card': {
+        'name': 'Samsung Card',
+        'description': 'Samsung Card payment and transaction data',
+        'manifest_domain': 'AppDomain-com.samsungCard.samsungCard',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
     },
 }
 
@@ -376,7 +1404,7 @@ def find_ios_backups() -> List[BackupInfo]:
 
 
 def parse_backup_info(backup_path: Path) -> Optional[BackupInfo]:
-    """Parse backup Info.plist to extract device information"""
+    """Parse backup Info.plist and Manifest.plist to extract device information"""
     info_plist = backup_path / 'Info.plist'
 
     if not info_plist.exists():
@@ -395,6 +1423,23 @@ def parse_backup_info(backup_path: Path) -> Optional[BackupInfo]:
         else:
             return None
 
+    # [2026-02-22] FIX: IsEncrypted is in Manifest.plist, NOT Info.plist.
+    # Info.plist only has device metadata; Manifest.plist has encryption state.
+    encrypted = False
+    manifest_plist = backup_path / 'Manifest.plist'
+    if manifest_plist.exists():
+        try:
+            with open(manifest_plist, 'rb') as f:
+                manifest = plistlib.load(f)
+            encrypted = manifest.get('IsEncrypted', False)
+        except Exception:
+            if BIPLIST_AVAILABLE:
+                try:
+                    manifest = biplist.readPlist(str(manifest_plist))
+                    encrypted = manifest.get('IsEncrypted', False)
+                except Exception:
+                    pass
+
     # Calculate backup size
     total_size = sum(
         f.stat().st_size for f in backup_path.rglob('*') if f.is_file()
@@ -407,17 +1452,20 @@ def parse_backup_info(backup_path: Path) -> Optional[BackupInfo]:
         product_type=info.get('Product Type', 'Unknown'),
         ios_version=info.get('Product Version', 'Unknown'),
         backup_date=info.get('Last Backup Date', datetime.min),
-        encrypted=info.get('IsEncrypted', False),
+        encrypted=encrypted,
         size_mb=round(total_size / (1024 * 1024), 2),
     )
 
 
 class iOSBackupParser:
     """
-    iOS 백업 파서
+    iOS backup file extractor
 
-    iTunes/Finder 백업의 Manifest.db를 파싱하여
-    특정 파일을 찾고 추출합니다.
+    Queries the Manifest.db of iTunes/Finder backups
+    to find and extract specific files.
+
+    NOTE: This class only performs file location lookup and extraction.
+          Actual content parsing is handled on the server (ios_basic_parser.py).
     """
 
     def __init__(self, backup_path: Path):
@@ -533,25 +1581,43 @@ class iOSBackupParser:
                     query += ' AND relativePath = ?'
                     params.append(path_pattern)
 
+            # [SECURITY] Pre-resolve backup base once (not per-file)
+            resolved_base = str(self.backup_path.resolve()) + os.sep
+
             cursor.execute(query, params)
 
             for row in cursor:
-                # Parse file blob for metadata
-                file_info = {
-                    'file_id': row['fileID'],
+                file_hash = row['fileID']
+
+                # [SECURITY] Validate file hash format (SHA1 = 40 hex chars)
+                if not _validate_ios_file_hash(file_hash):
+                    continue
+
+                actual_path = self.backup_path / file_hash[:2] / file_hash
+
+                # [SECURITY] Path traversal check via string prefix (resolve once)
+                try:
+                    resolved = str(actual_path.resolve())
+                except OSError:
+                    continue
+                if not resolved.startswith(resolved_base):
+                    logger.warning(f"[SECURITY] Path escape detected: {actual_path}")
+                    continue
+
+                # Single os.stat() replaces exists() + stat().st_size
+                try:
+                    st = actual_path.stat()
+                except OSError:
+                    continue  # File doesn't exist in backup
+
+                yield {
+                    'file_id': file_hash,
                     'domain': row['domain'],
                     'relative_path': row['relativePath'],
                     'flags': row['flags'],
+                    'backup_path': str(actual_path),
+                    'size': st.st_size,
                 }
-
-                # Get actual file path in backup
-                file_hash = row['fileID']
-                actual_path = self.backup_path / file_hash[:2] / file_hash
-                if actual_path.exists():
-                    file_info['backup_path'] = str(actual_path)
-                    file_info['size'] = actual_path.stat().st_size
-
-                yield file_info
 
             conn.close()
 
@@ -591,6 +1657,10 @@ class iOSBackupParser:
         if not file_hash:
             return False
 
+        # [SECURITY] Validate file hash format
+        if not _validate_ios_file_hash(file_hash):
+            return False
+
         # Find actual file in backup
         source_path = self.backup_path / file_hash[:2] / file_hash
 
@@ -601,18 +1671,22 @@ class iOSBackupParser:
         if not source_path.exists():
             return False
 
+        # [SECURITY] Validate path stays within backup directory
+        if not _validate_path_within_backup(source_path, self.backup_path):
+            return False
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, output_path)
         return True
 
 
 # =============================================================================
-# iOS Device Connector (libimobiledevice)
+# iOS Device Connector (pymobiledevice3)
 # =============================================================================
 
 @dataclass
 class iOSDeviceInfo:
-    """연결된 iOS 기기 정보"""
+    """Connected iOS device information"""
     udid: str
     device_name: str
     product_type: str
@@ -623,10 +1697,14 @@ class iOSDeviceInfo:
 
 class iOSDeviceConnector:
     """
-    libimobiledevice를 통한 iOS 기기 연결 클래스
+    iOS device connection class via pymobiledevice3
 
-    연결된 iOS 기기에서 직접 포렌식 아티팩트를 수집합니다.
-    idevice* 명령어가 시스템에 설치되어 있어야 합니다.
+    Collects forensic artifacts directly from connected iOS devices.
+    Pure Python implementation, no external binaries required.
+
+    [2026-01-31] USB direct connection also supports backup-based artifacts:
+    - requires_device=True artifacts: Direct collection (syslog, crash, etc.)
+    - Backup-based artifacts: Auto backup creation followed by iOSCollector parsing
     """
 
     def __init__(self, output_dir: str, udid: Optional[str] = None):
@@ -642,56 +1720,38 @@ class iOSDeviceConnector:
 
         self.udid = udid
         self.device_info: Optional[iOSDeviceInfo] = None
+        self._lockdown: Optional[Any] = None
+
+        # [2026-01-31] Backup path caching (created once, reused)
+        self._backup_path: Optional[Path] = None
+        self._backup_collector: Optional['iOSCollector'] = None
+
+        # [2026-02-20] Encrypted backup state for forensic completeness
+        # NSFileProtectionComplete apps (KakaoBank, Baemin, etc.) require encrypted backup
+        self._encryption_was_off = False       # True if we enabled encryption
+        self._forensic_backup_password = None  # Auto-generated or user-provided password
+        self._encrypted_backup_obj = None      # iphone_backup_decrypt EncryptedBackup instance
+        self._existing_backup_password = None  # User-provided password for already-encrypted devices
 
     @staticmethod
     def is_available() -> Dict[str, Any]:
-        """Check libimobiledevice availability"""
+        """Check pymobiledevice3 availability"""
         return {
-            'available': LIBIMOBILEDEVICE_AVAILABLE,
-            'tools': LIBIMOBILEDEVICE_TOOLS,
+            'available': PYMOBILEDEVICE3_AVAILABLE,
+            'library': 'pymobiledevice3',
         }
-
-    def _run_idevice_cmd(
-        self,
-        cmd: List[str],
-        timeout: int = 30
-    ) -> Tuple[str, int]:
-        """Run idevice command and return output"""
-        # Resolve tool path (bundled or system)
-        tool_name = cmd[0]
-        tool_path = get_tool_path(tool_name)
-        cmd = [tool_path] + cmd[1:]
-
-        if self.udid:
-            cmd = cmd[:1] + ['-u', self.udid] + cmd[1:]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            )
-            return result.stdout + result.stderr, result.returncode
-        except subprocess.TimeoutExpired:
-            return 'Command timeout', -1
-        except FileNotFoundError:
-            return f'Command not found: {tool_path}', -1
-        except Exception as e:
-            return str(e), -1
 
     def get_connected_devices(self) -> List[str]:
         """Get list of connected device UDIDs"""
-        if not LIBIMOBILEDEVICE_TOOLS.get('idevice_id'):
+        if not PYMOBILEDEVICE3_AVAILABLE:
             return []
 
-        output, returncode = self._run_idevice_cmd(['idevice_id', '-l'])
-        if returncode != 0:
+        try:
+            devices = list_devices()
+            return [d.serial for d in devices]
+        except Exception as e:
+            _debug_print(f"[iOS] Error listing devices: {e}")
             return []
-
-        devices = [line.strip() for line in output.split('\n') if line.strip()]
-        return devices
 
     def connect(self, udid: Optional[str] = None) -> bool:
         """
@@ -703,8 +1763,8 @@ class iOSDeviceConnector:
         Returns:
             True if connected successfully
         """
-        if not LIBIMOBILEDEVICE_AVAILABLE:
-            raise RuntimeError("libimobiledevice is not installed")
+        if not PYMOBILEDEVICE3_AVAILABLE:
+            raise RuntimeError("pymobiledevice3 is not installed. Install with: pip install pymobiledevice3")
 
         devices = self.get_connected_devices()
         if not devices:
@@ -717,34 +1777,108 @@ class iOSDeviceConnector:
         else:
             self.udid = devices[0]
 
-        # Get device info
-        self.device_info = self._get_device_info()
-        return self.device_info is not None
+        # Create lockdown client
+        try:
+            self._lockdown = create_using_usbmux(serial=self.udid)
+            self.device_info = self._get_device_info()
+
+            # [2026-02-21] Auto-recover from previous crash that left encryption ON
+            self._recover_encryption_state()
+
+            return self.device_info is not None
+        except Exception as e:
+            _debug_print(f"[iOS] Connection error: {e}")
+            raise RuntimeError(f"Failed to connect to device: {e}")
 
     def _get_device_info(self) -> Optional[iOSDeviceInfo]:
         """Get detailed device information"""
-        if not LIBIMOBILEDEVICE_TOOLS.get('ideviceinfo'):
+        if not self._lockdown:
             return None
 
-        output, returncode = self._run_idevice_cmd(['ideviceinfo'])
-        if returncode != 0:
+        try:
+            all_values = self._lockdown.all_values
+
+            return iOSDeviceInfo(
+                udid=self.udid,
+                device_name=all_values.get('DeviceName', 'Unknown'),
+                product_type=all_values.get('ProductType', 'Unknown'),
+                ios_version=all_values.get('ProductVersion', 'Unknown'),
+                serial_number=all_values.get('SerialNumber', 'Unknown'),
+                is_paired=True,
+            )
+        except Exception as e:
+            _debug_print(f"[iOS] Error getting device info: {e}")
             return None
 
-        # Parse ideviceinfo output
-        info = {}
-        for line in output.split('\n'):
-            if ':' in line:
-                key, _, value = line.partition(':')
-                info[key.strip()] = value.strip()
+    def _recover_encryption_state(self):
+        """
+        Auto-recover from previous crash that left forensic encryption ON.
 
-        return iOSDeviceInfo(
-            udid=self.udid,
-            device_name=info.get('DeviceName', 'Unknown'),
-            product_type=info.get('ProductType', 'Unknown'),
-            ios_version=info.get('ProductVersion', 'Unknown'),
-            serial_number=info.get('SerialNumber', 'Unknown'),
-            is_paired=True,  # If we can get info, device is paired
-        )
+        If the device has encryption ON and it matches our deterministic
+        forensic password (derived from UDID), disable it automatically.
+        This prevents the device being stuck with an unknown password
+        after a crash or force-quit.
+        """
+        if not self._lockdown or not self.udid:
+            return
+
+        try:
+            svc = Mobilebackup2Service(lockdown=self._lockdown)
+            if not svc.will_encrypt:
+                return  # Encryption is OFF, nothing to recover
+
+            # Try our deterministic forensic password
+            forensic_pw = _derive_forensic_password(self.udid)
+            import tempfile
+            tmp = tempfile.mkdtemp(prefix='ios_recover_')
+
+            try:
+                recover_svc = Mobilebackup2Service(lockdown=self._lockdown)
+                recover_svc.change_password(
+                    backup_directory=tmp,
+                    old=forensic_pw,
+                    new=""
+                )
+                logger.info("[iOS] Recovered: disabled leftover forensic encryption from previous crash")
+            except Exception:
+                # Not our password — user-set encryption, leave it alone
+                pass
+            finally:
+                import shutil
+                shutil.rmtree(tmp, ignore_errors=True)
+
+        except Exception as e:
+            logger.debug(f"[iOS] Encryption recovery check skipped: {e}")
+
+    def set_existing_backup_password(self, password: str):
+        """
+        Set user-provided backup password for devices with existing encryption.
+
+        Called from GUI when the device already has backup encryption enabled
+        (will_encrypt=True). The password is used to decrypt the backup after creation.
+
+        Args:
+            password: User's existing iTunes/Finder backup password
+        """
+        self._existing_backup_password = password
+
+    def check_will_encrypt(self) -> bool:
+        """
+        Check if the device currently has backup encryption enabled.
+
+        Used by GUI to determine whether to show the password dialog
+        before starting collection.
+
+        Returns:
+            True if backup encryption is ON (user-set password exists)
+        """
+        if not PYMOBILEDEVICE3_AVAILABLE or not self._lockdown:
+            return False
+        try:
+            svc = Mobilebackup2Service(lockdown=self._lockdown)
+            return svc.will_encrypt
+        except Exception:
+            return False
 
     def collect_device_info(
         self,
@@ -755,33 +1889,43 @@ class iOSDeviceConnector:
         if progress_callback:
             progress_callback("Collecting device information")
 
-        output, returncode = self._run_idevice_cmd(['ideviceinfo'])
-
-        if returncode != 0:
+        if not self._lockdown:
             yield '', {
                 'artifact_type': 'mobile_ios_device_info',
                 'status': 'error',
-                'error': output,
+                'error': 'Not connected to device',
             }
             return
 
-        filename = f"device_info_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
-        local_path = output_dir / filename
-        local_path.write_text(output, encoding='utf-8')
+        try:
+            import json
+            all_values = self._lockdown.all_values
+            output = json.dumps(all_values, indent=2, default=str)
 
-        sha256 = hashlib.sha256(output.encode('utf-8')).hexdigest()
+            filename = f"device_info_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+            local_path = output_dir / filename
+            local_path.write_text(output, encoding='utf-8')
 
-        yield str(local_path), {
-            'artifact_type': 'mobile_ios_device_info',
-            'filename': filename,
-            'size': local_path.stat().st_size,
-            'sha256': sha256,
-            'device_udid': self.udid,
-            'device_name': self.device_info.device_name if self.device_info else 'Unknown',
-            'ios_version': self.device_info.ios_version if self.device_info else 'Unknown',
-            'collected_at': datetime.utcnow().isoformat(),
-            'collection_method': 'ideviceinfo',
-        }
+            sha256 = hashlib.sha256(output.encode('utf-8')).hexdigest()
+
+            yield str(local_path), {
+                'artifact_type': 'mobile_ios_device_info',
+                'filename': filename,
+                'size': local_path.stat().st_size,
+                'sha256': sha256,
+                'device_udid': self.udid,
+                'device_name': self.device_info.device_name if self.device_info else 'Unknown',
+                'ios_version': self.device_info.ios_version if self.device_info else 'Unknown',
+                'collected_at': datetime.utcnow().isoformat(),
+                'collection_method': 'pymobiledevice3',
+            }
+
+        except Exception as e:
+            yield '', {
+                'artifact_type': 'mobile_ios_device_info',
+                'status': 'error',
+                'error': str(e),
+            }
 
     def collect_syslog(
         self,
@@ -790,37 +1934,43 @@ class iOSDeviceConnector:
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """Collect system log for specified duration"""
-        if not LIBIMOBILEDEVICE_TOOLS.get('idevicesyslog'):
+        if not PYMOBILEDEVICE3_AVAILABLE:
             yield '', {
                 'artifact_type': 'mobile_ios_syslog',
                 'status': 'error',
-                'error': 'idevicesyslog not installed',
+                'error': 'pymobiledevice3 not installed',
             }
             return
 
         if progress_callback:
             progress_callback(f"Collecting system log ({duration_seconds}s)")
 
-        tool_path = get_tool_path('idevicesyslog')
-        cmd = [tool_path]
-        if self.udid:
-            cmd.extend(['-u', self.udid])
-
         try:
-            # Run syslog capture for limited time
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            )
-
             import time
-            time.sleep(duration_seconds)
-            process.terminate()
+            logs = []
+            stop_event = threading.Event()
 
-            output, _ = process.communicate(timeout=5)
-            output_text = output.decode('utf-8', errors='replace')
+            def collect_logs():
+                try:
+                    with SyslogService(lockdown=self._lockdown) as syslog:
+                        for line in syslog.watch():
+                            if stop_event.is_set():
+                                break
+                            logs.append(str(line))
+                except Exception as e:
+                    logs.append(f"Error: {e}")
+
+            # Start collection thread
+            thread = threading.Thread(target=collect_logs)
+            thread.daemon = True
+            thread.start()
+
+            # Wait for specified duration
+            time.sleep(duration_seconds)
+            stop_event.set()
+            thread.join(timeout=2)
+
+            output_text = '\n'.join(logs)
 
             filename = f"syslog_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
             local_path = output_dir / filename
@@ -836,7 +1986,7 @@ class iOSDeviceConnector:
                 'duration_seconds': duration_seconds,
                 'device_udid': self.udid,
                 'collected_at': datetime.utcnow().isoformat(),
-                'collection_method': 'idevicesyslog',
+                'collection_method': 'pymobiledevice3',
             }
 
         except Exception as e:
@@ -852,11 +2002,11 @@ class iOSDeviceConnector:
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """Collect crash reports from device"""
-        if not LIBIMOBILEDEVICE_TOOLS.get('idevicecrashreport'):
+        if not PYMOBILEDEVICE3_AVAILABLE:
             yield '', {
                 'artifact_type': 'mobile_ios_crash_logs',
                 'status': 'error',
-                'error': 'idevicecrashreport not installed',
+                'error': 'pymobiledevice3 not installed',
             }
             return
 
@@ -866,18 +2016,22 @@ class iOSDeviceConnector:
         crash_dir = output_dir / 'crash_reports'
         crash_dir.mkdir(exist_ok=True)
 
-        tool_path = get_tool_path('idevicecrashreport')
-        cmd = [tool_path, '-e', str(crash_dir)]
-        if self.udid:
-            cmd = [tool_path, '-u', self.udid, '-e', str(crash_dir)]
+        try:
+            crash_manager = CrashReportsManager(self._lockdown)
+            crash_files_collected = []
 
-        output, returncode = self._run_idevice_cmd(cmd, timeout=120)
+            for crash in crash_manager.ls('/'):
+                try:
+                    content = crash_manager.get_file(crash)
+                    if content:
+                        crash_file = crash_dir / crash.replace('/', '_')
+                        crash_file.write_bytes(content)
+                        crash_files_collected.append(crash_file)
+                except Exception as e:
+                    _debug_print(f"[iOS] Error getting crash file {crash}: {e}")
 
-        # List collected crash files
-        crash_files = list(crash_dir.rglob('*'))
-        if crash_files:
-            for crash_file in crash_files:
-                if crash_file.is_file():
+            if crash_files_collected:
+                for crash_file in crash_files_collected:
                     sha256 = hashlib.sha256()
                     with open(crash_file, 'rb') as f:
                         for chunk in iter(lambda: f.read(65536), b''):
@@ -890,13 +2044,20 @@ class iOSDeviceConnector:
                         'sha256': sha256.hexdigest(),
                         'device_udid': self.udid,
                         'collected_at': datetime.utcnow().isoformat(),
-                        'collection_method': 'idevicecrashreport',
+                        'collection_method': 'pymobiledevice3',
                     }
-        else:
+            else:
+                yield '', {
+                    'artifact_type': 'mobile_ios_crash_logs',
+                    'status': 'no_data',
+                    'message': 'No crash reports found',
+                }
+
+        except Exception as e:
             yield '', {
                 'artifact_type': 'mobile_ios_crash_logs',
-                'status': 'no_data',
-                'message': 'No crash reports found',
+                'status': 'error',
+                'error': str(e),
             }
 
     def collect_installed_apps(
@@ -905,47 +2066,47 @@ class iOSDeviceConnector:
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """Collect list of installed apps"""
-        if not LIBIMOBILEDEVICE_TOOLS.get('ideviceinstaller'):
+        if not PYMOBILEDEVICE3_AVAILABLE:
             yield '', {
                 'artifact_type': 'mobile_ios_installed_apps',
                 'status': 'error',
-                'error': 'ideviceinstaller not installed',
+                'error': 'pymobiledevice3 not installed',
             }
             return
 
         if progress_callback:
             progress_callback("Collecting installed apps list")
 
-        tool_path = get_tool_path('ideviceinstaller')
-        cmd = [tool_path, '-l']
-        if self.udid:
-            cmd = [tool_path, '-u', self.udid, '-l']
+        try:
+            import json
+            installation_proxy = InstallationProxyService(lockdown=self._lockdown)
+            apps = installation_proxy.get_apps()
 
-        output, returncode = self._run_idevice_cmd(cmd)
+            output = json.dumps(apps, indent=2, default=str)
 
-        if returncode != 0:
+            filename = f"installed_apps_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+            local_path = output_dir / filename
+            local_path.write_text(output, encoding='utf-8')
+
+            sha256 = hashlib.sha256(output.encode('utf-8')).hexdigest()
+
+            yield str(local_path), {
+                'artifact_type': 'mobile_ios_installed_apps',
+                'filename': filename,
+                'size': local_path.stat().st_size,
+                'sha256': sha256,
+                'app_count': len(apps) if isinstance(apps, dict) else 0,
+                'device_udid': self.udid,
+                'collected_at': datetime.utcnow().isoformat(),
+                'collection_method': 'pymobiledevice3',
+            }
+
+        except Exception as e:
             yield '', {
                 'artifact_type': 'mobile_ios_installed_apps',
                 'status': 'error',
-                'error': output,
+                'error': str(e),
             }
-            return
-
-        filename = f"installed_apps_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
-        local_path = output_dir / filename
-        local_path.write_text(output, encoding='utf-8')
-
-        sha256 = hashlib.sha256(output.encode('utf-8')).hexdigest()
-
-        yield str(local_path), {
-            'artifact_type': 'mobile_ios_installed_apps',
-            'filename': filename,
-            'size': local_path.stat().st_size,
-            'sha256': sha256,
-            'device_udid': self.udid,
-            'collected_at': datetime.utcnow().isoformat(),
-            'collection_method': 'ideviceinstaller',
-        }
 
     def create_backup(
         self,
@@ -953,11 +2114,11 @@ class iOSDeviceConnector:
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """Create new iOS backup from device"""
-        if not LIBIMOBILEDEVICE_TOOLS.get('idevicebackup2'):
+        if not PYMOBILEDEVICE3_AVAILABLE:
             yield '', {
                 'artifact_type': 'mobile_ios_device_backup',
                 'status': 'error',
-                'error': 'idevicebackup2 not installed',
+                'error': 'pymobiledevice3 not installed',
             }
             return
 
@@ -967,50 +2128,418 @@ class iOSDeviceConnector:
         backup_dir = output_dir / 'backup'
         backup_dir.mkdir(exist_ok=True)
 
-        tool_path = get_tool_path('idevicebackup2')
-        cmd = [tool_path, 'backup', str(backup_dir)]
-        if self.udid:
-            cmd = [tool_path, '-u', self.udid, 'backup', str(backup_dir)]
+        try:
+            backup_service = Mobilebackup2Service(lockdown=self._lockdown)
 
-        output, returncode = self._run_idevice_cmd(cmd, timeout=3600)  # 1 hour
+            # ============================================================
+            # [2026-02-20] Auto-enable backup encryption for forensic completeness
+            # NSFileProtectionComplete apps (KakaoBank, Baemin, Coupang, etc.)
+            # are excluded from unencrypted backups by iOS.
+            # ============================================================
 
-        if returncode == 0:
-            # Calculate backup size
-            total_size = sum(
-                f.stat().st_size for f in backup_dir.rglob('*') if f.is_file()
+            # Deterministic password from UDID — recoverable even after crash
+            forensic_pw = _derive_forensic_password(self.udid)
+
+            if not backup_service.will_encrypt:
+                if progress_callback:
+                    progress_callback("Enabling backup encryption for forensic completeness...")
+
+                try:
+                    backup_service.change_password(
+                        backup_directory=str(backup_dir),
+                        old="",
+                        new=forensic_pw
+                    )
+                    self._forensic_backup_password = forensic_pw
+                    self._encryption_was_off = True
+                    logger.info("[iOS] Backup encryption enabled (was OFF)")
+                except Exception as enc_err:
+                    logger.warning(f"[iOS] Failed to enable encryption, falling back to unencrypted: {enc_err}")
+                    self._forensic_backup_password = None
+                    self._encryption_was_off = False
+            elif backup_service.will_encrypt:
+                # Encryption is already ON — try our forensic password first
+                # (handles crash recovery: previous run enabled but didn't restore)
+                try:
+                    _test_svc = Mobilebackup2Service(lockdown=self._lockdown)
+                    _test_svc.change_password(
+                        backup_directory=str(backup_dir),
+                        old=forensic_pw,
+                        new=forensic_pw
+                    )
+                    # Success — this is our own forensic password (leftover from crash)
+                    self._forensic_backup_password = forensic_pw
+                    self._encryption_was_off = True  # We should restore OFF when done
+                    logger.info("[iOS] Recovered from previous forensic encryption (crash recovery)")
+                except Exception:
+                    # Not our password — user-set encryption
+                    if self._existing_backup_password:
+                        self._forensic_backup_password = self._existing_backup_password
+                        self._encryption_was_off = False
+                        logger.info("[iOS] Device has backup encryption ON, using user-provided password")
+                    else:
+                        logger.info("[iOS] Device has backup encryption ON but no password provided")
+                        self._forensic_backup_password = None
+
+            # [2026-02-21] FIX: change_password() closes the service session internally.
+            # Must create a fresh Mobilebackup2Service for the actual backup.
+            backup_service = Mobilebackup2Service(lockdown=self._lockdown)
+
+            # [2026-02-08] 백업 진행률 콜백 추가
+            def backup_progress(percentage: float):
+                if progress_callback:
+                    progress_callback(f"iOS backup progress: {percentage:.1f}%")
+
+            backup_service.backup(
+                full=True,
+                backup_directory=str(backup_dir),
+                progress_callback=backup_progress
             )
 
-            yield str(backup_dir), {
+            # [2026-02-06] FIX: pymobiledevice3는 <backup_dir>/<UDID>/ 경로에 백업 생성
+            # 실제 백업 경로 찾기 (Manifest.plist 위치)
+            actual_backup_path = backup_dir
+            for subdir in backup_dir.iterdir():
+                if subdir.is_dir() and (subdir / 'Manifest.plist').exists():
+                    actual_backup_path = subdir
+                    break
+
+            # Calculate backup size
+            total_size = sum(
+                f.stat().st_size for f in actual_backup_path.rglob('*') if f.is_file()
+            )
+
+            yield str(actual_backup_path), {
                 'artifact_type': 'mobile_ios_device_backup',
-                'backup_path': str(backup_dir),
+                'backup_path': str(actual_backup_path),
                 'size_bytes': total_size,
                 'size_mb': round(total_size / (1024 * 1024), 2),
                 'device_udid': self.udid,
+                'encrypted': bool(self._forensic_backup_password),
                 'collected_at': datetime.utcnow().isoformat(),
-                'collection_method': 'idevicebackup2',
+                'collection_method': 'pymobiledevice3',
             }
-        else:
+
+        except Exception as e:
+            # [2026-02-21] FIX: Restore encryption state on backup failure
+            # Prevents device being left with unknown forensic password
+            if self._encryption_was_off and self._forensic_backup_password and self._lockdown:
+                try:
+                    restore_svc = Mobilebackup2Service(lockdown=self._lockdown)
+                    restore_svc.change_password(
+                        backup_directory=str(backup_dir),
+                        old=self._forensic_backup_password,
+                        new=""
+                    )
+                    logger.info("[iOS] Backup failed — encryption restored to OFF")
+                except Exception as restore_err:
+                    logger.warning(f"[iOS] Backup failed AND could not restore encryption: {restore_err}")
+                self._encryption_was_off = False
+                self._forensic_backup_password = None
+
             yield '', {
                 'artifact_type': 'mobile_ios_device_backup',
                 'status': 'error',
-                'error': output,
+                'error': str(e),
             }
+
+    # =========================================================================
+    # [2026-01-31] Unified collect() method - supports all artifact types
+    # =========================================================================
+
+    def collect(
+        self,
+        artifact_type: str,
+        progress_callback: Optional[Callable[[str], None]] = None
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Unified artifact collection method.
+
+        Collects all iOS artifacts from USB direct connection:
+        - Device-only artifacts: Direct collection
+        - Backup-based artifacts: Backup creation followed by file extraction
+
+        NOTE: Collector only performs raw file extraction.
+              Parsing/decryption is handled on the server.
+
+        Args:
+            artifact_type: Artifact type to collect
+            progress_callback: Progress callback
+
+        Yields:
+            Tuple of (local_path, metadata)
+        """
+        if artifact_type not in IOS_ARTIFACT_TYPES:
+            yield '', {
+                'artifact_type': artifact_type,
+                'status': 'error',
+                'error': f'Unknown artifact type: {artifact_type}',
+            }
+            return
+
+        artifact_info = IOS_ARTIFACT_TYPES[artifact_type]
+        artifact_dir = self.output_dir / artifact_type
+        artifact_dir.mkdir(exist_ok=True)
+
+        # =====================================================================
+        # Case 1: Device direct collection artifacts (requires_device=True)
+        # =====================================================================
+        if artifact_info.get('requires_device'):
+            yield from self._collect_device_artifact(
+                artifact_type, artifact_info, artifact_dir, progress_callback
+            )
+            return
+
+        # =====================================================================
+        # Case 2: Backup-based artifacts -> Backup creation then file extraction via iOSCollector
+        # =====================================================================
+        if progress_callback:
+            progress_callback(f"Preparing backup for {artifact_type}...")
+
+        # Create backup if none exists
+        if not self._backup_path or not self._backup_path.exists():
+            backup_created = False
+            for path, meta in self._create_backup_for_extraction(progress_callback):
+                if meta.get('status') == 'error':
+                    yield path, meta
+                    return
+                if path:
+                    self._backup_path = Path(meta.get('backup_path', path))
+                    backup_created = True
+
+            if not backup_created:
+                yield '', {
+                    'artifact_type': artifact_type,
+                    'status': 'error',
+                    'error': 'Failed to create device backup',
+                }
+                return
+
+        # [2026-02-22] Early fail: encrypted backup but decryptor not available
+        if self._forensic_backup_password and not self._encrypted_backup_obj:
+            msg = "Encrypted backup created but decryptor not available. Check iphone_backup_decrypt installation."
+            logger.error(f"[iOS] {msg}")
+            if progress_callback:
+                progress_callback(f"[ERROR] {msg}")
+            yield '', {
+                'artifact_type': artifact_type,
+                'status': 'error',
+                'error': msg,
+            }
+            return
+
+        # Extract files from backup via iOSCollector (raw files only, no parsing)
+        if not self._backup_collector:
+            try:
+                # [2026-02-20] Pass encrypted_backup for NSFileProtectionComplete app access
+                collector = iOSCollector(
+                    str(self.output_dir),
+                    encrypted_backup=self._encrypted_backup_obj
+                )
+                collector.select_backup(str(self._backup_path))
+                self._backup_collector = collector  # [2026-02-06] 성공 시에만 설정
+            except Exception as e:
+                # [2026-02-06] FIX: 실패 시 _backup_collector를 설정하지 않음
+                # 다음 아티팩트에서 다시 시도할 수 있도록
+                yield '', {
+                    'artifact_type': artifact_type,
+                    'status': 'error',
+                    'error': f'Failed to open backup: {e}',
+                }
+                return
+
+        # Delegate artifact file extraction from backup
+        if progress_callback:
+            progress_callback(f"Extracting {artifact_type} from backup...")
+
+        yield from self._backup_collector.collect(artifact_type, progress_callback)
+
+    def _collect_device_artifact(
+        self,
+        artifact_type: str,
+        artifact_info: Dict[str, Any],
+        artifact_dir: Path,
+        progress_callback: Optional[Callable[[str], None]] = None
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Handle artifacts collected directly from device.
+
+        Routes to the appropriate collection method for each artifact type.
+        """
+        if artifact_type == 'mobile_ios_device_info':
+            yield from self.collect_device_info(artifact_dir, progress_callback)
+
+        elif artifact_type == 'mobile_ios_syslog':
+            yield from self.collect_syslog(artifact_dir, duration_seconds=30, progress_callback=progress_callback)
+
+        elif artifact_type == 'mobile_ios_crash_logs':
+            yield from self.collect_crash_logs(artifact_dir, progress_callback)
+
+        elif artifact_type == 'mobile_ios_installed_apps':
+            yield from self.collect_installed_apps(artifact_dir, progress_callback)
+
+        elif artifact_type == 'mobile_ios_device_backup':
+            # [2026-02-22] FIX: Store backup path + init decryptor so subsequent
+            # backup-based artifacts can reuse this backup instead of creating a second one.
+            for path, meta in self.create_backup(artifact_dir, progress_callback):
+                if path and meta.get('backup_path'):
+                    self._backup_path = Path(meta['backup_path'])
+                    # Initialize decryptor for encrypted backups
+                    if self._forensic_backup_password:
+                        self._init_encrypted_decryptor(
+                            meta['backup_path'], progress_callback
+                        )
+                yield path, meta
+
+        elif artifact_type == 'mobile_ios_unified_logs':
+            # sysdiagnose requires separate handling (not yet implemented)
+            yield '', {
+                'artifact_type': artifact_type,
+                'status': 'not_implemented',
+                'error': 'Unified logs collection requires sysdiagnose (not yet implemented)',
+            }
+
+        else:
+            yield '', {
+                'artifact_type': artifact_type,
+                'status': 'error',
+                'error': f'Unknown device artifact: {artifact_type}',
+            }
+
+    def _init_encrypted_decryptor(
+        self,
+        backup_path: str,
+        progress_callback: Optional[Callable[[str], None]] = None
+    ) -> bool:
+        """
+        Initialize EncryptedBackup decryptor for encrypted iOS backups.
+
+        [2026-02-22] Extracted to reusable method — called from both
+        _collect_device_artifact (mobile_ios_device_backup) and
+        _create_backup_for_extraction (backup-based artifacts).
+
+        Returns True if decryptor was initialized successfully.
+        """
+        if not self._forensic_backup_password:
+            return False
+
+        if progress_callback:
+            progress_callback("Initializing encrypted backup decryptor...")
+        try:
+            from collectors.ios_backup_decryptor import create_encrypted_backup
+            if progress_callback:
+                progress_callback("Deriving decryption key (this may take 1-2 minutes)...")
+
+            enc_obj, err = create_encrypted_backup(
+                backup_path, self._forensic_backup_password
+            )
+            if enc_obj:
+                self._encrypted_backup_obj = enc_obj
+                logger.info("[iOS] Encrypted backup decryptor initialized successfully")
+                if progress_callback:
+                    progress_callback("Encrypted backup decryptor ready")
+                return True
+            else:
+                logger.warning(f"[iOS] Decryptor init failed: {err}")
+                if progress_callback:
+                    progress_callback(f"[WARNING] Decryptor failed: {err}")
+        except ImportError as ie:
+            logger.warning(f"[iOS] ios_backup_decryptor import failed: {ie}")
+            if progress_callback:
+                progress_callback("[WARNING] Encrypted backup support unavailable (missing: iphone_backup_decrypt)")
+        except Exception as e:
+            logger.warning(f"[iOS] Decryptor init error: {e}")
+            if progress_callback:
+                progress_callback(f"[WARNING] Decryptor error: {e}")
+        return False
+
+    def _create_backup_for_extraction(
+        self,
+        progress_callback: Optional[Callable[[str], None]] = None
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Create backup for artifact extraction.
+
+        Reuses existing backup if available, creates new one otherwise.
+        """
+        if progress_callback:
+            progress_callback("Creating device backup for artifact extraction...")
+
+        backup_dir = self.output_dir / 'ios_backup' / (self.udid or 'device')
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        # Check if valid backup already exists
+        manifest_plist = backup_dir / 'Manifest.plist'
+        if manifest_plist.exists():
+            if progress_callback:
+                progress_callback("Using existing backup...")
+            yield str(backup_dir), {
+                'artifact_type': 'mobile_ios_device_backup',
+                'backup_path': str(backup_dir),
+                'status': 'reused',
+                'message': 'Using existing backup',
+            }
+            return
+
+        # Create new backup
+        for path, meta in self.create_backup(backup_dir.parent, progress_callback):
+            if meta.get('status') == 'error':
+                yield path, meta
+                return
+
+            # [2026-02-22] Initialize decryptor for encrypted backups
+            if self._forensic_backup_password and path:
+                backup_path = meta.get('backup_path', path)
+                self._init_encrypted_decryptor(backup_path, progress_callback)
+
+            yield path, meta
+
+    def close(self):
+        """Clean up resources and restore device encryption state"""
+        # [2026-02-20] Restore device encryption to OFF if we enabled it
+        if self._encryption_was_off and self._forensic_backup_password and self._lockdown:
+            try:
+                backup_service = Mobilebackup2Service(lockdown=self._lockdown)
+                backup_service.change_password(
+                    backup_directory=str(self.output_dir),
+                    old=self._forensic_backup_password,
+                    new=""
+                )
+                logger.info("[iOS] Backup encryption restored to OFF")
+            except Exception as e:
+                logger.warning(f"[iOS] Failed to restore encryption state: {e}")
+
+        # Clean up EncryptedBackup resources
+        if self._encrypted_backup_obj:
+            if hasattr(self._encrypted_backup_obj, 'close'):
+                try:
+                    self._encrypted_backup_obj.close()
+                except Exception:
+                    pass
+            self._encrypted_backup_obj = None
+
+        self._lockdown = None
+        self._backup_collector = None
+        self._forensic_backup_password = None
+        self._existing_backup_password = None
 
 
 class iOSCollector:
     """
-    iOS 포렌식 수집 통합 클래스
+    iOS forensic collection unified class
 
-    iTunes/Finder 백업에서 포렌식 아티팩트를 추출합니다.
+    Extracts forensic artifacts from iTunes/Finder backups.
     """
 
-    def __init__(self, output_dir: str, backup_path: Optional[str] = None):
+    def __init__(self, output_dir: str, backup_path: Optional[str] = None, encrypted_backup=None):
         """
         Initialize iOS collector.
 
         Args:
             output_dir: Directory to store collected artifacts
             backup_path: Path to specific backup (auto-detect if None)
+            encrypted_backup: Pre-created EncryptedBackup instance for encrypted backups
+                (created via ios_backup_decryptor.create_encrypted_backup())
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1018,6 +2547,7 @@ class iOSCollector:
         self.backup_path = Path(backup_path) if backup_path else None
         self.backup_info: Optional[BackupInfo] = None
         self.parser: Optional[iOSBackupParser] = None
+        self._encrypted_backup = encrypted_backup
 
     def get_available_backups(self) -> List[BackupInfo]:
         """Get list of available iOS backups"""
@@ -1042,9 +2572,19 @@ class iOSCollector:
             raise ValueError(f"Invalid backup: {backup_path}")
 
         self.backup_path = path
-        self.parser = iOSBackupParser(path)
+
+        # [2026-02-22] Use encrypted parser if EncryptedBackup provided.
+        # Also use it if backup is encrypted (Manifest.plist IsEncrypted=True).
+        # The _encrypted_backup check is the primary signal — the EncryptedBackup
+        # object already holds the derived key and can decrypt Manifest.db.
+        if self._encrypted_backup:
+            from collectors.ios_backup_decryptor import iOSEncryptedBackupParser
+            self.parser = iOSEncryptedBackupParser(path, self._encrypted_backup)
+        else:
+            self.parser = iOSBackupParser(path)
         return True
 
+    @property
     def is_encrypted(self) -> bool:
         """Check if selected backup is encrypted"""
         return self.backup_info.encrypted if self.backup_info else False
@@ -1067,11 +2607,11 @@ class iOSCollector:
         if not self.parser:
             raise RuntimeError("No backup selected. Call select_backup() first.")
 
-        if self.backup_info.encrypted:
+        if self.backup_info.encrypted and not self._encrypted_backup:
             yield '', {
                 'artifact_type': artifact_type,
                 'status': 'error',
-                'error': '암호화된 백업입니다. 백업 비밀번호가 필요합니다.',
+                'error': 'Encrypted backup. Password required.',
                 'backup_path': str(self.backup_path),
             }
             return
@@ -1079,7 +2619,21 @@ class iOSCollector:
         if artifact_type not in IOS_ARTIFACT_TYPES:
             raise ValueError(f"Unknown artifact type: {artifact_type}")
 
+        # Skip redundant artifact types (covered by specific per-app types)
+        if artifact_type in _SKIP_ARTIFACTS:
+            _debug_print(f"[iOS] Skipping {artifact_type} (redundant with specific app types)")
+            return
+
         artifact_info = IOS_ARTIFACT_TYPES[artifact_type]
+
+        # Check if artifact requires encrypted backup
+        if artifact_info.get('requires_encrypted') and not self.backup_info.encrypted:
+            yield '', {
+                'artifact_type': artifact_type,
+                'status': 'not_found',
+                'error': f'{artifact_info["name"]} requires encrypted backup (current backup is unencrypted)',
+            }
+            return
 
         # Create artifact output directory
         artifact_dir = self.output_dir / artifact_type
@@ -1131,7 +2685,7 @@ class iOSCollector:
         progress_callback: Optional[Callable[[str], None]]
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """Collect a specific file from backup"""
-        filename = Path(relative_path).name
+        filename = _sanitize_filename(Path(relative_path).name)
         local_path = output_dir / filename
 
         if progress_callback:
@@ -1160,12 +2714,29 @@ class iOSCollector:
                 'collection_method': 'ios_backup_extraction',
             }
         else:
+            # Diagnostic: show what files ARE in this domain (first 5)
+            diag_files = []
+            try:
+                for i, fi in enumerate(self.parser.list_files(domain_filter=domain)):
+                    diag_files.append(fi.get('relative_path', '?'))
+                    if i >= 4:
+                        break
+            except Exception:
+                pass
+
+            diag_msg = f"File not found: {domain}/{relative_path}"
+            if diag_files:
+                diag_msg += f" (domain has: {', '.join(diag_files[:5])})"
+            else:
+                diag_msg += " (domain empty or not present in backup)"
+            _debug_print(f"[iOS] {diag_msg}")
+
             yield '', {
                 'artifact_type': artifact_type,
                 'status': 'not_found',
                 'domain': domain,
                 'path': relative_path,
-                'message': f'File not found in backup: {relative_path}',
+                'error': diag_msg,
             }
 
     def _collect_pattern(
@@ -1175,45 +2746,131 @@ class iOSCollector:
         output_dir: Path,
         progress_callback: Optional[Callable[[str], None]]
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        """Collect files matching a domain pattern"""
+        """Collect files matching domain + path patterns (with extension filtering)"""
         domain_pattern = artifact_info.get('manifest_domain', '*')
+        is_encrypted = self.backup_info.encrypted and self._encrypted_backup
 
-        for file_info in self.parser.list_files(domain_filter=domain_pattern):
-            if 'backup_path' not in file_info:
-                continue
+        # Determine allowed file extensions
+        if artifact_type in _ATTACHMENT_ARTIFACTS:
+            allowed_ext = _FORENSIC_EXTENSIONS | _MEDIA_EXTENSIONS
+        else:
+            allowed_ext = _FORENSIC_EXTENSIONS
 
-            source_path = Path(file_info['backup_path'])
-            if not source_path.exists():
-                continue
+        # Build path patterns from manifest_path / manifest_paths
+        # These are used as SQL LIKE filters to avoid over-collecting entire domains
+        path_patterns = []
+        if 'manifest_paths' in artifact_info:
+            path_patterns = list(artifact_info['manifest_paths'])
+        elif 'manifest_path' in artifact_info:
+            path_patterns = [artifact_info['manifest_path']]
 
-            # Create subdirectory for domain
-            domain = file_info.get('domain', 'unknown')
-            domain_dir = output_dir / domain.replace('-', '_').replace('.', '_')
-            domain_dir.mkdir(exist_ok=True)
+        skipped_count = 0
+        collected_count = 0
+        seen_files = set()  # Track (domain, relative_path) to prevent duplicates
+        created_dirs = set()  # Cache mkdir calls (once per domain)
 
-            filename = Path(file_info.get('relative_path', 'unknown')).name
-            local_path = domain_dir / filename
+        # If we have specific path patterns, query each pattern separately
+        # Otherwise fall back to domain-only scan
+        if path_patterns:
+            queries = [(domain_pattern, p) for p in path_patterns]
+        else:
+            queries = [(domain_pattern, None)]
 
-            if progress_callback:
-                progress_callback(f"Extracting {domain}/{filename}")
+        for domain_q, path_q in queries:
+            for file_info in self.parser.list_files(
+                domain_filter=domain_q, path_pattern=path_q
+            ):
+                # Deduplicate across multiple pattern queries
+                dedup_key = (
+                    file_info.get('domain', ''),
+                    file_info.get('relative_path', ''),
+                )
+                if dedup_key in seen_files:
+                    continue
+                seen_files.add(dedup_key)
 
-            shutil.copy2(source_path, local_path)
+                # Create subdirectory for domain (cached - only once per domain)
+                domain = file_info.get('domain', 'unknown')
+                domain_key = domain.replace('-', '_').replace('.', '_')
+                domain_dir = output_dir / domain_key
+                if domain_key not in created_dirs:
+                    domain_dir.mkdir(exist_ok=True)
+                    created_dirs.add(domain_key)
 
-            sha256 = hashlib.sha256()
-            with open(local_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(65536), b''):
-                    sha256.update(chunk)
+                rel_path = file_info.get('relative_path', 'unknown')
+                filename = _sanitize_filename(Path(rel_path).name)
 
-            yield str(local_path), {
-                'artifact_type': artifact_type,
-                'domain': domain,
-                'original_path': file_info.get('relative_path'),
-                'filename': filename,
-                'size': local_path.stat().st_size,
-                'sha256': sha256.hexdigest(),
-                'device_name': self.backup_info.device_name,
-                'collected_at': datetime.utcnow().isoformat(),
-            }
+                # Filter by file extension
+                ext = Path(filename).suffix.lower()
+                if ext and ext not in allowed_ext:
+                    skipped_count += 1
+                    continue
+                # Block extensionless files (binary caches, LMDB, etc.)
+                if not ext:
+                    skipped_count += 1
+                    continue
+
+                # Prevent filename collisions from different subdirectories
+                # e.g. Documents/abc/DB/MM.sqlite vs Documents/def/DB/MM.sqlite
+                path_hash = hashlib.md5(rel_path.encode()).hexdigest()[:8]
+                unique_filename = f"{path_hash}_{filename}"
+                local_path = domain_dir / unique_filename
+
+                # Rate-limit progress callbacks (every 50 files to avoid UI flood)
+                collected_count += 1
+                if progress_callback and collected_count % 50 == 1:
+                    progress_callback(f"Extracting {artifact_type}: {collected_count} files ({domain}/{filename})")
+
+                # Encrypted backups: use parser.extract_file() (no backup_path key)
+                # Unencrypted backups: single-pass copy + SHA256 (avoids double I/O)
+                sha256 = hashlib.sha256()
+                file_size = 0
+                if is_encrypted:
+                    if not rel_path or rel_path == 'unknown':
+                        continue
+                    success = self.parser.extract_file(domain, rel_path, local_path)
+                    if not success:
+                        continue
+                    # Encrypted: extract_file writes the file, compute hash after
+                    try:
+                        file_size = local_path.stat().st_size
+                    except OSError:
+                        continue
+                    if file_size == 0:
+                        continue
+                    with open(local_path, 'rb') as f:
+                        for chunk in iter(lambda: f.read(65536), b''):
+                            sha256.update(chunk)
+                else:
+                    if 'backup_path' not in file_info:
+                        continue
+                    source_path = Path(file_info['backup_path'])
+                    # Single-pass: copy + hash simultaneously
+                    try:
+                        with open(source_path, 'rb') as src, open(local_path, 'wb') as dst:
+                            for chunk in iter(lambda: src.read(65536), b''):
+                                dst.write(chunk)
+                                sha256.update(chunk)
+                        file_size = local_path.stat().st_size
+                    except OSError:
+                        continue
+                    if file_size == 0:
+                        local_path.unlink(missing_ok=True)
+                        continue
+
+                yield str(local_path), {
+                    'artifact_type': artifact_type,
+                    'domain': domain,
+                    'original_path': rel_path,
+                    'filename': unique_filename,
+                    'size': file_size,
+                    'sha256': sha256.hexdigest(),
+                    'device_name': self.backup_info.device_name,
+                    'collected_at': datetime.utcnow().isoformat(),
+                }
+
+        if skipped_count > 0:
+            _debug_print(f"[iOS] {artifact_type}: skipped {skipped_count} non-forensic/extensionless files")
 
     def _collect_backup_metadata(
         self,
@@ -1258,23 +2915,223 @@ class iOSCollector:
                 'collected_at': datetime.utcnow().isoformat(),
             }
 
+        # [2026-02-22] Generate Manifest.db diagnostic dump
+        yield from self._generate_manifest_diagnostic(output_dir, progress_callback)
+
+    def _generate_manifest_diagnostic(
+        self,
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Generate Manifest.db diagnostic dump.
+
+        Queries all domains/paths from the decrypted Manifest.db and compares
+        against configured IOS_ARTIFACT_TYPES to identify path mismatches.
+        Outputs a text file uploaded with the collection for debugging.
+        """
+        if not self.parser:
+            return
+
+        if progress_callback:
+            progress_callback("Generating Manifest.db diagnostic...")
+
+        lines = []
+        lines.append("=" * 80)
+        lines.append("iOS Backup Manifest Diagnostic Report")
+        lines.append(f"Generated: {datetime.utcnow().isoformat()}Z")
+        if self.backup_info:
+            lines.append(f"Device: {self.backup_info.device_name}")
+            lines.append(f"iOS: {self.backup_info.ios_version}")
+            lines.append(f"Encrypted: {self.backup_info.encrypted}")
+        lines.append("=" * 80)
+
+        # ── Section 1: Domain summary ──
+        domain_stats: Dict[str, int] = {}
+        total_files = 0
+        try:
+            for fi in self.parser.list_files():
+                domain = fi.get('domain', 'unknown')
+                domain_stats[domain] = domain_stats.get(domain, 0) + 1
+                total_files += 1
+        except Exception as e:
+            lines.append(f"\n[ERROR] Failed to list manifest files: {e}")
+            # Still try to write what we have
+
+        lines.append(f"\n{'─' * 80}")
+        lines.append(f"SECTION 1: Backup Domain Summary ({total_files} total files)")
+        lines.append(f"{'─' * 80}")
+        for domain in sorted(domain_stats.keys()):
+            lines.append(f"  {domain:<60} {domain_stats[domain]:>6} files")
+
+        # ── Section 2: Per-artifact path verification ──
+        lines.append(f"\n{'─' * 80}")
+        lines.append("SECTION 2: Artifact Path Verification")
+        lines.append(f"{'─' * 80}")
+        lines.append(f"  {'Artifact Type':<45} {'Status':<12} {'Details'}")
+        lines.append(f"  {'─' * 75}")
+
+        found_count = 0
+        missing_count = 0
+        app_missing_count = 0
+
+        for atype, ainfo in sorted(IOS_ARTIFACT_TYPES.items()):
+            # Skip device-only and special artifacts
+            if ainfo.get('requires_device') or ainfo.get('collection_method') == 'device':
+                continue
+            if atype == 'mobile_ios_backup':
+                continue
+
+            domain = ainfo.get('manifest_domain', '')
+            if not domain:
+                continue
+
+            # Gather configured paths
+            paths = []
+            if 'manifest_paths' in ainfo:
+                paths = list(ainfo['manifest_paths'])
+            elif 'manifest_path' in ainfo:
+                paths = [ainfo['manifest_path']]
+
+            if not paths:
+                # Pattern-only artifact
+                file_count = domain_stats.get(domain, 0)
+                if file_count > 0:
+                    lines.append(f"  {atype:<45} {'FOUND':<12} domain={domain} ({file_count} files)")
+                    found_count += 1
+                else:
+                    lines.append(f"  {atype:<45} {'MISSING':<12} domain={domain} not in backup")
+                    missing_count += 1
+                continue
+
+            # Check each configured path
+            any_found = False
+            for path in paths:
+                # Check if path exists in manifest
+                matches = 0
+                try:
+                    for _ in self.parser.list_files(domain_filter=domain, path_pattern=path):
+                        matches += 1
+                        if matches >= 1:
+                            break
+                except Exception:
+                    pass
+
+                if matches > 0:
+                    any_found = True
+
+            if any_found:
+                lines.append(f"  {atype:<45} {'OK':<12} {domain} / {paths[0][:40]}")
+                found_count += 1
+            else:
+                # Check if domain exists at all
+                domain_file_count = domain_stats.get(domain, 0)
+                if domain_file_count == 0:
+                    # Domain not present — likely app not installed
+                    is_app = domain.startswith('AppDomain')
+                    label = 'APP_MISSING' if is_app else 'MISSING'
+                    lines.append(f"  {atype:<45} {label:<12} domain={domain} not in backup")
+                    if is_app:
+                        app_missing_count += 1
+                    else:
+                        missing_count += 1
+                else:
+                    # Domain exists but configured path not found — PATH MISMATCH
+                    lines.append(f"  {atype:<45} {'PATH_ERR':<12} domain has {domain_file_count} files but path not found")
+                    missing_count += 1
+
+                    # List actual files in domain for diagnostic (up to 20)
+                    try:
+                        actual_files = []
+                        for fi in self.parser.list_files(domain_filter=domain):
+                            actual_files.append(fi.get('relative_path', '?'))
+                            if len(actual_files) >= 20:
+                                break
+                        if actual_files:
+                            lines.append(f"    Configured: {', '.join(paths[:3])}")
+                            lines.append(f"    Actual files in domain ({min(domain_file_count, 20)} shown):")
+                            for af in actual_files:
+                                lines.append(f"      - {af}")
+                    except Exception:
+                        pass
+
+        lines.append(f"\n{'─' * 80}")
+        lines.append(f"SUMMARY: {found_count} OK, {missing_count} path errors/missing, {app_missing_count} apps not installed")
+        lines.append(f"{'─' * 80}")
+
+        # ── Section 3: System domain file listing (for troubleshooting) ──
+        system_domains = ['HomeDomain', 'RootDomain', 'SystemPreferencesDomain',
+                          'HealthDomain', 'MediaDomain', 'WirelessDomain',
+                          'KeychainDomain', 'CameraRollDomain',
+                          'AppDomainGroup-group.com.apple.notes']
+        lines.append(f"\n{'─' * 80}")
+        lines.append("SECTION 3: System Domain File Listings (for path troubleshooting)")
+        lines.append(f"{'─' * 80}")
+
+        for sd in system_domains:
+            if sd not in domain_stats:
+                lines.append(f"\n  [{sd}] — NOT PRESENT")
+                continue
+
+            lines.append(f"\n  [{sd}] — {domain_stats[sd]} files:")
+            try:
+                file_list = []
+                for fi in self.parser.list_files(domain_filter=sd):
+                    file_list.append(fi.get('relative_path', '?'))
+                # Sort and show up to 100 files
+                for fp in sorted(file_list)[:100]:
+                    lines.append(f"    {fp}")
+                if len(file_list) > 100:
+                    lines.append(f"    ... and {len(file_list) - 100} more files")
+            except Exception as e:
+                lines.append(f"    [ERROR listing files: {e}]")
+
+        # Write diagnostic file
+        report_content = '\n'.join(lines)
+        diag_path = output_dir / 'manifest_diagnostic.txt'
+        try:
+            with open(diag_path, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+
+            sha256 = hashlib.sha256(report_content.encode('utf-8')).hexdigest()
+
+            logger.info(f"[iOS] Manifest diagnostic: {found_count} OK, {missing_count} errors, {app_missing_count} apps N/A")
+
+            yield str(diag_path), {
+                'artifact_type': 'mobile_ios_backup',
+                'filename': 'manifest_diagnostic.txt',
+                'size': diag_path.stat().st_size,
+                'sha256': sha256,
+                'diagnostic_summary': {
+                    'total_manifest_files': total_files,
+                    'total_domains': len(domain_stats),
+                    'artifacts_ok': found_count,
+                    'artifacts_path_error': missing_count,
+                    'artifacts_app_missing': app_missing_count,
+                },
+                'collected_at': datetime.utcnow().isoformat(),
+            }
+        except Exception as e:
+            logger.warning(f"[iOS] Failed to write manifest diagnostic: {e}")
+
     def get_available_artifacts(self) -> List[Dict[str, Any]]:
         """Get list of available iOS artifact types"""
         artifacts = []
         backup_available = self.backup_info is not None
         encrypted = self.backup_info.encrypted if self.backup_info else False
+        has_decryptor = bool(self._encrypted_backup)
 
         for type_id, info in IOS_ARTIFACT_TYPES.items():
-            available = backup_available and not encrypted
+            available = backup_available and (not encrypted or has_decryptor)
             reasons = []
 
             if not backup_available:
                 available = False
-                reasons.append('백업 선택 필요')
+                reasons.append('Backup selection required')
 
-            if encrypted:
+            if encrypted and not has_decryptor:
                 available = False
-                reasons.append('암호화된 백업')
+                reasons.append('Encrypted backup - password required')
 
             artifacts.append({
                 'type': type_id,
@@ -1290,49 +3147,49 @@ class iOSCollector:
 def get_backup_guide() -> str:
     """Return iOS backup creation guide"""
     return """
-iOS 백업 생성 방법 (iTunes/Finder):
+iOS Backup Creation Guide (iTunes/Finder):
 
 === Windows (iTunes) ===
-1. iTunes를 최신 버전으로 업데이트
-2. Lightning/USB-C 케이블로 iPhone 연결
-3. "이 컴퓨터 신뢰" 팝업에서 "신뢰" 선택
-4. iTunes에서 기기 아이콘 클릭
-5. "요약" 탭에서:
-   - "이 컴퓨터" 선택 (iCloud 백업 아님)
-   - ⚠️ "로컬 백업 암호화" 체크 해제 (포렌식 분석 위해)
-   - "지금 백업" 클릭
-6. 백업 완료 대기 (기기 데이터양에 따라 수분~수십분)
+1. Update iTunes to the latest version
+2. Connect iPhone via Lightning/USB-C cable
+3. Select "Trust" on the "Trust This Computer" popup
+4. Click the device icon in iTunes
+5. In the "Summary" tab:
+   - Select "This computer" (not iCloud backup)
+   - Uncheck "Encrypt local backup" (for forensic analysis)
+   - Click "Back Up Now"
+6. Wait for backup to complete (minutes to tens of minutes depending on data)
 
-=== macOS (Finder) - macOS Catalina 이상 ===
-1. Lightning/USB-C 케이블로 iPhone 연결
-2. Finder에서 iPhone 선택 (사이드바)
-3. "일반" 탭에서:
-   - "iPhone의 모든 데이터를 이 Mac에 백업"
-   - ⚠️ "로컬 백업 암호화" 체크 해제
-   - "지금 백업" 클릭
+=== macOS (Finder) - macOS Catalina or later ===
+1. Connect iPhone via Lightning/USB-C cable
+2. Select iPhone in Finder (sidebar)
+3. In the "General" tab:
+   - "Back up all of the data on your iPhone to this Mac"
+   - Uncheck "Encrypt local backup"
+   - Click "Back Up Now"
 
-=== 백업 파일 위치 ===
+=== Backup File Locations ===
 Windows:
   %APPDATA%\\Apple Computer\\MobileSync\\Backup\\
 
 macOS:
   ~/Library/Application Support/MobileSync/Backup/
 
-=== 주의사항 ===
-- 암호화된 백업은 비밀번호 없이 분석 불가
-- 백업 용량: 기기 데이터와 비슷한 용량 필요
-- 백업 중 케이블 분리 금지
-- iCloud 백업은 이 도구로 분석 불가 (로컬 백업만 지원)
+=== Important Notes ===
+- Encrypted backups cannot be analyzed without the password
+- Backup size: Similar storage space as device data required
+- Do not disconnect cable during backup
+- iCloud backups cannot be analyzed with this tool (local backups only)
 
-=== 문제 해결 ===
-- "이 컴퓨터 신뢰" 팝업이 안 나타남:
-  → 기기 잠금 해제 후 다시 연결
-  → 설정 > 일반 > 재설정 > 위치 및 개인정보 보호 재설정
+=== Troubleshooting ===
+- "Trust This Computer" popup not appearing:
+  -> Unlock device and reconnect
+  -> Settings > General > Reset > Reset Location & Privacy
 
-- 백업 실패:
-  → 디스크 공간 확인 (백업 용량 이상 필요)
-  → USB 케이블 및 포트 변경 시도
-  → iTunes/Finder 재시작
+- Backup failure:
+  -> Check disk space (need more than backup size)
+  -> Try different USB cable and port
+  -> Restart iTunes/Finder
 """
 
 
