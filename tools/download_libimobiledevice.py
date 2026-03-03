@@ -2,8 +2,8 @@
 """
 libimobiledevice Windows Binaries Downloader
 
-LGPL-2.1 라이선스 바이너리를 다운로드하여 collector에 번들링합니다.
-빌드 시 또는 최초 실행 시 자동으로 다운로드됩니다.
+Downloads LGPL-2.1 licensed binaries and bundles them with the collector.
+Automatically downloaded during build or on first run.
 
 Source: https://github.com/libimobiledevice-win32/imobiledevice-net
 License: LGPL-2.1 (https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html)

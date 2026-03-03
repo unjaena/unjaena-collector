@@ -2,14 +2,15 @@
 """
 Device Enumerators
 
-다양한 디바이스 유형에 대한 열거자 구현.
-각 열거자는 BaseDeviceEnumerator 인터페이스를 구현합니다.
+Enumerator implementations for various device types.
+Each enumerator implements the BaseDeviceEnumerator interface.
 
 Enumerators:
-    - WindowsDiskEnumerator: Windows 물리 디스크 (WMI 기반)
-    - AndroidDeviceEnumerator: Android 기기 (ADB 기반)
-    - iOSBackupEnumerator: iOS 백업 파일
-    - ForensicImageEnumerator: E01/RAW 이미지 파일
+    - WindowsDiskEnumerator: Windows physical disks (WMI-based)
+    - AndroidDeviceEnumerator: Android devices (ADB-based)
+    - iOSBackupEnumerator: iOS backup files
+    - iOSDeviceEnumerator: iOS USB direct connection (pymobiledevice3-based)
+    - ForensicImageEnumerator: E01/RAW image files
 """
 
 import sys
@@ -35,37 +36,37 @@ logger = logging.getLogger(__name__)
 
 class BaseDeviceEnumerator(ABC):
     """
-    디바이스 열거자 기본 클래스
+    Device enumerator base class
 
-    모든 디바이스 열거자는 이 클래스를 상속받아 구현합니다.
+    All device enumerators inherit from this class.
     """
 
     @abstractmethod
     def enumerate(self) -> List[UnifiedDeviceInfo]:
         """
-        현재 사용 가능한 디바이스 목록 반환
+        Return currently available device list
 
         Returns:
-            디바이스 정보 목록
+            List of device information
         """
         pass
 
     @abstractmethod
     def supports_realtime(self) -> bool:
         """
-        실시간 감지 지원 여부
+        Whether real-time detection is supported
 
         Returns:
-            True면 실시간 감지 가능
+            True if real-time detection is possible
         """
         pass
 
     def is_available(self) -> bool:
         """
-        이 열거자가 현재 환경에서 사용 가능한지 확인
+        Check if this enumerator is available in the current environment
 
         Returns:
-            사용 가능 여부
+            Availability status
         """
         return True
 
@@ -76,10 +77,10 @@ class BaseDeviceEnumerator(ABC):
 
 class WindowsDiskEnumerator(BaseDeviceEnumerator):
     """
-    Windows 물리 디스크 열거자
+    Windows physical disk enumerator
 
-    WMI를 통해 시스템의 물리 디스크를 열거합니다.
-    관리자 권한이 필요할 수 있습니다.
+    Enumerates physical disks on the system via WMI.
+    Administrator privileges may be required.
     """
 
     def __init__(self):
@@ -101,33 +102,77 @@ class WindowsDiskEnumerator(BaseDeviceEnumerator):
         return self._wmi_available
 
     def supports_realtime(self) -> bool:
-        return True  # WMI 이벤트를 통한 실시간 감지 가능
+        return True  # Real-time detection via WMI events
 
     def enumerate(self) -> List[UnifiedDeviceInfo]:
         if not self._wmi_available:
             return []
 
         devices = []
+        import re
 
         try:
+            # [2026-02-15] Build disk → drive letter mapping via WMI
+            # Use Win32_LogicalDisk → associators to find physical disk
+            disk_to_volumes = {}  # disk_index -> list of drive letters
+            try:
+                # Method: For each logical disk, trace back to physical disk
+                for logical_disk in self._wmi.Win32_LogicalDisk():
+                    try:
+                        drive_letter = logical_disk.DeviceID  # e.g., "C:", "D:"
+                        if not drive_letter:
+                            continue
+                        letter = drive_letter.rstrip(':')
+
+                        # Get partitions associated with this logical disk
+                        for partition in logical_disk.associators(
+                            wmi_result_class="Win32_DiskPartition"
+                        ):
+                            # Get disk drives associated with this partition
+                            for disk_drive in partition.associators(
+                                wmi_result_class="Win32_DiskDrive"
+                            ):
+                                disk_index = disk_drive.Index
+                                if disk_index is not None:
+                                    if disk_index not in disk_to_volumes:
+                                        disk_to_volumes[disk_index] = []
+                                    if letter not in disk_to_volumes[disk_index]:
+                                        disk_to_volumes[disk_index].append(letter)
+                    except Exception as e:
+                        logger.debug(f"Volume mapping for {logical_disk.DeviceID}: {e}")
+                        continue
+
+                logger.debug(f"Disk to volumes mapping: {disk_to_volumes}")
+            except Exception as e:
+                logger.warning(f"Volume mapping failed (will use fallback): {e}")
+
             for disk in self._wmi.Win32_DiskDrive():
                 try:
                     size = int(disk.Size or 0)
+                    disk_index = disk.Index
+
+                    # Get volumes for this disk
+                    volumes = disk_to_volumes.get(disk_index, [])
+                    # Use first volume as primary, or 'C' as fallback
+                    primary_volume = volumes[0] if volumes else None
+
                     device = UnifiedDeviceInfo(
-                        device_id=f"physical_disk_{disk.Index}",
+                        device_id=f"physical_disk_{disk_index}",
                         device_type=DeviceType.WINDOWS_PHYSICAL_DISK,
-                        display_name=f"{disk.Model or f'Disk {disk.Index}'} ({disk.Index})",
+                        display_name=f"{disk.Model or f'Disk {disk_index}'} ({disk_index})",
                         status=DeviceStatus.READY,
                         size_bytes=size,
                         connection_time=datetime.now(),
                         metadata={
-                            'drive_number': disk.Index,
+                            'drive_number': disk_index,
                             'model': disk.Model or 'Unknown',
                             'serial': disk.SerialNumber,
                             'interface_type': disk.InterfaceType,
                             'partitions': disk.Partitions or 0,
                             'media_type': disk.MediaType,
                             'device_id': disk.DeviceID,
+                            'volume': primary_volume,          # [2026-02-15] Primary drive letter
+                            'all_volumes': volumes,            # [2026-02-15] All drive letters on this disk
                         }
                     )
                     devices.append(device)
@@ -148,9 +193,9 @@ class WindowsDiskEnumerator(BaseDeviceEnumerator):
 
 class AndroidDeviceEnumerator(BaseDeviceEnumerator):
     """
-    Android 디바이스 열거자
+    Android device enumerator
 
-    기존 ADBDeviceMonitor를 래핑하여 통합 인터페이스를 제공합니다.
+    Wraps existing ADBDeviceMonitor to provide unified interface.
     """
 
     def __init__(self):
@@ -166,7 +211,7 @@ class AndroidDeviceEnumerator(BaseDeviceEnumerator):
             else:
                 logger.warning("ADB not available")
         except ImportError:
-            logger.warning("Android collector module not available")
+            logger.debug("Android collector module not available (ADB not installed)")
         except Exception as e:
             logger.error(f"Android collector initialization failed: {e}")
 
@@ -174,7 +219,7 @@ class AndroidDeviceEnumerator(BaseDeviceEnumerator):
         return self._adb_available
 
     def supports_realtime(self) -> bool:
-        return True  # ADB 폴링 기반 실시간 감지
+        return True  # Real-time detection via ADB polling
 
     def enumerate(self) -> List[UnifiedDeviceInfo]:
         if not self._adb_available or not self._monitor:
@@ -183,16 +228,16 @@ class AndroidDeviceEnumerator(BaseDeviceEnumerator):
         devices = []
 
         try:
-            # ADBDeviceMonitor에서 연결된 기기 목록 가져오기
+            # Get connected device list from ADBDeviceMonitor
             connected = self._monitor.get_connected_devices()
 
             for dev_info in connected:
-                # 선택 가능 여부 결정
+                # Determine selectability
                 is_selectable = True
                 disabled_reason = ""
 
                 if not dev_info.rooted:
-                    # 루팅되지 않은 기기는 제한된 수집만 가능
+                    # Non-rooted devices have limited collection
                     disabled_reason = "Limited collection (device not rooted)"
 
                 device = UnifiedDeviceInfo(
@@ -229,9 +274,9 @@ class AndroidDeviceEnumerator(BaseDeviceEnumerator):
 
 class iOSBackupEnumerator(BaseDeviceEnumerator):
     """
-    iOS 백업 열거자
+    iOS backup enumerator
 
-    iTunes/Finder 백업 디렉토리를 스캔하여 iOS 백업을 찾습니다.
+    Scans iTunes/Finder backup directory to find iOS backups.
     """
 
     def __init__(self):
@@ -251,7 +296,7 @@ class iOSBackupEnumerator(BaseDeviceEnumerator):
         return self._available
 
     def supports_realtime(self) -> bool:
-        return False  # 백업 디렉토리는 실시간 변경이 드묾
+        return False  # Backup directory changes are rare
 
     def enumerate(self) -> List[UnifiedDeviceInfo]:
         if not self._available:
@@ -263,12 +308,11 @@ class iOSBackupEnumerator(BaseDeviceEnumerator):
             backups = self._find_backups()
 
             for backup in backups:
-                # 암호화된 백업은 선택 불가
-                is_selectable = not backup.encrypted
+                # Encrypted backups are selectable (password dialog will handle)
+                is_selectable = True
                 disabled_reason = ""
 
                 if backup.encrypted:
-                    disabled_reason = "Encrypted backup (password required)"
                     status = DeviceStatus.LOCKED
                 else:
                     status = DeviceStatus.READY
@@ -301,17 +345,109 @@ class iOSBackupEnumerator(BaseDeviceEnumerator):
 
 
 # =============================================================================
+# iOS Device Enumerator (USB Direct Connection)
+# =============================================================================
+
+class iOSDeviceEnumerator(BaseDeviceEnumerator):
+    """
+    iOS device USB direct connection enumerator
+
+    Enumerates USB-connected iOS devices via pymobiledevice3.
+    """
+
+    def __init__(self):
+        self._available = False
+
+        try:
+            from collectors.ios_collector import PYMOBILEDEVICE3_AVAILABLE
+            self._available = PYMOBILEDEVICE3_AVAILABLE
+            if self._available:
+                logger.info("iOS device enumerator initialized (pymobiledevice3)")
+            else:
+                logger.warning("pymobiledevice3 not available")
+        except ImportError:
+            logger.warning("iOS collector module not available")
+        except Exception as e:
+            logger.error(f"iOS device enumerator initialization failed: {e}")
+
+    def is_available(self) -> bool:
+        return self._available
+
+    def supports_realtime(self) -> bool:
+        return True  # USB connection detection supported
+
+    def enumerate(self) -> List[UnifiedDeviceInfo]:
+        if not self._available:
+            return []
+
+        devices = []
+
+        try:
+            from pymobiledevice3.usbmux import list_devices
+            from pymobiledevice3.lockdown import create_using_usbmux
+
+            connected = list_devices()
+
+            for device in connected:
+                try:
+                    lockdown = create_using_usbmux(serial=device.serial)
+                    all_values = lockdown.all_values
+
+                    device_info = UnifiedDeviceInfo(
+                        device_id=f"ios_device_{device.serial}",
+                        device_type=DeviceType.IOS_DEVICE,
+                        display_name=f"{all_values.get('DeviceName', 'iOS Device')} ({all_values.get('ProductType', 'Unknown')})",
+                        status=DeviceStatus.READY,
+                        size_bytes=0,  # iOS doesn't easily report storage
+                        connection_time=datetime.now(),
+                        metadata={
+                            'udid': device.serial,
+                            'device_name': all_values.get('DeviceName', 'Unknown'),
+                            'product_type': all_values.get('ProductType', 'Unknown'),
+                            'ios_version': all_values.get('ProductVersion', 'Unknown'),
+                            'serial_number': all_values.get('SerialNumber', 'Unknown'),
+                            'connection_type': 'USB',
+                        }
+                    )
+                    devices.append(device_info)
+
+                except Exception as e:
+                    logger.warning(f"Error getting info for device {device.serial}: {e}")
+                    # Still add the device but with limited info
+                    device_info = UnifiedDeviceInfo(
+                        device_id=f"ios_device_{device.serial}",
+                        device_type=DeviceType.IOS_DEVICE,
+                        display_name=f"iOS Device ({device.serial[:8]}...)",
+                        status=DeviceStatus.LOCKED,
+                        size_bytes=0,
+                        connection_time=datetime.now(),
+                        is_selectable=False,
+                        selection_disabled_reason="Device not paired - trust this computer on device",
+                        metadata={
+                            'udid': device.serial,
+                            'connection_type': 'USB',
+                        }
+                    )
+                    devices.append(device_info)
+
+        except Exception as e:
+            logger.error(f"Failed to enumerate iOS devices: {e}")
+
+        return devices
+
+
+# =============================================================================
 # Forensic Image Enumerator
 # =============================================================================
 
 class ForensicImageEnumerator(BaseDeviceEnumerator):
     """
-    포렌식 이미지 열거자
+    Forensic image enumerator
 
-    사용자가 수동으로 추가한 E01/RAW 이미지 파일을 관리합니다.
+    Manages E01/RAW image files manually added by user.
     """
 
-    # 지원하는 확장자
+    # Supported extensions
     E01_EXTENSIONS = {'.e01', '.ex01', '.s01', '.l01'}
     RAW_EXTENSIONS = {'.dd', '.raw', '.img', '.bin'}
 
@@ -320,36 +456,36 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
         logger.info("Forensic image enumerator initialized")
 
     def is_available(self) -> bool:
-        return True  # 항상 사용 가능
+        return True  # Always available
 
     def supports_realtime(self) -> bool:
-        return False  # 수동 추가만 지원
+        return False  # Manual addition only
 
     def enumerate(self) -> List[UnifiedDeviceInfo]:
-        """등록된 이미지 파일 목록 반환"""
+        """Return registered image file list"""
         return list(self._registered_images.values())
 
     def register_image(self, file_path: str) -> UnifiedDeviceInfo:
         """
-        E01/RAW 이미지 파일 등록
+        Register E01/RAW image file
 
         Args:
-            file_path: 이미지 파일 경로
+            file_path: Image file path
 
         Returns:
-            생성된 디바이스 정보
+            Created device information
 
         Raises:
-            FileNotFoundError: 파일이 없는 경우
-            ValueError: 지원하지 않는 확장자인 경우
+            FileNotFoundError: File not found
+            ValueError: Unsupported extension
         """
         path = Path(file_path).resolve()
 
-        # 파일 존재 확인
+        # Check file exists
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
-        # 경로 순회 방지
+        # Prevent path traversal
         if '..' in str(path):
             raise ValueError("Path traversal detected")
 
@@ -359,21 +495,24 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
         if ext not in all_extensions:
             raise ValueError(f"Unsupported file type: {ext}. Supported: {all_extensions}")
 
-        # 디바이스 유형 결정
+        # Determine device type
         if ext in self.E01_EXTENSIONS:
             device_type = DeviceType.E01_IMAGE
         else:
             device_type = DeviceType.RAW_IMAGE
 
-        # 파일 크기
+        # File size
         size_bytes = path.stat().st_size
 
-        # E01 이미지인 경우 실제 디스크 크기 가져오기 시도
+        # Try to get actual disk size for E01 images
         if device_type == DeviceType.E01_IMAGE:
             size_bytes = self._get_e01_disk_size(path) or size_bytes
 
-        # 고유 ID 생성
+        # Generate unique ID
         device_id = f"image_{hashlib.md5(str(path).encode()).hexdigest()[:12]}"
+
+        # [New] OS type detection
+        detected_os, filesystem_type = self._detect_image_os(path, device_type)
 
         device = UnifiedDeviceInfo(
             device_id=device_id,
@@ -386,23 +525,122 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
                 'file_path': str(path),
                 'extension': ext,
                 'segments': self._find_e01_segments(path) if device_type == DeviceType.E01_IMAGE else [],
+                'detected_os': detected_os,           # [New] windows/linux/macos/unknown
+                'filesystem_type': filesystem_type,    # [New] NTFS/ext4/HFS+ etc.
             }
         )
 
         self._registered_images[device_id] = device
-        logger.info(f"Registered forensic image: {path.name} ({device_type.name})")
+        logger.info(f"Registered forensic image: {path.name} ({device_type.name}) [OS: {detected_os}/{filesystem_type}]")
 
         return device
 
-    def unregister_image(self, device_id: str) -> bool:
+    def _detect_image_os(self, path: Path, device_type: DeviceType) -> tuple:
         """
-        이미지 파일 등록 해제
+        Detect OS type from E01/RAW image
 
         Args:
-            device_id: 제거할 이미지 ID
+            path: Image file path
+            device_type: Device type (E01_IMAGE or RAW_IMAGE)
 
         Returns:
-            성공 여부
+            (detected_os, filesystem_type) tuple
+            - detected_os: 'windows', 'linux', 'macos', 'unknown'
+            - filesystem_type: 'NTFS', 'ext4', 'HFS+', 'Unknown' etc.
+        """
+        detected_os = 'unknown'
+        filesystem_type = 'Unknown'
+
+        try:
+            from collectors.forensic_disk import ForensicDiskAccessor
+
+            # Detect filesystem with ForensicDiskAccessor
+            if device_type == DeviceType.E01_IMAGE:
+                accessor = ForensicDiskAccessor.from_e01(str(path))
+            else:
+                accessor = ForensicDiskAccessor.from_raw(str(path))
+
+            partitions = accessor.list_partitions()
+
+            # [2026-02-05] FIX: NTFS를 FAT32보다 우선 (GPT의 EFI 파티션이 FAT32이므로)
+            # 모든 파티션을 스캔하고, 우선순위: NTFS > ext4 > APFS > FAT32
+            best_fs = None
+            best_os = 'unknown'
+            fs_priority = {'NTFS': 10, 'ext4': 9, 'ext3': 8, 'ext2': 7,
+                           'APFS': 9, 'HFS+': 8, 'HFSX': 8, 'HFS': 7,
+                           'exFAT': 5, 'FAT32': 3, 'FAT16': 2, 'FAT12': 1}
+
+            for p in partitions:
+                fs = p.filesystem
+                priority = fs_priority.get(fs, 0)
+
+                if priority > fs_priority.get(best_fs, 0):
+                    best_fs = fs
+                    if fs in ('NTFS', 'FAT32', 'exFAT', 'FAT16', 'FAT12'):
+                        best_os = 'windows'
+                    elif fs in ('ext2', 'ext3', 'ext4'):
+                        best_os = 'linux'
+                    elif fs in ('APFS', 'HFS+', 'HFS', 'HFSX'):
+                        best_os = 'macos'
+
+            if best_fs:
+                detected_os = best_os
+                filesystem_type = best_fs
+
+            accessor.close()
+
+        except Exception as e:
+            logger.warning(f"OS detection failed for {path.name}: {e}")
+
+            # Retry with pytsk3 if ForensicDiskAccessor fails
+            try:
+                from collectors.forensic_disk.ewf_img_info import (
+                    open_e01_as_pytsk3,
+                    open_raw_as_pytsk3,
+                    detect_partitions_pytsk3,
+                    detect_os_from_filesystem
+                )
+
+                if device_type == DeviceType.E01_IMAGE:
+                    img_info = open_e01_as_pytsk3(str(path))
+                else:
+                    img_info = open_raw_as_pytsk3(str(path))
+
+                partitions = detect_partitions_pytsk3(img_info)
+                img_info.close()
+
+                # [2026-02-05] FIX: NTFS 우선순위 적용 (pytsk3 fallback)
+                fs_priority = {'NTFS': 10, 'ext4': 9, 'ext3': 8, 'ext2': 7,
+                               'APFS': 9, 'HFS+': 8, 'HFSX': 8, 'HFS': 7,
+                               'exFAT': 5, 'FAT32': 3, 'FAT16': 2, 'FAT12': 1}
+                best_fs = None
+                best_os = 'unknown'
+
+                for part in partitions:
+                    fs = part.get('filesystem', 'Unknown')
+                    priority = fs_priority.get(fs, 0)
+                    if priority > fs_priority.get(best_fs, 0):
+                        best_fs = fs
+                        best_os = detect_os_from_filesystem(fs)
+
+                if best_fs:
+                    detected_os = best_os
+                    filesystem_type = best_fs
+
+            except Exception as e2:
+                logger.debug(f"pytsk3 OS detection also failed: {e2}")
+
+        return detected_os, filesystem_type
+
+    def unregister_image(self, device_id: str) -> bool:
+        """
+        Unregister image file
+
+        Args:
+            device_id: Image ID to remove
+
+        Returns:
+            Success status
         """
         if device_id in self._registered_images:
             del self._registered_images[device_id]
@@ -411,7 +649,7 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
         return False
 
     def _get_e01_disk_size(self, path: Path) -> Optional[int]:
-        """E01 이미지에서 실제 디스크 크기 가져오기"""
+        """Get actual disk size from E01 image"""
         try:
             from collectors.forensic_disk import E01DiskBackend
             with E01DiskBackend(str(path)) as backend:
@@ -422,14 +660,14 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
             return None
 
     def _find_e01_segments(self, first_segment: Path) -> List[str]:
-        """E01 세그먼트 파일 찾기"""
+        """Find E01 segment files"""
         segments = [str(first_segment)]
 
-        # E01 -> E02, E03, ... 또는 Ex01 -> Ex02, Ex03, ...
+        # E01 -> E02, E03, ... or Ex01 -> Ex02, Ex03, ...
         base = first_segment.stem
         parent = first_segment.parent
 
-        # E01 형식 (E01, E02, ... E99, EAA, EAB, ...)
+        # E01 format (E01, E02, ... E99, EAA, EAB, ...)
         if first_segment.suffix.lower() in ('.e01', '.ex01'):
             for i in range(2, 100):
                 suffix = f".E{i:02d}" if first_segment.suffix.startswith('.E') else f".e{i:02d}"
@@ -448,14 +686,14 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
 
 def create_default_enumerators() -> Dict[str, BaseDeviceEnumerator]:
     """
-    기본 열거자 세트 생성
+    Create default enumerator set
 
     Returns:
-        이름 -> 열거자 매핑
+        Name -> enumerator mapping
     """
     enumerators = {}
 
-    # Windows 디스크 (Windows에서만)
+    # Windows disks (Windows only)
     if sys.platform == 'win32':
         windows = WindowsDiskEnumerator()
         if windows.is_available():
@@ -466,12 +704,17 @@ def create_default_enumerators() -> Dict[str, BaseDeviceEnumerator]:
     if android.is_available():
         enumerators['android'] = android
 
-    # iOS 백업
-    ios = iOSBackupEnumerator()
-    if ios.is_available():
-        enumerators['ios'] = ios
+    # iOS backup
+    ios_backup = iOSBackupEnumerator()
+    if ios_backup.is_available():
+        enumerators['ios_backup'] = ios_backup
 
-    # 포렌식 이미지 (항상 사용 가능)
+    # iOS USB device
+    ios_device = iOSDeviceEnumerator()
+    if ios_device.is_available():
+        enumerators['ios_device'] = ios_device
+
+    # Forensic images (always available)
     enumerators['images'] = ForensicImageEnumerator()
 
     logger.info(f"Created {len(enumerators)} device enumerators: {list(enumerators.keys())}")

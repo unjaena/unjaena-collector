@@ -1,16 +1,16 @@
 """
 Artifact Collector Module
 
-디지털 포렌식 아티팩트 수집 모듈.
-MFT (Master File Table) 기반 수집을 우선 사용하며,
-MFT 사용이 불가능한 경우 레거시 방식으로 폴백합니다.
+Digital forensics artifact collection module.
+MFT (Master File Table) based collection is used by default,
+falling back to legacy methods when MFT is unavailable.
 
-수집 방식:
-- BaseMFTCollector: 통합 MFT 기반 수집 (E01/Local 공용)
-- MFT 기반: pytsk3를 이용한 raw disk 접근 (권장)
-- 레거시: glob.glob + shutil.copy2 (폴백)
+Collection methods:
+- BaseMFTCollector: Unified MFT-based collection (shared for E01/Local)
+- MFT-based: Raw disk access via pytsk3 (recommended)
+- Legacy: glob.glob + shutil.copy2 (fallback)
 
-Note: MFT 기반 수집은 관리자 권한 필요
+Note: MFT-based collection requires administrator privileges
 """
 import os
 import glob
@@ -24,16 +24,16 @@ from typing import Generator, Tuple, Dict, Any, Optional, List
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# Debug Output Control (프로덕션에서는 비활성화)
+# Debug Output Control (disabled in production)
 # =============================================================================
-_DEBUG_OUTPUT = False  # True로 변경하면 디버그 메시지 출력
+_DEBUG_OUTPUT = False  # Set to True to enable debug message output
 
 def _debug_print(message: str):
-    """디버그 출력 (프로덕션에서는 비활성화)"""
+    """Debug output (disabled in production)"""
     if _DEBUG_OUTPUT:
         print(message)
 
-# Try to import BaseMFTCollector (통합 베이스 클래스)
+# Try to import BaseMFTCollector (unified base class)
 try:
     from collectors.base_mft_collector import (
         BaseMFTCollector,
@@ -45,7 +45,7 @@ except ImportError:
     BaseMFTCollector = None
     ARTIFACT_MFT_FILTERS = {}
 
-# Try to import ForensicDiskAccessor (순수 Python - 우선)
+# Try to import ForensicDiskAccessor (pure Python - preferred)
 try:
     from collectors.forensic_disk import (
         ForensicDiskAccessor,
@@ -55,7 +55,7 @@ except ImportError:
     FORENSIC_DISK_AVAILABLE = False
     ForensicDiskAccessor = None
 
-# Try to import MFT collector (pytsk3 - 폴백)
+# Try to import MFT collector (pytsk3 - fallback)
 try:
     from collectors.mft_collector import (
         MFTCollector, MFT_ARTIFACT_TYPES,
@@ -120,24 +120,23 @@ except ImportError:
     macOSCollector = None
     check_macos_target = None
 
-
 # =============================================================================
-# C4 보안: 경로 탈출 공격 방어 유틸리티
+# C4 Security: Path Traversal Attack Defense Utilities
 # =============================================================================
 
 def validate_safe_path(base_dir: Path, target_path: Path) -> Path:
     """
-    경로가 base_dir 내부에 있는지 검증
+    Verify that a path is inside base_dir
 
     Args:
-        base_dir: 허용된 기본 디렉토리
-        target_path: 검증할 대상 경로
+        base_dir: Allowed base directory
+        target_path: Target path to verify
 
     Returns:
-        검증된 경로 (resolve된 상태)
+        Verified path (in resolved state)
 
     Raises:
-        ValueError: 경로가 base_dir 외부인 경우
+        ValueError: If path is outside base_dir
     """
     resolved_base = base_dir.resolve()
     resolved_target = target_path.resolve()
@@ -152,29 +151,27 @@ def validate_safe_path(base_dir: Path, target_path: Path) -> Path:
 
     return resolved_target
 
-
 def sanitize_path_component(name: str) -> str:
     """
-    경로 구성 요소에서 위험한 문자 제거
+    Remove dangerous characters from path component
 
     Args:
-        name: 경로 구성 요소 (파일명 또는 디렉토리명)
+        name: Path component (filename or directory name)
 
     Returns:
-        안전한 이름
+        Safe name
     """
-    # 경로 구분자 및 상위 디렉토리 참조 제거
+    # Remove path separators and parent directory references
     dangerous_chars = ['/', '\\', '..', '\x00']
     safe_name = name
     for char in dangerous_chars:
         safe_name = safe_name.replace(char, '_')
 
-    # 빈 문자열이면 기본값
+    # Use default if empty string
     if not safe_name.strip():
         safe_name = 'unnamed'
 
     return safe_name
-
 
 # Artifact type definitions
 ARTIFACT_TYPES = {
@@ -298,21 +295,21 @@ ARTIFACT_TYPES = {
     'recycle_bin': {
         'name': 'Recycle Bin',
         'description': 'Deleted files metadata',
-        'paths': [r'C:\$Recycle.Bin'],  # 휴지통 루트 경로
+        'paths': [r'C:\$Recycle.Bin'],  # Recycle Bin root path
         'mft_config': {
             'base_path': '$Recycle.Bin',
             'pattern': '$I*',
             'recursive': True,
         },
         'requires_admin': True,
-        'collector': 'collect_recycle_bin',  # [2026-01] 전용 콜렉터 사용
+        'collector': 'collect_recycle_bin',  # [2026-01] Use dedicated collector
     },
     'usb': {
         'name': 'USB History',
         'description': 'USB device connection history',
         'paths': [
             r'C:\Windows\INF\setupapi.dev.log',
-            r'C:\Windows\System32\config\SYSTEM',  # USB 장치 정보 (USBSTOR, MountedDevices 등)
+            r'C:\Windows\System32\config\SYSTEM',  # USB device info (USBSTOR, MountedDevices, etc.)
         ],
         'mft_config': {
             'base_path': 'Windows/INF',
@@ -345,6 +342,7 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': True,
         'requires_mft': True,
+        'subcategory': 'filesystem',
         'collector': None,
     },
     'usn_journal': {
@@ -356,6 +354,7 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': True,
         'requires_mft': True,
+        'subcategory': 'filesystem',
         'collector': None,
     },
     'logfile': {
@@ -367,6 +366,7 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': True,
         'requires_mft': True,
+        'subcategory': 'filesystem',
         'collector': None,
         'forensic_value': 'defense_evasion detection, file creation/deletion timeline',
     },
@@ -379,6 +379,7 @@ ARTIFACT_TYPES = {
         'description': 'Text messages and multimedia messages',
         'paths': [],
         'category': 'android',
+        'subcategory': 'app_system',
         'requires_adb': True,
         'requires_root': True,
         'collector': 'collect_android',
@@ -389,6 +390,7 @@ ARTIFACT_TYPES = {
         'description': 'Incoming, outgoing, and missed calls',
         'paths': [],
         'category': 'android',
+        'subcategory': 'app_system',
         'requires_adb': True,
         'requires_root': True,
         'collector': 'collect_android',
@@ -399,6 +401,7 @@ ARTIFACT_TYPES = {
         'description': 'Contact list and details',
         'paths': [],
         'category': 'android',
+        'subcategory': 'app_system',
         'requires_adb': True,
         'requires_root': True,
         'collector': 'collect_android',
@@ -409,6 +412,7 @@ ARTIFACT_TYPES = {
         'description': 'Installed applications and their data',
         'paths': [],
         'category': 'android',
+        'subcategory': 'app_system',
         'requires_adb': True,
         'requires_root': True,
         'collector': 'collect_android',
@@ -419,6 +423,7 @@ ARTIFACT_TYPES = {
         'description': 'Saved WiFi networks and credentials',
         'paths': [],
         'category': 'android',
+        'subcategory': 'app_system',
         'requires_adb': True,
         'requires_root': True,
         'collector': 'collect_android',
@@ -429,6 +434,7 @@ ARTIFACT_TYPES = {
         'description': 'GPS and location data',
         'paths': [],
         'category': 'android',
+        'subcategory': 'app_system',
         'requires_adb': True,
         'requires_root': True,
         'collector': 'collect_android',
@@ -439,10 +445,69 @@ ARTIFACT_TYPES = {
         'description': 'Photos, videos, and audio files from DCIM/Pictures/Download',
         'paths': [],
         'category': 'android',
+        'subcategory': 'basic',
         'requires_adb': True,
         'requires_root': False,
         'collector': 'collect_android',
         'artifact_key': 'media',
+    },
+    'mobile_android_sms_provider': {
+        'name': 'SMS/MMS (Content Provider)',
+        'description': 'Text messages via Content Provider (non-root)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'basic',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'sms_provider',
+    },
+    'mobile_android_call_provider': {
+        'name': 'Call History (Content Provider)',
+        'description': 'Call logs via Content Provider (non-root)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'basic',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'call_provider',
+    },
+    'mobile_android_contacts_provider': {
+        'name': 'Contacts (Content Provider)',
+        'description': 'Contacts via Content Provider (non-root)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'basic',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'contacts_provider',
+    },
+    'mobile_android_calendar_provider': {
+        'name': 'Calendar (Content Provider)',
+        'description': 'Calendar events via Content Provider (non-root)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'basic',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'calendar_provider',
+    },
+    # =========================================================================
+    # System Information (Combined - 8 sub-types)
+    # =========================================================================
+    'mobile_android_system_info': {
+        'name': 'System Information',
+        'description': 'System logs, installed packages, device settings, notifications, accounts, app usage, network connectivity',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'basic',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'system_info',
     },
 
     # =========================================================================
@@ -453,6 +518,7 @@ ARTIFACT_TYPES = {
         'description': 'Text messages and iMessages from iTunes/Finder backup',
         'paths': [],
         'category': 'ios',
+        'subcategory': 'core',
         'requires_backup': True,
         'collector': 'collect_ios',
         'artifact_key': 'sms',
@@ -462,6 +528,7 @@ ARTIFACT_TYPES = {
         'description': 'Phone call records from backup',
         'paths': [],
         'category': 'ios',
+        'subcategory': 'core',
         'requires_backup': True,
         'collector': 'collect_ios',
         'artifact_key': 'call',
@@ -471,24 +538,17 @@ ARTIFACT_TYPES = {
         'description': 'Address book contacts from backup',
         'paths': [],
         'category': 'ios',
+        'subcategory': 'core',
         'requires_backup': True,
         'collector': 'collect_ios',
         'artifact_key': 'contacts',
-    },
-    'mobile_ios_app': {
-        'name': 'iOS App Data',
-        'description': 'Application data and preferences from backup',
-        'paths': [],
-        'category': 'ios',
-        'requires_backup': True,
-        'collector': 'collect_ios',
-        'artifact_key': 'app',
     },
     'mobile_ios_safari': {
         'name': 'iOS Safari',
         'description': 'Browser history, bookmarks, and tabs from backup',
         'paths': [],
         'category': 'ios',
+        'subcategory': 'core',
         'requires_backup': True,
         'collector': 'collect_ios',
         'artifact_key': 'safari',
@@ -498,6 +558,7 @@ ARTIFACT_TYPES = {
         'description': 'GPS and location data from backup',
         'paths': [],
         'category': 'ios',
+        'subcategory': 'core',
         'requires_backup': True,
         'collector': 'collect_ios',
         'artifact_key': 'location',
@@ -507,13 +568,1989 @@ ARTIFACT_TYPES = {
         'description': 'Backup configuration and device info (Info.plist, Manifest.plist)',
         'paths': [],
         'category': 'ios',
+        'subcategory': 'core',
         'requires_backup': True,
         'collector': 'collect_ios',
         'artifact_key': 'backup',
     },
 
     # =========================================================================
-    # 추가 Windows 아티팩트 (Phase 6)
+    # [2026-02-15] Windows PC Messenger Apps
+    # Collect only parser-required artifacts (not entire directories)
+    # =========================================================================
+    'windows_kakaotalk': {
+        'name': 'KakaoTalk PC',
+        'description': 'KakaoTalk PC messages, user data, and process memory',
+        'paths': [
+            r'%LOCALAPPDATA%\Kakao\KakaoTalk\users\**\*.edb',      # chatLogs, TalkUserDB, chatListInfo
+            r'%LOCALAPPDATA%\Kakao\KakaoTalk\users\**\*.dat',      # profile.dat, appstate.dat
+            r'%LOCALAPPDATA%\Kakao\KakaoTalk\*.ini',               # config
+            r'%LOCALAPPDATA%\Kakao\KakaoTalk\*.dat',               # config
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Local/Kakao/KakaoTalk',
+            'pattern': '*',
+            'extensions': ['.edb', '.dat', '.ini'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_messenger',
+        'requires_admin': False,
+        'collector': 'collect_messenger_with_memory',
+        'artifact_key': 'kakaotalk_pc',
+        'forensic_value': 'chat messages, friend lists, chat rooms',
+        'process_name': 'KakaoTalk.exe',
+    },
+    'windows_line': {
+        'name': 'LINE PC',
+        'description': 'LINE PC messages, user data, and process memory',
+        'paths': [
+            r'%LOCALAPPDATA%\LINE\Data\**\*.edb',                  # encrypted databases
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Local/LINE/Data',
+            'pattern': '*',
+            'extensions': ['.edb'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_messenger',
+        'requires_admin': False,
+        'collector': 'collect_messenger_with_memory',
+        'artifact_key': 'line_pc',
+        'forensic_value': 'chat messages, friend lists, chat rooms',
+        'process_name': 'LINE.exe',
+    },
+    'windows_telegram': {
+        'name': 'Telegram Desktop',
+        'description': 'Telegram Desktop tdata, session keys, and process memory',
+        'paths': [
+            r'%APPDATA%\Telegram Desktop\tdata\key_datas',         # encryption key (TDF$ binary)
+            r'%APPDATA%\Telegram Desktop\tdata\settingss',         # settings (TDF$ binary)
+            r'%APPDATA%\Telegram Desktop\tdata\*\*',               # hex user folders (maps + encrypted data)
+        ],
+        # tdata files are extensionless; exclude media/stickers that may exist in subdirs
+        'exclude_extensions': ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg',
+                               '.tiff', '.heic', '.tgs', '.mp4', '.avi', '.mov', '.webm',
+                               '.mp3', '.ogg', '.wav', '.html', '.css', '.js'],
+        'mft_config': {
+            'user_path': 'AppData/Roaming/Telegram Desktop/tdata',
+            'pattern': '*',
+            'exclude_extensions': ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg',
+                                   '.tiff', '.heic', '.tgs', '.mp4', '.avi', '.mov', '.webm',
+                                   '.mp3', '.ogg', '.wav', '.html', '.css', '.js'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_messenger',
+        'requires_admin': False,
+        'collector': 'collect_messenger_with_memory',
+        'artifact_key': 'telegram_pc',
+        'forensic_value': 'messages (from memory), session keys, settings',
+        'process_name': 'Telegram.exe',
+    },
+    'windows_wechat': {
+        'name': 'WeChat Desktop',
+        'description': 'WeChat Desktop encrypted databases and process memory',
+        'paths': [
+            r'%USERPROFILE%\Documents\xwechat_files\**\*.db',      # encrypted DB files
+            r'%USERPROFILE%\Documents\xwechat_files\**\*.db-wal',  # WAL files
+            r'%USERPROFILE%\Documents\xwechat_files\**\*.db-shm',  # SHM files
+            r'%USERPROFILE%\Documents\WeChat Files\**\*.db',       # legacy layout
+            r'%USERPROFILE%\Documents\WeChat Files\**\*.db-wal',
+            r'%USERPROFILE%\Documents\WeChat Files\**\*.db-shm',
+        ],
+        'mft_config': {
+            'user_path': ['Documents/xwechat_files', 'Documents/WeChat Files'],
+            'pattern': '*',
+            'extensions': ['.db', '.db-wal', '.db-shm'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_messenger',
+        'requires_admin': False,
+        'collector': 'collect_messenger_with_memory',
+        'artifact_key': 'wechat_pc',
+        'forensic_value': 'chat messages, contacts, chat rooms',
+        'process_name': 'Weixin.exe',
+    },
+    'windows_whatsapp': {
+        'name': 'WhatsApp Desktop',
+        'description': 'WhatsApp Desktop encrypted databases, DPAPI keys, and process memory',
+        'paths': [
+            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\**\*.db',      # SEE encrypted DBs
+            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\**\*.db-wal',  # WAL (contacts data!)
+            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\**\*.db-shm',  # SHM
+            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\*.dat',        # nondb_settings (DPAPI key)
+            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\IndexedDB\**\*',  # LevelDB (contacts+messages)
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Local/Packages/5319275A.WhatsAppDesktop_cv1g1gvanyjgm/LocalState',
+            'pattern': '*',
+            'extensions': ['.db', '.db-wal', '.db-shm', '.dat', '.ldb', '.log', '.sst'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_messenger',
+        'requires_admin': False,
+        'collector': 'collect_messenger_with_memory',
+        'artifact_key': 'whatsapp_pc',
+        'forensic_value': 'chat messages, contacts, call history',
+        'process_name': 'WhatsApp.exe',
+    },
+
+    # =========================================================================
+    # [2026-02-15] Phase 1 PC Programs - Remote Access, Email, Cloud Storage
+    # Collect only parser-required artifacts
+    # =========================================================================
+    'windows_discord': {
+        'name': 'Discord Desktop',
+        'description': 'Discord Desktop LevelDB data and user cache',
+        'paths': [
+            r'%APPDATA%\discord\Local Storage\leveldb\*',          # LevelDB (messages, tokens, activity)
+            r'%APPDATA%\discord\userDataCache.json',               # user data cache
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Roaming/discord',
+            'pattern': '*',
+            'extensions': ['.ldb', '.log', '.sst', '.json'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_apps',
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'artifact_key': 'discord_pc',
+        'forensic_value': 'user ID, auth token, server/channel activity, draft messages',
+    },
+    'windows_teamviewer': {
+        'name': 'TeamViewer',
+        'description': 'TeamViewer connection logs and session history',
+        'paths': [
+            r'%APPDATA%\TeamViewer\Connections_incoming.txt',      # incoming connections
+            r'%APPDATA%\TeamViewer\Connections.txt',               # outgoing connections
+            r'%APPDATA%\TeamViewer\TeamViewer*_Logfile.log',       # operation logs
+            r'%PROGRAMDATA%\TeamViewer\Connections_incoming.txt',
+            r'%PROGRAMDATA%\TeamViewer\Connections.txt',
+            r'%PROGRAMDATA%\TeamViewer\TeamViewer*_Logfile.log',
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Roaming/TeamViewer',
+            'pattern': '*',
+            'extensions': ['.txt', '.log'],
+            'system_base_paths': ['ProgramData/TeamViewer'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_apps',
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'artifact_key': 'teamviewer_pc',
+        'forensic_value': 'connection timestamps, partner IDs, session duration',
+    },
+    'windows_anydesk': {
+        'name': 'AnyDesk',
+        'description': 'AnyDesk connection trace and config files',
+        'paths': [
+            r'%APPDATA%\AnyDesk\*.trace',                         # ad.trace, ad_svc.trace
+            r'%APPDATA%\AnyDesk\*.conf',                          # system.conf, user.conf
+            r'%APPDATA%\AnyDesk\connection_trace.txt',             # connection history (UTF-16)
+            r'%PROGRAMDATA%\AnyDesk\*.trace',
+            r'%PROGRAMDATA%\AnyDesk\*.conf',
+            r'%PROGRAMDATA%\AnyDesk\connection_trace.txt',
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Roaming/AnyDesk',
+            'pattern': '*',
+            'extensions': ['.trace', '.conf', '.txt'],
+            'system_base_paths': ['ProgramData/AnyDesk'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_apps',
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'artifact_key': 'anydesk_pc',
+        'forensic_value': 'connection timestamps, remote IDs, session events',
+    },
+    'windows_google_drive': {
+        'name': 'Google Drive Desktop',
+        'description': 'Google Drive Desktop sync metadata databases',
+        'paths': [
+            r'%LOCALAPPDATA%\Google\DriveFS\**\*.db',              # snapshot.db, cloud_graph.db, etc.
+            r'%LOCALAPPDATA%\Google\DriveFS\**\*.db-wal',
+            r'%LOCALAPPDATA%\Google\DriveFS\**\*.db-shm',
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Local/Google/DriveFS',
+            'pattern': '*',
+            'extensions': ['.db', '.db-wal', '.db-shm'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_apps',
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'artifact_key': 'google_drive_pc',
+        'forensic_value': 'synced files, cloud storage activity, account info',
+    },
+    'windows_thunderbird': {
+        'name': 'Mozilla Thunderbird',
+        'description': 'Thunderbird email databases, contacts, and calendar',
+        'paths': [
+            r'%APPDATA%\Thunderbird\Profiles\**\global-messages-db.sqlite',  # indexed emails
+            r'%APPDATA%\Thunderbird\Profiles\**\abook.sqlite',              # address book
+            r'%APPDATA%\Thunderbird\Profiles\**\prefs.js',                  # account config
+            r'%APPDATA%\Thunderbird\Profiles\**\calendar-data\local.sqlite', # calendar events
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Roaming/Thunderbird/Profiles',
+            'pattern': '*',
+            'extensions': ['.sqlite', '.js'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_apps',
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'artifact_key': 'thunderbird_pc',
+        'forensic_value': 'emails, contacts, calendar, account settings',
+    },
+
+    # =========================================================================
+    # [2026-02-03] Android Messenger Apps (Global)
+    # =========================================================================
+    'mobile_android_kakaotalk': {
+        'name': 'KakaoTalk',
+        'description': 'KakaoTalk messages (encrypted)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'kakaotalk',
+    },
+    'mobile_android_whatsapp': {
+        'name': 'WhatsApp',
+        'description': 'WhatsApp messages (3B MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'whatsapp',
+    },
+    'mobile_android_wechat': {
+        'name': 'WeChat',
+        'description': 'WeChat messages (1.41B MAU, SQLCipher encrypted)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'wechat',
+    },
+    'mobile_android_telegram': {
+        'name': 'Telegram',
+        'description': 'Telegram messages (950M MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'telegram',
+    },
+    'mobile_android_facebook_messenger': {
+        'name': 'Facebook Messenger',
+        'description': 'Messenger messages (1B+ MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'facebook_messenger',
+    },
+    'mobile_android_line': {
+        'name': 'LINE',
+        'description': 'LINE messages (196M MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'line',
+    },
+    'mobile_android_discord': {
+        'name': 'Discord',
+        'description': 'Discord cache (200M+ MAU, cloud-based)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'discord',
+    },
+    'mobile_android_viber': {
+        'name': 'Viber',
+        'description': 'Viber messages (230M MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'viber',
+    },
+    'mobile_android_signal': {
+        'name': 'Signal',
+        'description': 'Signal messages (100M MAU, encrypted)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'signal',
+    },
+    'mobile_android_band': {
+        'name': 'BAND',
+        'description': 'BAND group media and posts',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_messenger',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'band',
+    },
+
+    # =========================================================================
+    # [2026-02-03] Android SNS Apps (Global)
+    # =========================================================================
+    'mobile_android_instagram': {
+        'name': 'Instagram',
+        'description': 'Instagram DMs and posts (2B MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_sns',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'instagram',
+    },
+    'mobile_android_facebook': {
+        'name': 'Facebook',
+        'description': 'Facebook posts and timeline (3.05B MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_sns',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'facebook',
+    },
+    'mobile_android_tiktok': {
+        'name': 'TikTok',
+        'description': 'TikTok videos and DMs (1.5B MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_sns',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'tiktok',
+    },
+    'mobile_android_twitter': {
+        'name': 'Twitter/X',
+        'description': 'Twitter tweets and DMs (586M MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_sns',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'twitter',
+    },
+    'mobile_android_reddit': {
+        'name': 'Reddit',
+        'description': 'Reddit posts and messages (1.1B MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_sns',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'reddit',
+    },
+    'mobile_android_snapchat': {
+        'name': 'Snapchat',
+        'description': 'Snapchat messages (800M MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_sns',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'snapchat',
+    },
+    'mobile_android_pinterest': {
+        'name': 'Pinterest',
+        'description': 'Pinterest pins and boards (553M MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_sns',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'pinterest',
+    },
+    'mobile_android_linkedin': {
+        'name': 'LinkedIn',
+        'description': 'LinkedIn connections and messages (386M MAU)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_sns',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'linkedin',
+    },
+    'mobile_android_threads': {
+        'name': 'Threads',
+        'description': 'Threads posts (320M MAU, Meta)',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_sns',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'threads',
+    },
+    'mobile_android_baemin': {
+        'name': 'Baemin',
+        'description': 'Baemin order history, payment info, delivery addresses',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'baemin',
+    },
+    'mobile_android_coupang': {
+        'name': 'Coupang',
+        'description': 'Coupang purchase history, payment info, delivery addresses',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'coupang',
+    },
+    'mobile_android_karrot': {
+        'name': 'Karrot',
+        'description': 'Karrot chat history, transaction records, location data',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'karrot',
+    },
+    'mobile_android_coupangeats': {
+        'name': 'Coupang Eats',
+        'description': 'Coupang Eats order history, payment info, delivery addresses',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'coupangeats',
+    },
+    'mobile_android_yanolja': {
+        'name': 'Yanolja',
+        'description': 'Yanolja booking history, payment info, location data',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'yanolja',
+    },
+    'mobile_android_kakaobank': {
+        'name': 'KakaoBank',
+        'description': 'KakaoBank transaction history, account info, transfer records',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'kakaobank',
+    },
+    'mobile_android_toss': {
+        'name': 'Toss',
+        'description': 'Toss transfer history, payment records, account info',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'toss',
+    },
+    'mobile_android_upbit': {
+        'name': 'Upbit',
+        'description': 'Upbit cryptocurrency trading history, wallet info',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'upbit',
+    },
+    'mobile_android_banksalad': {
+        'name': 'BankSalad',
+        'description': 'BankSalad aggregated financial data, asset summary',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'banksalad',
+    },
+    'mobile_android_kakaopay': {
+        'name': 'KakaoPay',
+        'description': 'KakaoPay payment history, transfer records',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'kakaopay',
+    },
+    'mobile_android_tmap': {
+        'name': 'TMAP',
+        'description': 'TMAP navigation history, route records, location data',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'tmap',
+    },
+    'mobile_android_kakaomap': {
+        'name': 'KakaoMap',
+        'description': 'KakaoMap search history, bookmarks, route records',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'kakaomap',
+    },
+    'mobile_android_navermap': {
+        'name': 'Naver Map',
+        'description': 'Naver Map search history, bookmarks, route records',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'navermap',
+    },
+    'mobile_android_kakaotaxi': {
+        'name': 'Kakao T',
+        'description': 'Kakao T ride history, pickup/dropoff locations, payment records',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'kakaotaxi',
+    },
+    'mobile_android_hiworks': {
+        'name': 'Hiworks',
+        'description': 'Hiworks email, calendar, attendance records',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'hiworks',
+    },
+    'mobile_android_gmail': {
+        'name': 'Gmail',
+        'description': 'Gmail email databases, contacts, attachments',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_email_browser',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'gmail',
+    },
+    'mobile_android_samsung_email': {
+        'name': 'Samsung Email',
+        'description': 'Samsung Email databases, contacts, attachments',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_email_browser',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'samsung_email',
+    },
+    'mobile_android_chrome': {
+        'name': 'Chrome',
+        'description': 'Chrome browsing history, cookies, saved passwords, downloads',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_email_browser',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'chrome',
+    },
+    'mobile_android_samsung_browser': {
+        'name': 'Samsung Browser',
+        'description': 'Samsung Browser history, bookmarks, saved passwords',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_email_browser',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'samsung_browser',
+    },
+
+    # =========================================================================
+    # [2026-02-24] Screen Scraping (Non-Root Accessibility Service)
+    # Agent APK가 Accessibility Service로 앱 화면을 자동 스크래핑
+    # =========================================================================
+    'mobile_android_screen_scrape': {
+        'name': 'Screen Scraping',
+        'description': 'App screen data via Accessibility Service - KakaoTalk, WhatsApp, Telegram, etc.',
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'screen_scrape',
+        'requires_adb': True,
+        'requires_root': False,
+        'collector': 'collect_android',
+        'artifact_key': 'screen_scrape',
+    },
+
+    # =========================================================================
+    # [2026-02-03] iOS Messenger Apps (Global)
+    # =========================================================================
+    'mobile_ios_kakaotalk': {
+        'name': 'KakaoTalk',
+        'description': 'KakaoTalk messages (encrypted)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaotalk',
+    },
+    'mobile_ios_whatsapp': {
+        'name': 'WhatsApp',
+        'description': 'WhatsApp messages (3B MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'whatsapp',
+    },
+    'mobile_ios_wechat': {
+        'name': 'WeChat',
+        'description': 'WeChat messages (1.41B MAU, encrypted)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'wechat',
+    },
+    'mobile_ios_telegram': {
+        'name': 'Telegram',
+        'description': 'Telegram messages (950M MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'telegram',
+    },
+    'mobile_ios_fb_messenger': {
+        'name': 'Facebook Messenger',
+        'description': 'Messenger messages (1B+ MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'fb_messenger',
+    },
+    'mobile_ios_line': {
+        'name': 'LINE',
+        'description': 'LINE messages (196M MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'line',
+    },
+    'mobile_ios_discord': {
+        'name': 'Discord',
+        'description': 'Discord cache (200M+ MAU, cloud-based)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'discord',
+    },
+    'mobile_ios_viber': {
+        'name': 'Viber',
+        'description': 'Viber messages (230M MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'viber',
+    },
+    'mobile_ios_signal': {
+        'name': 'Signal',
+        'description': 'Signal messages (100M MAU, encrypted)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'signal',
+    },
+    'mobile_ios_skype': {
+        'name': 'Skype',
+        'description': 'Skype messages (300M MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'skype',
+    },
+
+    # =========================================================================
+    # [2026-02-03] iOS SNS Apps (Global)
+    # =========================================================================
+    'mobile_ios_instagram': {
+        'name': 'Instagram',
+        'description': 'Instagram DMs and posts (2B MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'instagram',
+    },
+    'mobile_ios_facebook': {
+        'name': 'Facebook',
+        'description': 'Facebook posts and timeline (3.05B MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'facebook',
+    },
+    'mobile_ios_tiktok': {
+        'name': 'TikTok',
+        'description': 'TikTok videos and DMs (1.5B MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'tiktok',
+    },
+    'mobile_ios_twitter': {
+        'name': 'Twitter/X',
+        'description': 'Twitter tweets and DMs (586M MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'twitter',
+    },
+    'mobile_ios_reddit': {
+        'name': 'Reddit',
+        'description': 'Reddit posts and messages (1.1B MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'reddit',
+    },
+    'mobile_ios_snapchat': {
+        'name': 'Snapchat',
+        'description': 'Snapchat messages (800M MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'snapchat',
+    },
+    'mobile_ios_pinterest': {
+        'name': 'Pinterest',
+        'description': 'Pinterest pins and boards (553M MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'pinterest',
+    },
+    'mobile_ios_linkedin': {
+        'name': 'LinkedIn',
+        'description': 'LinkedIn connections and messages (386M MAU)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'linkedin',
+    },
+    'mobile_ios_threads': {
+        'name': 'Threads',
+        'description': 'Threads posts (320M MAU, Meta)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'threads',
+    },
+
+    # =========================================================================
+    # [2026-02-14] iOS Browser Tracking
+    # =========================================================================
+    'mobile_ios_safari_tracking': {
+        'name': 'Safari Tracking Data',
+        'description': 'Safari browsing tracking (cookies, local storage, sessions)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'safari_tracking',
+    },
+    'mobile_ios_chrome_tracking': {
+        'name': 'Chrome Tracking Data',
+        'description': 'Chrome browsing tracking (cookies, local storage)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'chrome_tracking',
+    },
+    'mobile_ios_naver_search': {
+        'name': 'Naver Search History',
+        'description': 'Naver app search history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'naver_search',
+    },
+    'mobile_ios_navermap_history': {
+        'name': 'NaverMap History',
+        'description': 'NaverMap search and navigation history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'navermap_history',
+    },
+
+    # =========================================================================
+    # [2026-02-14] iOS System Artifacts - P0 (High Forensic Value)
+    # =========================================================================
+    'mobile_ios_notes': {
+        'name': 'Notes',
+        'description': 'Apple Notes (text, attachments, shared notes)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'notes',
+    },
+    'mobile_ios_photos': {
+        'name': 'Photos Metadata',
+        'description': 'Photos library metadata (GPS, timestamps, albums)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'photos',
+    },
+    'mobile_ios_calendar': {
+        'name': 'Calendar',
+        'description': 'Calendar events and reminders',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'calendar',
+    },
+    'mobile_ios_reminders': {
+        'name': 'Reminders',
+        'description': 'Apple Reminders lists and items',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'reminders',
+    },
+    'mobile_ios_knowledgec': {
+        'name': 'KnowledgeC Activity',
+        'description': 'App usage, device activity, and interaction history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'knowledgec',
+    },
+
+    # =========================================================================
+    # [2026-02-14] iOS System Artifacts - P1 (Medium Forensic Value)
+    # =========================================================================
+    'mobile_ios_health': {
+        'name': 'Health Data',
+        'description': 'Health app data (steps, heart rate, sleep)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'health',
+    },
+    'mobile_ios_screentime': {
+        'name': 'Screen Time',
+        'description': 'Screen time usage and app limits',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'screentime',
+    },
+    'mobile_ios_voicememos': {
+        'name': 'Voice Memos',
+        'description': 'Voice memo recordings metadata',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'voicememos',
+    },
+    'mobile_ios_maps': {
+        'name': 'Apple Maps History',
+        'description': 'Apple Maps search and navigation history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'maps',
+    },
+    'mobile_ios_safari_bookmarks': {
+        'name': 'Safari Bookmarks',
+        'description': 'Safari bookmarks and reading list',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'safari_bookmarks',
+    },
+
+    # =========================================================================
+    # [2026-02-14] iOS System Artifacts - P2 (Supplementary)
+    # =========================================================================
+    'mobile_ios_wifi': {
+        'name': 'WiFi Networks',
+        'description': 'Known WiFi networks and connection history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'wifi',
+    },
+    'mobile_ios_bluetooth': {
+        'name': 'Bluetooth Devices',
+        'description': 'Paired Bluetooth devices history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'bluetooth',
+    },
+    'mobile_ios_findmy': {
+        'name': 'Find My',
+        'description': 'Find My device/people location data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'findmy',
+    },
+    'mobile_ios_wallet': {
+        'name': 'Wallet / Apple Pay',
+        'description': 'Wallet passes and Apple Pay transaction metadata',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'wallet',
+    },
+    'mobile_ios_spotlight': {
+        'name': 'Spotlight Index',
+        'description': 'Spotlight search index and recent queries',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'spotlight',
+    },
+    'mobile_ios_siri': {
+        'name': 'Siri Activity',
+        'description': 'Siri queries and suggestions',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'siri',
+    },
+
+    # =========================================================================
+    # [2026-02-14] iOS Messenger Auxiliary (Attachments / Profiles)
+    # =========================================================================
+    'mobile_ios_kakaotalk_profile': {
+        'name': 'KakaoTalk Profile',
+        'description': 'KakaoTalk user profile and contact data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaotalk_profile',
+    },
+    'mobile_ios_kakaotalk_links': {
+        'name': 'KakaoTalk Shared Links',
+        'description': 'URLs shared in KakaoTalk chats',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaotalk_links',
+    },
+    'mobile_ios_kakaotalk_search': {
+        'name': 'KakaoTalk Search History',
+        'description': 'In-chat search keyword history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaotalk_search',
+    },
+    'mobile_ios_whatsapp_attachments': {
+        'name': 'WhatsApp Attachments',
+        'description': 'WhatsApp media files (images, videos, voice)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'whatsapp_attachments',
+    },
+    'mobile_ios_whatsapp_calls': {
+        'name': 'WhatsApp Call History',
+        'description': 'WhatsApp voice/video call records',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'whatsapp_calls',
+    },
+    'mobile_ios_whatsapp_contacts': {
+        'name': 'WhatsApp Contacts',
+        'description': 'WhatsApp contact list',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'whatsapp_contacts',
+    },
+    'mobile_ios_whatsapp_media': {
+        'name': 'WhatsApp Media',
+        'description': 'WhatsApp shared media metadata',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'whatsapp_media',
+    },
+    'mobile_ios_fb_messenger_attachments': {
+        'name': 'FB Messenger Attachments',
+        'description': 'Facebook Messenger media and file attachments',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'fb_messenger_attachments',
+    },
+    'mobile_ios_telegram_attachments': {
+        'name': 'Telegram Attachments',
+        'description': 'Telegram media and file attachments',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'telegram_attachments',
+    },
+    'mobile_ios_line_attachments': {
+        'name': 'LINE Attachments',
+        'description': 'LINE media files and attachments',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'line_attachments',
+    },
+    'mobile_ios_line_events': {
+        'name': 'LINE Events',
+        'description': 'LINE calendar events and reminders',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'line_events',
+    },
+    'mobile_ios_line_openchat': {
+        'name': 'LINE OpenChat',
+        'description': 'LINE OpenChat group participation data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'line_openchat',
+    },
+    'mobile_ios_wechat_channels': {
+        'name': 'WeChat Channels',
+        'description': 'WeChat Channels (video feed) activity',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'messenger',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'wechat_channels',
+    },
+    'mobile_ios_snapchat_memories': {
+        'name': 'Snapchat Memories',
+        'description': 'Snapchat saved snaps and memories',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'sns',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'snapchat_memories',
+    },
+
+    # =========================================================================
+    # [2026-02-23] iOS Korean Apps - Financial
+    # =========================================================================
+    'mobile_ios_kakaobank': {
+        'name': 'KakaoBank',
+        'description': 'KakaoBank mobile banking app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaobank',
+    },
+    'mobile_ios_upbit': {
+        'name': 'Upbit',
+        'description': 'Upbit cryptocurrency exchange app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'upbit',
+    },
+    'mobile_ios_banksalad': {
+        'name': 'BankSalad',
+        'description': 'BankSalad financial management app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'banksalad',
+    },
+    'mobile_ios_shinhan': {
+        'name': 'ShinhanBank',
+        'description': 'Shinhan Bank mobile banking app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'shinhan',
+    },
+    'mobile_ios_wooribank': {
+        'name': 'WooriBank',
+        'description': 'Woori Bank mobile banking app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'wooribank',
+    },
+    'mobile_ios_kbstar': {
+        'name': 'KB Star',
+        'description': 'KB Kookmin Bank mobile banking app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kbstar',
+    },
+    'mobile_ios_hanabank': {
+        'name': 'HanaBank',
+        'description': 'Hana Bank mobile banking app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'hanabank',
+    },
+    'mobile_ios_ibk': {
+        'name': 'IBK',
+        'description': 'IBK Industrial Bank app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'ibk',
+    },
+    'mobile_ios_nhbank': {
+        'name': 'NH Bank',
+        'description': 'NH Nonghyup Bank app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'nhbank',
+    },
+    'mobile_ios_kbank': {
+        'name': 'K bank',
+        'description': 'K bank digital bank app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kbank',
+    },
+    'mobile_ios_kakaopay': {
+        'name': 'KakaoPay',
+        'description': 'KakaoPay mobile payment app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaopay',
+    },
+    'mobile_ios_monimo': {
+        'name': 'monimo',
+        'description': 'Samsung Card monimo app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'monimo',
+    },
+    'mobile_ios_hyundaicard': {
+        'name': 'Hyundai Card',
+        'description': 'Hyundai Card app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'hyundaicard',
+    },
+    'mobile_ios_kbpay': {
+        'name': 'KB Pay',
+        'description': 'KB Pay card app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kbpay',
+    },
+    'mobile_ios_oksavings': {
+        'name': 'OK Savings',
+        'description': 'OK Savings Bank app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'oksavings',
+    },
+    'mobile_ios_dbsavings': {
+        'name': 'DB Savings',
+        'description': 'DB Savings Bank app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'dbsavings',
+    },
+    'mobile_ios_fint': {
+        'name': 'Fint',
+        'description': 'Fint investment app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'fint',
+    },
+    'mobile_ios_hantu': {
+        'name': 'Korea Investment',
+        'description': 'Korea Investment & Securities app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'hantu',
+    },
+
+    # =========================================================================
+    # [2026-02-23] iOS Korean Apps - Navigation/Transportation
+    # =========================================================================
+    'mobile_ios_tmap': {
+        'name': 'TMAP',
+        'description': 'TMAP navigation history and GPS data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'tmap',
+    },
+    'mobile_ios_kakaomap': {
+        'name': 'KakaoMap',
+        'description': 'KakaoMap navigation and location data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaomap',
+    },
+    'mobile_ios_navermap': {
+        'name': 'NaverMap',
+        'description': 'NaverMap navigation history and GPS coordinates',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'navermap',
+    },
+    'mobile_ios_kakaobus': {
+        'name': 'KakaoBus',
+        'description': 'KakaoBus transit favorites and stops',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaobus',
+    },
+    'mobile_ios_kakaotaxi': {
+        'name': 'Kakao T',
+        'description': 'Kakao T ride history with GPS coordinates',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaotaxi',
+    },
+    'mobile_ios_kakaometro': {
+        'name': 'KakaoMetro',
+        'description': 'KakaoMetro subway station usage and favorites',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kakaometro',
+    },
+    'mobile_ios_kpass': {
+        'name': 'K-Pass',
+        'description': 'K-Pass transit card data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'kpass',
+    },
+    'mobile_ios_asiana': {
+        'name': 'Asiana Airlines',
+        'description': 'Asiana Airlines app flight data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'asiana',
+    },
+
+    # =========================================================================
+    # [2026-02-23] iOS Korean Apps - Shopping/Delivery
+    # =========================================================================
+    'mobile_ios_coupang': {
+        'name': 'Coupang',
+        'description': 'Coupang shopping app user and group data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'coupang',
+    },
+    'mobile_ios_baemin': {
+        'name': 'Baemin',
+        'description': 'Baemin delivery order history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'baemin',
+    },
+    'mobile_ios_karrot': {
+        'name': 'Karrot',
+        'description': 'Karrot (Danggeun Market) trading data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'karrot',
+    },
+    'mobile_ios_coupangeats': {
+        'name': 'Coupang Eats',
+        'description': 'Coupang Eats food delivery data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'coupangeats',
+    },
+    'mobile_ios_yanolja': {
+        'name': 'Yanolja',
+        'description': 'Yanolja accommodation booking data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'yanolja',
+    },
+
+    # =========================================================================
+    # [2026-02-23] iOS Apps - Browser/Email/Office
+    # =========================================================================
+    'mobile_ios_chrome': {
+        'name': 'Chrome',
+        'description': 'Chrome iOS browsing history, searches, downloads',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'chrome',
+    },
+    'mobile_ios_gmail': {
+        'name': 'Gmail',
+        'description': 'Gmail iOS email metadata',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'gmail',
+    },
+    'mobile_ios_excel': {
+        'name': 'Excel',
+        'description': 'Microsoft Excel iOS data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'excel',
+    },
+    'mobile_ios_pages': {
+        'name': 'Pages',
+        'description': 'Apple Pages document data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'pages',
+    },
+    'mobile_ios_numbers': {
+        'name': 'Numbers',
+        'description': 'Apple Numbers spreadsheet data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'numbers',
+    },
+    'mobile_ios_keynote': {
+        'name': 'Keynote',
+        'description': 'Apple Keynote presentation data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'keynote',
+    },
+    'mobile_ios_m365': {
+        'name': 'Microsoft 365',
+        'description': 'Microsoft 365 mobile app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'm365',
+    },
+    'mobile_ios_gdrive': {
+        'name': 'Google Drive',
+        'description': 'Google Drive cloud storage data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'gdrive',
+    },
+    'mobile_ios_polaris': {
+        'name': 'Polaris Office',
+        'description': 'Polaris Office document data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'polaris',
+    },
+
+    # =========================================================================
+    # [2026-02-23] iOS Apps - Streaming
+    # =========================================================================
+    'mobile_ios_youtube': {
+        'name': 'YouTube',
+        'description': 'YouTube watch and upload history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'youtube',
+    },
+    'mobile_ios_netflix': {
+        'name': 'Netflix',
+        'description': 'Netflix viewing history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'netflix',
+    },
+    'mobile_ios_coupangplay': {
+        'name': 'Coupang Play',
+        'description': 'Coupang Play streaming history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'coupangplay',
+    },
+
+    # =========================================================================
+    # [2026-02-23] iOS Korean Apps - Utility
+    # =========================================================================
+    'mobile_ios_jikbang': {
+        'name': 'Jikbang',
+        'description': 'Jikbang real estate search data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'jikbang',
+    },
+    'mobile_ios_dabang': {
+        'name': 'Dabang',
+        'description': 'Dabang real estate search data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'dabang',
+    },
+    'mobile_ios_govt24': {
+        'name': 'Government 24',
+        'description': 'Government 24 service data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'govt24',
+    },
+    'mobile_ios_wetax': {
+        'name': 'Wetax',
+        'description': 'Smart Wetax tax service data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'wetax',
+    },
+    'mobile_ios_nhis': {
+        'name': 'NHIS',
+        'description': 'National Health Insurance Service data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'nhis',
+    },
+    'mobile_ios_whowho': {
+        'name': 'WhoWho',
+        'description': 'WhoWho caller ID data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'whowho',
+    },
+    'mobile_ios_aparteye': {
+        'name': 'ApartEye',
+        'description': 'ApartEye apartment management data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'aparteye',
+    },
+    'mobile_ios_millie': {
+        'name': 'Millie',
+        'description': 'Millie e-book reading data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'millie',
+    },
+    'mobile_ios_metlife': {
+        'name': 'MetLife',
+        'description': 'MetLife insurance app data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'metlife',
+    },
+    'mobile_ios_papago': {
+        'name': 'Papago',
+        'description': 'Naver Papago translation history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'papago',
+    },
+    'mobile_ios_strava': {
+        'name': 'Strava',
+        'description': 'Strava fitness activity and GPS data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'productivity',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'strava',
+    },
+
+    # =========================================================================
+    # [2026-02-23] iOS Apps - Email/Office (Additional)
+    # =========================================================================
+    'mobile_ios_outlook': {
+        'name': 'Outlook',
+        'description': 'Microsoft Outlook iOS email and calendar data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'outlook',
+    },
+    'mobile_ios_ms_teams': {
+        'name': 'Microsoft Teams',
+        'description': 'Microsoft Teams chat and meeting data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'ms_teams',
+    },
+    'mobile_ios_ms_authenticator': {
+        'name': 'MS Authenticator',
+        'description': 'Microsoft Authenticator account data',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'ms_authenticator',
+    },
+    'mobile_ios_google_search': {
+        'name': 'Google Search',
+        'description': 'Google app search history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'email_browser',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'google_search',
+    },
+
+    # =========================================================================
+    # [2026-02-23] iOS System Artifacts (Additional)
+    # =========================================================================
+    'mobile_ios_installed_apps': {
+        'name': 'Installed Apps',
+        'description': 'List of all installed applications',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'installed_apps',
+    },
+    'mobile_ios_accounts': {
+        'name': 'User Accounts',
+        'description': 'Configured email/social accounts on device',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'accounts',
+    },
+    'mobile_ios_voicemail': {
+        'name': 'Voicemail',
+        'description': 'Visual voicemail recordings metadata',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'voicemail',
+    },
+    'mobile_ios_vpn': {
+        'name': 'VPN Configurations',
+        'description': 'VPN connection profiles and history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'vpn',
+    },
+    'mobile_ios_tcc': {
+        'name': 'TCC Privacy Database',
+        'description': 'App permission grants (camera, microphone, location)',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'tcc',
+    },
+    'mobile_ios_location_services': {
+        'name': 'Location Services',
+        'description': 'Per-app location access history',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'location_services',
+    },
+    'mobile_ios_device_info': {
+        'name': 'Device Info',
+        'description': 'Device hardware and software information',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'device_info',
+    },
+    'mobile_ios_device_backup': {
+        'name': 'Device Backup Info',
+        'description': 'Backup configuration and timestamps',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'device_backup',
+    },
+    'mobile_ios_data_usage': {
+        'name': 'Data Usage',
+        'description': 'Per-app cellular and WiFi data consumption',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'data_usage',
+    },
+    'mobile_ios_app_state': {
+        'name': 'App State',
+        'description': 'App state snapshots and saved sessions',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'app_state',
+    },
+    'mobile_ios_crash_logs': {
+        'name': 'Crash Logs',
+        'description': 'App crash reports with timestamps',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'crash_logs',
+    },
+    'mobile_ios_syslog': {
+        'name': 'System Log',
+        'description': 'iOS system diagnostic logs',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'syslog',
+    },
+    'mobile_ios_unified_logs': {
+        'name': 'Unified Logs',
+        'description': 'iOS unified logging system entries',
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'unified_logs',
+    },
+
+    # =========================================================================
+    # Additional Windows Artifacts (Phase 6)
     # =========================================================================
     'jumplist': {
         'name': 'Jump Lists',
@@ -586,7 +2623,7 @@ ARTIFACT_TYPES = {
         'collector': 'collect_user_glob',
     },
     # =========================================================================
-    # User Files - 서버 분석 가능한 확장자만 (server_parsing_service.py 기준)
+    # User Files - Server-parseable extensions only (per server_parsing_service.py)
     # =========================================================================
     'document': {
         'name': 'Documents',
@@ -602,11 +2639,11 @@ ARTIFACT_TYPES = {
             r'%USERPROFILE%\Documents\**\*.pptx',
         ],
         'mft_config': {
-            # 서버 분석 가능: python-docx, openpyxl, pypdf, olefile
+            # Server-parseable: python-docx, openpyxl, pypdf, olefile
             'extensions': ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
                           '.pdf', '.hwp', '.hwpx'],
         },
-        'requires_admin': True,  # MFT 접근 필요
+        'requires_admin': True,  # MFT access required
         'collector': 'collect_user_glob',
     },
     'email': {
@@ -619,15 +2656,15 @@ ARTIFACT_TYPES = {
             r'%USERPROFILE%\**\*.msg',
         ],
         'mft_config': {
-            # 서버 분석 가능: email, extract_msg, pypff
+            # Server-parseable: email, extract_msg, pypff
             'extensions': ['.pst', '.ost', '.eml', '.msg'],
         },
-        'requires_admin': True,  # MFT 접근 필요
+        'requires_admin': True,  # MFT access required
         'collector': 'collect_user_glob',
     },
 
     # =========================================================================
-    # Phase 2: 명령어 실행 및 크래시 아티팩트
+    # Phase 2: Command execution and crash artifacts
     # =========================================================================
     'powershell_history': {
         'name': 'PowerShell History',
@@ -674,7 +2711,7 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # Phase 3: 보완 아티팩트 (네트워크, 프로필)
+    # Phase 3: Supplementary artifacts (network, profiles)
     # =========================================================================
     'wlan_event': {
         'name': 'WLAN Event Log',
@@ -702,14 +2739,60 @@ ARTIFACT_TYPES = {
         'requires_admin': True,
         'collector': 'collect_locked_files',
     },
-    # image, video 제외됨 - 포렌식 관점에서 중요도 낮음 + 해시 계산으로 인한 속도 저하
 
     # =========================================================================
-    # [2026-01] P0 신규 아티팩트 - 높은 포렌식 가치
+    # [2026-01] Media Artifacts - Server parsing support
+    # =========================================================================
+    'image': {
+        'name': 'Image Files',
+        'description': 'JPEG, PNG, GIF images with EXIF/GPS metadata (server-parseable)',
+        'paths': [
+            r'%USERPROFILE%\Pictures\**\*.jpg',
+            r'%USERPROFILE%\Pictures\**\*.jpeg',
+            r'%USERPROFILE%\Pictures\**\*.png',
+            r'%USERPROFILE%\Pictures\**\*.gif',
+            r'%USERPROFILE%\Pictures\**\*.bmp',
+            r'%USERPROFILE%\Pictures\**\*.heic',
+            r'%USERPROFILE%\Downloads\**\*.jpg',
+            r'%USERPROFILE%\Downloads\**\*.jpeg',
+            r'%USERPROFILE%\Downloads\**\*.png',
+        ],
+        'mft_config': {
+            # Server-parseable: PIL (EXIF, GPS)
+            'extensions': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.heic', '.heif', '.webp'],
+            'user_paths': ['Pictures', 'Downloads', 'Desktop'],
+        },
+        'requires_admin': True,  # MFT access required
+        'collector': 'collect_user_glob',
+        'forensic_value': 'EXIF metadata, GPS location, capture time, camera info',
+    },
+    'video': {
+        'name': 'Video Files',
+        'description': 'MP4, AVI, MOV videos with metadata (server-parseable, requires ffprobe)',
+        'paths': [
+            r'%USERPROFILE%\Videos\**\*.mp4',
+            r'%USERPROFILE%\Videos\**\*.avi',
+            r'%USERPROFILE%\Videos\**\*.mov',
+            r'%USERPROFILE%\Videos\**\*.mkv',
+            r'%USERPROFILE%\Downloads\**\*.mp4',
+            r'%USERPROFILE%\Downloads\**\*.avi',
+        ],
+        'mft_config': {
+            # Server-parseable: ffprobe
+            'extensions': ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'],
+            'user_paths': ['Videos', 'Downloads', 'Desktop'],
+        },
+        'requires_admin': True,  # MFT access required
+        'collector': 'collect_user_glob',
+        'forensic_value': 'Duration, resolution, codec info, creation time',
+    },
+
+    # =========================================================================
+    # [2026-01] P0 New Artifacts - High forensic value
     # =========================================================================
     'activities_cache': {
         'name': 'Windows Timeline (ActivitiesCache.db)',
-        'description': 'Windows Timeline - 앱 실행 지속시간 포함 (Win10 1803+)',
+        'description': 'Windows Timeline - includes app execution duration (Win10 1803+)',
         'paths': [
             r'%LOCALAPPDATA%\ConnectedDevicesPlatform\*\ActivitiesCache.db',
             r'%LOCALAPPDATA%\ConnectedDevicesPlatform\*\ActivitiesCache.db-wal',
@@ -722,11 +2805,11 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': False,
         'collector': 'collect_user_glob',
-        'forensic_value': '앱 실행 시간/지속시간, 클립보드 기록, 파일 열람 기록',
+        'forensic_value': 'App execution time/duration, clipboard history, file access history',
     },
     'pca_launch': {
         'name': 'Program Compatibility Assistant (Win11+)',
-        'description': 'Windows 11 22H2+ 프로그램 실행 기록 (PcaAppLaunchDic.txt)',
+        'description': 'Windows 11 22H2+ program execution records (PcaAppLaunchDic.txt)',
         'paths': [
             r'C:\Windows\appcompat\pca\PcaAppLaunchDic.txt',
             r'C:\Windows\appcompat\pca\PcaGeneralDb0.txt',
@@ -738,11 +2821,11 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': True,
         'collector': 'collect_files',
-        'forensic_value': '실행 파일 경로, 실행 시간 (AmCache 보완)',
+        'forensic_value': 'Executable path, execution time (supplements AmCache)',
     },
     'etl_log': {
         'name': 'ETW AutoLogger (.etl)',
-        'description': 'ETW AutoLogger 트레이스 (이벤트 로그 삭제 후에도 유지)',
+        'description': 'ETW AutoLogger traces (persists even after event log deletion)',
         'paths': [
             r'C:\Windows\System32\WDI\LogFiles\*.etl',
             r'C:\Windows\System32\LogFiles\WMI\*.etl',
@@ -758,11 +2841,11 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': True,
         'collector': 'collect_glob',
-        'forensic_value': '프로세스 추적, 부팅 기록 (로그 삭제 우회)',
+        'forensic_value': 'Process tracking, boot records (bypasses log deletion)',
     },
     'wmi_subscription': {
         'name': 'WMI Repository (OBJECTS.DATA)',
-        'description': 'WMI 이벤트 구독 - 지속성 메커니즘 탐지 (MITRE T1546.003)',
+        'description': 'WMI event subscriptions - persistence mechanism detection (MITRE T1546.003)',
         'paths': [
             r'C:\Windows\System32\wbem\Repository\OBJECTS.DATA',
             r'C:\Windows\System32\wbem\Repository\INDEX.BTR',
@@ -775,11 +2858,11 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': True,
         'collector': 'collect_locked_files',
-        'forensic_value': 'WMI 지속성, 악성 이벤트 구독 탐지',
+        'forensic_value': 'WMI persistence, malicious event subscription detection',
     },
     'defender_detection': {
         'name': 'Windows Defender Detection History',
-        'description': 'Defender 탐지 기록 (MpDetection-*.bin)',
+        'description': 'Defender detection records (MpDetection-*.bin)',
         'paths': [
             r'C:\ProgramData\Microsoft\Windows Defender\Scans\History\Service\DetectionHistory\*\*.bin',
             r'C:\ProgramData\Microsoft\Windows Defender\Support\MPLog-*.log',
@@ -794,11 +2877,11 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': True,
         'collector': 'collect_glob',
-        'forensic_value': '악성코드 탐지 기록, 격리된 파일 정보',
+        'forensic_value': 'Malware detection records, quarantined file info',
     },
     'zone_identifier': {
         'name': 'Zone.Identifier (ADS)',
-        'description': '다운로드 파일 출처 URL 및 보안 영역 정보 (Alternate Data Stream)',
+        'description': 'Downloaded file source URL and security zone info (Alternate Data Stream)',
         'paths': [
             r'%USERPROFILE%\Downloads\*:Zone.Identifier',
             r'%USERPROFILE%\Desktop\*:Zone.Identifier',
@@ -811,11 +2894,11 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': False,
         'collector': 'collect_zone_identifier',
-        'forensic_value': '다운로드 출처 URL, 보안 영역 (Internet/Intranet), 원본 호스트',
+        'forensic_value': 'Download source URL, security zone (Internet/Intranet), original host',
     },
     'bits_jobs': {
         'name': 'BITS Transfer Jobs',
-        'description': 'Background Intelligent Transfer Service 작업 기록 (악성코드 다운로드 탐지)',
+        'description': 'Background Intelligent Transfer Service job records (malware download detection)',
         'paths': [
             r'C:\ProgramData\Microsoft\Network\Downloader\qmgr0.dat',
             r'C:\ProgramData\Microsoft\Network\Downloader\qmgr1.dat',
@@ -826,7 +2909,7 @@ ARTIFACT_TYPES = {
         },
         'requires_admin': True,
         'collector': 'collect_locked_files',
-        'forensic_value': 'BITS 다운로드 URL, 작업 생성 시간 (MITRE T1197)',
+        'forensic_value': 'BITS download URL, job creation time (MITRE T1197)',
     },
 
     # =========================================================================
@@ -1008,12 +3091,11 @@ ARTIFACT_TYPES = {
     },
 }
 
-
 # =============================================================================
-# Local MFT Collector (BaseMFTCollector 상속)
+# Local MFT Collector (inherits from BaseMFTCollector)
 # =============================================================================
 
-# BitLocker 모듈 import
+# BitLocker module import
 try:
     from utils.bitlocker import (
         detect_bitlocker_on_system_drive,
@@ -1026,32 +3108,31 @@ except ImportError:
     BITLOCKER_MODULE_AVAILABLE = False
     BitLockerDecryptor = None
 
-# 동적 베이스 클래스 결정
+# Dynamic base class determination
 _LocalMFTBase = BaseMFTCollector if (BASE_MFT_AVAILABLE and BaseMFTCollector) else object
-
 
 class LocalMFTCollector(_LocalMFTBase):
     """
-    로컬 디스크 MFT 기반 수집기
+    Local disk MFT-based collector
 
-    BaseMFTCollector를 상속하여 E01과 동일한 MFT 기반 수집을 사용합니다.
+    Inherits from BaseMFTCollector to use the same MFT-based collection as E01.
 
-    수집 우선순위:
-    1. MFT 파싱 기반 수집 (ForensicDiskAccessor)
-    2. BitLocker 암호화 시 → 복호화 시도 → MFT 수집
-    3. 복호화 실패 시 → 디렉토리 탐색 폴백 (Windows API)
+    Collection priority:
+    1. MFT parsing-based collection (ForensicDiskAccessor)
+    2. BitLocker encrypted -> attempt decryption -> MFT collection
+    3. Decryption failed -> directory traversal fallback (Windows API)
 
-    디지털 포렌식 원칙:
-    - 파일 수 제한 없음
-    - 삭제 파일 포함 (MFT 모드에서만)
-    - 시스템 폴더 포함
+    Digital forensics principles:
+    - No file count limit
+    - Include deleted files (MFT mode only)
+    - Include system folders
     """
 
     def __init__(self, output_dir: str, volume: str = 'C'):
         """
         Args:
-            output_dir: 추출된 아티팩트 저장 디렉토리
-            volume: 수집할 볼륨 (기본: 'C')
+            output_dir: Directory to store extracted artifacts
+            volume: Volume to collect from (default: 'C')
         """
         if not BASE_MFT_AVAILABLE:
             raise ImportError("BaseMFTCollector not available")
@@ -1062,7 +3143,7 @@ class LocalMFTCollector(_LocalMFTBase):
         self._partition_index: Optional[int] = None
         self._drive_number: Optional[int] = None
 
-        # BitLocker 및 폴백 관련
+        # BitLocker and fallback related
         self._bitlocker_detected: bool = False
         self._bitlocker_decrypted: bool = False
         self._use_directory_fallback: bool = False
@@ -1072,12 +3153,12 @@ class LocalMFTCollector(_LocalMFTBase):
 
     def _initialize_accessor(self) -> bool:
         """
-        ForensicDiskAccessor 초기화
+        Initialize ForensicDiskAccessor
 
-        수집 우선순위:
-        1. 일반 NTFS 파티션 → MFT 수집
-        2. BitLocker 파티션 → 복호화 시도 → MFT 수집
-        3. 복호화 실패 → 디렉토리 탐색 폴백
+        Collection priority:
+        1. Normal NTFS partition -> MFT collection
+        2. BitLocker partition -> attempt decryption -> MFT collection
+        3. Decryption failed -> directory traversal fallback
         """
         if not FORENSIC_DISK_AVAILABLE or ForensicDiskAccessor is None:
             logger.warning("ForensicDiskAccessor not available, using directory fallback")
@@ -1085,7 +3166,7 @@ class LocalMFTCollector(_LocalMFTBase):
             return False
 
         try:
-            # 물리 드라이브 번호 가져오기
+            # Get physical drive number
             self._drive_number = self._get_physical_drive_number()
             if self._drive_number is None:
                 logger.warning("Cannot determine physical drive number, using directory fallback")
@@ -1094,34 +3175,34 @@ class LocalMFTCollector(_LocalMFTBase):
 
             self._accessor = ForensicDiskAccessor.from_physical_disk(self._drive_number)
 
-            # 볼륨에 해당하는 파티션 찾기
+            # Find partition for volume
             partition_result = self._find_partition_for_volume()
 
             if partition_result['found']:
                 if partition_result['is_bitlocker']:
-                    # BitLocker 암호화 파티션 발견
+                    # BitLocker encrypted partition found
                     self._bitlocker_detected = True
                     logger.info(f"BitLocker encrypted partition detected at index {partition_result['index']}")
 
-                    # 복호화 시도
+                    # Attempt decryption
                     if self._try_bitlocker_decryption(partition_result['index']):
                         self._bitlocker_decrypted = True
                         logger.info("BitLocker decryption successful, using MFT collection")
                         return True
                     else:
-                        # 복호화 실패 → 디렉토리 탐색 폴백
+                        # Decryption failed -> directory traversal fallback
                         logger.warning("BitLocker decryption failed, falling back to directory traversal")
                         self._use_directory_fallback = True
                         self._accessor = None
                         return False
                 else:
-                    # 일반 NTFS 파티션
+                    # Normal NTFS partition
                     self._accessor.select_partition(partition_result['index'])
                     self._partition_index = partition_result['index']
                     logger.info(f"LocalMFTCollector initialized: {self.volume}: (Drive {self._drive_number}, Partition {partition_result['index']})")
                     return True
             else:
-                # 파티션을 찾을 수 없음 → 디렉토리 탐색 폴백
+                # Cannot find partition -> directory traversal fallback
                 logger.warning("Cannot find partition for volume, using directory fallback")
                 self._use_directory_fallback = True
                 return False
@@ -1134,16 +3215,16 @@ class LocalMFTCollector(_LocalMFTBase):
 
     def _try_bitlocker_decryption(self, partition_index: int) -> bool:
         """
-        BitLocker 복호화 시도
+        Attempt BitLocker decryption
 
-        Windows가 이미 볼륨을 마운트했다면 (로그인 상태),
-        OS를 통해 접근 가능하므로 디렉토리 폴백으로 수집 가능.
+        If Windows has already mounted the volume (logged in state),
+        it can be accessed via OS, so collection is possible via directory fallback.
 
         Args:
-            partition_index: BitLocker 파티션 인덱스
+            partition_index: BitLocker partition index
 
         Returns:
-            복호화 성공 여부
+            Whether decryption was successful
         """
         if not BITLOCKER_MODULE_AVAILABLE:
             logger.debug("BitLocker module not available")
@@ -1154,22 +3235,22 @@ class LocalMFTCollector(_LocalMFTBase):
             return False
 
         try:
-            # BitLocker 복호화기 초기화
+            # Initialize BitLocker decryptor
             decryptor = BitLockerDecryptor.from_physical_disk(
                 self._drive_number,
                 partition_index
             )
 
-            # 자동 잠금 해제 시도 (TPM, 자동 잠금 해제 키 등)
-            # 실제로는 사용자 입력이 필요할 수 있음
-            # 여기서는 Windows가 이미 마운트한 볼륨인지 확인
+            # Attempt auto-unlock (TPM, auto-unlock key, etc.)
+            # User input may actually be required
+            # Here we check if Windows has already mounted the volume
 
-            # Windows가 마운트한 볼륨은 디렉토리 탐색으로 접근 가능
+            # Windows-mounted volumes can be accessed via directory traversal
             volume_path = f"{self.volume}:\\"
             if os.path.exists(volume_path) and os.path.isdir(volume_path):
                 logger.info(f"Volume {self.volume}: is mounted and accessible via Windows API")
-                # 디렉토리 폴백 사용 (이미 마운트됨)
-                return False  # MFT는 여전히 접근 불가, 폴백 필요
+                # Use directory fallback (already mounted)
+                return False  # MFT still inaccessible, fallback needed
 
             return False
 
@@ -1178,13 +3259,13 @@ class LocalMFTCollector(_LocalMFTBase):
             return False
 
     def _get_source_description(self) -> str:
-        """소스 설명 반환"""
+        """Return source description"""
         if self._use_directory_fallback:
             return f"Local: {self.volume}: (Directory Fallback)"
         return f"Local: {self.volume}:"
 
     def _get_physical_drive_number(self) -> Optional[int]:
-        """볼륨 문자에서 물리 드라이브 번호 가져오기"""
+        """Get physical drive number from volume letter"""
         try:
             import ctypes
             from ctypes import wintypes
@@ -1251,7 +3332,7 @@ class LocalMFTCollector(_LocalMFTBase):
 
     def _find_partition_for_volume(self) -> Dict[str, Any]:
         """
-        현재 볼륨에 해당하는 파티션 인덱스 찾기
+        Find partition index for current volume
 
         Returns:
             {
@@ -1274,31 +3355,31 @@ class LocalMFTCollector(_LocalMFTBase):
             bitlocker_partition = None
 
             for i, part in enumerate(partitions):
-                # Recovery 파티션 건너뛰기
+                # Skip Recovery partition
                 if 'recovery' in part.type_name.lower():
                     continue
 
-                # BitLocker 암호화된 파티션 기록
+                # Record BitLocker encrypted partition
                 if part.filesystem in ('BitLocker', 'bitlocker'):
-                    # 가장 큰 BitLocker 파티션 선택 (보통 메인 Windows 파티션)
+                    # Select largest BitLocker partition (usually main Windows partition)
                     if bitlocker_partition is None or part.size > best_size:
                         bitlocker_partition = i
                         best_size = part.size
                     continue
 
-                # NTFS 파티션 중 가장 큰 것 선택
+                # Select largest NTFS partition
                 if part.filesystem in ('NTFS', 'ntfs'):
                     if part.size > best_size:
                         best_size = part.size
                         best_partition = i
 
-            # NTFS 파티션 우선
+            # NTFS partition takes priority
             if best_partition is not None:
                 result['found'] = True
                 result['index'] = best_partition
                 result['is_bitlocker'] = False
                 result['filesystem'] = 'NTFS'
-            # NTFS가 없으면 BitLocker 파티션
+            # If no NTFS, use BitLocker partition
             elif bitlocker_partition is not None:
                 result['found'] = True
                 result['index'] = bitlocker_partition
@@ -1318,24 +3399,77 @@ class LocalMFTCollector(_LocalMFTBase):
         **kwargs
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        아티팩트 수집
+        Collect artifacts
 
-        MFT 모드 또는 디렉토리 탐색 폴백 사용.
+        Uses MFT mode or directory traversal fallback.
 
         Args:
-            artifact_type: 수집할 아티팩트 유형
-            progress_callback: 진행률 콜백
+            artifact_type: Type of artifact to collect
+            progress_callback: Progress callback
 
         Yields:
-            (로컬 경로, 메타데이터) 튜플
+            (local path, metadata) tuple
         """
         if self._use_directory_fallback:
-            # BitLocker 또는 MFT 접근 불가 → 디렉토리 탐색
+            # BitLocker or MFT inaccessible -> directory traversal
             logger.info(f"[{self._get_source_description()}] Collecting {artifact_type} via directory traversal...")
             yield from self._collect_directory_fallback(artifact_type, progress_callback)
         else:
-            # MFT 기반 수집 (부모 클래스)
-            yield from super().collect(artifact_type, progress_callback, **kwargs)
+            # [2026-02-15] MFT mode: if artifact is NOT in MFT filters but IS in ARTIFACT_TYPES
+            # (e.g., PC messengers with glob-based collection), use directory fallback for those
+            # zone_identifier: MFT ADS scan doesn't work on live disk (ads_streams not populated),
+            # use Windows API to read ADS directly instead
+            if artifact_type not in ARTIFACT_MFT_FILTERS and artifact_type in ARTIFACT_TYPES:
+                logger.info(f"[{self._get_source_description()}] {artifact_type} not in MFT filters, using directory fallback...")
+                yield from self._collect_directory_fallback(artifact_type, progress_callback)
+            elif artifact_type == 'zone_identifier':
+                logger.info(f"[{self._get_source_description()}] zone_identifier: using Windows API for ADS collection...")
+                yield from self._collect_directory_fallback(artifact_type, progress_callback)
+            else:
+                # MFT-based collection (parent class)
+                yield from super().collect(artifact_type, progress_callback, **kwargs)
+
+                # [2026-02-16] Memory dump for PC messengers collected via MFT mode
+                # MFT mode collects files only; messenger decryption needs process memory
+                if artifact_type in ARTIFACT_TYPES:
+                    at_config = ARTIFACT_TYPES[artifact_type]
+                    if at_config.get('collector') == 'collect_messenger_with_memory':
+                        process_name = at_config.get('process_name')
+                        already_dumped = getattr(self, f'_memory_dumped_{artifact_type}', False)
+                        logger.info(f"[MFT+Memory] {artifact_type}: process_name={process_name}, already_dumped={already_dumped}")
+                        if process_name and not already_dumped:
+                            setattr(self, f'_memory_dumped_{artifact_type}', True)
+                            try:
+                                from collectors.process_memory_dumper import ProcessMemoryDumper
+                                dumper = ProcessMemoryDumper()
+                                artifact_dir = self.output_dir / artifact_type
+                                artifact_dir.mkdir(exist_ok=True)
+                                dump_filename = f"{process_name.replace('.exe', '').lower()}_memory.dmp"
+                                dump_path = str(artifact_dir / dump_filename)
+                                logger.info(f"[MFT+Memory] Dumping {process_name} -> {dump_path}")
+                                dump_result = dumper.dump_process_lightweight(process_name, dump_path)
+                                if dump_result.get('success'):
+                                    size_mb = dump_result.get('size', 0) / 1024 / 1024
+                                    logger.info(f"[MFT+Memory] Dump SUCCESS: {dump_filename} ({size_mb:.1f} MB, PID={dump_result.get('pid')})")
+                                    yield dump_path, {
+                                        'artifact_type': artifact_type,
+                                        'original_path': dump_path,
+                                        'type': artifact_type,
+                                        'name': dump_filename,
+                                        'path': dump_path,
+                                        'size': dump_result.get('size', 0),
+                                        'process_pid': dump_result.get('pid'),
+                                        'is_memory_dump': True,
+                                        'collection_method': 'process_memory_dump',
+                                    }
+                                else:
+                                    logger.warning(f"[MFT+Memory] Dump FAILED for {process_name}: {dump_result.get('error')}")
+                            except ImportError:
+                                logger.warning("[MFT+Memory] ProcessMemoryDumper not available (ImportError)")
+                            except Exception as e:
+                                logger.error(f"[MFT+Memory] Error dumping {process_name}: {type(e).__name__}: {e}")
+                    else:
+                        logger.debug(f"[MFT+Memory] {artifact_type}: collector={at_config.get('collector')}, skipping dump")
 
     def _collect_directory_fallback(
         self,
@@ -1343,17 +3477,17 @@ class LocalMFTCollector(_LocalMFTBase):
         progress_callback: Optional[callable] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        디렉토리 탐색 기반 수집 (BitLocker/MFT 폴백)
+        Directory traversal-based collection (BitLocker/MFT fallback)
 
-        ARTIFACT_TYPES의 paths를 사용하여 파일 수집.
-        삭제된 파일은 수집 불가.
+        Collects files using paths from ARTIFACT_TYPES.
+        Cannot collect deleted files.
         """
         if artifact_type not in ARTIFACT_TYPES:
-            # MFT-only 아티팩트 처리 (document, image, video 등)
+            # Handle MFT-only artifacts (document, image, video, etc.)
             if artifact_type in ARTIFACT_MFT_FILTERS:
                 yield from self._collect_full_disk_scan(artifact_type, progress_callback)
             else:
-                logger.warning(f"Unknown artifact type: {artifact_type}")
+                logger.debug(f"Skipping unsupported artifact type: {artifact_type}")
             return
 
         config = ARTIFACT_TYPES[artifact_type]
@@ -1363,23 +3497,37 @@ class LocalMFTCollector(_LocalMFTBase):
         source = self._get_source_description()
         collected_count = 0
 
-        # 특수 아티팩트는 디렉토리 폴백으로 수집 불가
+        # [2026-01-29] Special artifacts ($MFT, $UsnJrnl, $LogFile) require MFT-based collection
+        # Delegate to mft_collector if available, otherwise skip
+        if artifact_type in ARTIFACT_MFT_FILTERS:
+            mft_filter = ARTIFACT_MFT_FILTERS[artifact_type]
+            if mft_filter.get('special'):
+                if hasattr(self, 'mft_collector') and self.mft_collector:
+                    yield from self._collect_mft(
+                        artifact_type, config, artifact_dir,
+                        progress_callback, include_deleted=True
+                    )
+                else:
+                    logger.warning(f"Cannot collect {artifact_type} - requires MFT-based collection")
+                return
+
+        # Special artifacts cannot be collected via directory fallback
         if config.get('requires_mft'):
             logger.warning(f"Cannot collect {artifact_type} via directory fallback (requires raw disk access)")
             return
 
-        # 모바일 아티팩트는 스킵
+        # Skip mobile artifacts
         if config.get('category') in ('android', 'ios'):
             logger.debug(f"Skipping mobile artifact: {artifact_type}")
             return
 
-        # 별칭 처리
+        # Handle aliases
         if 'alias_of' in config:
             artifact_type = config['alias_of']
             config = ARTIFACT_TYPES[artifact_type]
 
-        # 전체 디스크 스캔 아티팩트는 _collect_full_disk_scan 사용
-        # (document, email, image, video 등)
+        # Full disk scan artifacts use _collect_full_disk_scan
+        # (document, email, image, video, etc.)
         if artifact_type in ARTIFACT_MFT_FILTERS:
             mft_filter = ARTIFACT_MFT_FILTERS[artifact_type]
             if mft_filter.get('full_disk_scan'):
@@ -1389,7 +3537,7 @@ class LocalMFTCollector(_LocalMFTBase):
         collector_type = config.get('collector')
         paths = config.get('paths', [])
 
-        # 사용자 폴더 목록
+        # User folder list
         users_dir = Path(f"{self.volume}:/Users")
         user_folders = []
         if users_dir.exists():
@@ -1398,7 +3546,7 @@ class LocalMFTCollector(_LocalMFTBase):
                     user_folders.append(entry)
 
         if collector_type == 'collect_glob':
-            # glob 패턴 수집
+            # Glob pattern collection
             for path_pattern in paths:
                 expanded = self._expand_path(path_pattern)
                 for match in glob.glob(expanded, recursive=True):
@@ -1410,7 +3558,7 @@ class LocalMFTCollector(_LocalMFTBase):
                             progress_callback(result[0])
 
         elif collector_type == 'collect_files':
-            # 특정 파일 수집
+            # Specific file collection
             for file_path in paths:
                 expanded = self._expand_path(file_path)
                 if os.path.exists(expanded):
@@ -1422,7 +3570,7 @@ class LocalMFTCollector(_LocalMFTBase):
                             progress_callback(result[0])
 
         elif collector_type == 'collect_locked_files':
-            # 잠긴 파일 수집 (일반 복사 시도)
+            # Locked file collection (attempt normal copy)
             for file_path in paths:
                 expanded = self._expand_path(file_path)
                 if os.path.exists(expanded):
@@ -1434,7 +3582,7 @@ class LocalMFTCollector(_LocalMFTBase):
                             progress_callback(result[0])
 
         elif collector_type in ('collect_ntuser', 'collect_usrclass'):
-            # 사용자별 레지스트리 수집
+            # Per-user registry collection
             mft_config = config.get('mft_config', {})
             user_file = mft_config.get('user_path', '')
             for user_folder in user_folders:
@@ -1448,14 +3596,31 @@ class LocalMFTCollector(_LocalMFTBase):
                             progress_callback(result[0])
 
         elif collector_type == 'collect_user_glob':
-            # 사용자별 glob 수집
+            # Per-user glob collection (+ system-wide %PROGRAMDATA% support)
             for path_pattern in paths:
+                # System-wide paths (not per-user)
+                if '%PROGRAMDATA%' in path_pattern or '%SYSTEMROOT%' in path_pattern:
+                    expanded = self._expand_path(path_pattern)
+                    for match in glob.glob(expanded, recursive=True):
+                        if os.path.isdir(match):
+                            continue
+                        result = self._copy_file_with_metadata(match, artifact_dir, artifact_type)
+                        if result:
+                            collected_count += 1
+                            yield result
+                            if progress_callback:
+                                progress_callback(result[0])
+                    continue
+
+                # Per-user paths
                 for user_folder in user_folders:
                     # %APPDATA% -> Users/xxx/AppData/Roaming
                     expanded = path_pattern.replace('%APPDATA%', str(user_folder / 'AppData' / 'Roaming'))
                     expanded = expanded.replace('%LOCALAPPDATA%', str(user_folder / 'AppData' / 'Local'))
                     expanded = expanded.replace('%USERPROFILE%', str(user_folder))
                     for match in glob.glob(expanded, recursive=True):
+                        if os.path.isdir(match):
+                            continue
                         result = self._copy_file_with_metadata(match, artifact_dir, artifact_type)
                         if result:
                             collected_count += 1
@@ -1463,8 +3628,62 @@ class LocalMFTCollector(_LocalMFTBase):
                             if progress_callback:
                                 progress_callback(result[0])
 
+        elif collector_type == 'collect_messenger_with_memory':
+            # Messenger app collection with process memory dump
+            # 1. Collect user data folders (same as collect_user_glob)
+            exclude_exts = config.get('exclude_extensions', [])
+            for path_pattern in paths:
+                for user_folder in user_folders:
+                    expanded = path_pattern.replace('%APPDATA%', str(user_folder / 'AppData' / 'Roaming'))
+                    expanded = expanded.replace('%LOCALAPPDATA%', str(user_folder / 'AppData' / 'Local'))
+                    expanded = expanded.replace('%USERPROFILE%', str(user_folder))
+                    for match in glob.glob(expanded, recursive=True):
+                        if os.path.isdir(match):
+                            continue
+                        # Skip excluded extensions
+                        if exclude_exts and any(match.lower().endswith(ext.lower()) for ext in exclude_exts):
+                            continue
+                        result = self._copy_file_with_metadata(match, artifact_dir, artifact_type)
+                        if result:
+                            collected_count += 1
+                            yield result
+                            if progress_callback:
+                                progress_callback(result[0])
+
+            # 2. Collect process memory dump (if process is running)
+            process_name = config.get('process_name')
+            logger.info(f"[DirFallback+Memory] {artifact_type}: process_name={process_name}, collected={collected_count} files")
+            if process_name:
+                try:
+                    from collectors.process_memory_dumper import ProcessMemoryDumper
+                    dumper = ProcessMemoryDumper()
+                    dump_filename = f"{process_name.replace('.exe', '').lower()}_memory.dmp"
+                    dump_path = str(artifact_dir / dump_filename)
+                    logger.info(f"[DirFallback+Memory] Dumping {process_name} -> {dump_path}")
+                    dump_result = dumper.dump_process_lightweight(process_name, dump_path)
+                    if dump_result.get('success'):
+                        size_mb = dump_result.get('size', 0) / 1024 / 1024
+                        logger.info(f"[DirFallback+Memory] Dump SUCCESS: {dump_filename} ({size_mb:.1f} MB, PID={dump_result.get('pid')})")
+                        yield dump_path, {
+                            'artifact_type': artifact_type,
+                            'original_path': dump_path,
+                            'type': artifact_type,
+                            'name': dump_filename,
+                            'path': dump_path,
+                            'size': dump_result.get('size', 0),
+                            'process_pid': dump_result.get('pid'),
+                            'is_memory_dump': True,
+                        }
+                        collected_count += 1
+                    else:
+                        logger.warning(f"[DirFallback+Memory] Dump FAILED for {process_name}: {dump_result.get('error')}")
+                except ImportError:
+                    logger.warning("[DirFallback+Memory] ProcessMemoryDumper not available (ImportError)")
+                except Exception as e:
+                    logger.error(f"[DirFallback+Memory] Error dumping {process_name}: {type(e).__name__}: {e}")
+
         elif collector_type == 'collect_all_browsers':
-            # 브라우저 데이터 수집
+            # Browser data collection
             browsers = config.get('browsers', {})
             for browser_name, browser_config in browsers.items():
                 browser_paths = browser_config.get('paths', [])
@@ -1481,7 +3700,7 @@ class LocalMFTCollector(_LocalMFTBase):
                                     progress_callback(result[0])
 
         elif collector_type == 'collect_scheduled_tasks':
-            # 예약 작업 수집
+            # Scheduled task collection
             tasks_dir = Path(f"{self.volume}:/Windows/System32/Tasks")
             if tasks_dir.exists():
                 for root, dirs, files in os.walk(tasks_dir):
@@ -1495,14 +3714,14 @@ class LocalMFTCollector(_LocalMFTBase):
                                 progress_callback(result[0])
 
         elif collector_type == 'collect_recycle_bin':
-            # [2026-01-20] 휴지통 전용 수집 - 시스템 폴더 권한 처리 개선
-            # Windows 경로 형식 사용 (백슬래시)
+            # [2026-01-20] Recycle Bin dedicated collection - improved system folder permission handling
+            # Use Windows path format (backslash)
             recycle_bin_path = None
 
-            # 대소문자 변형 시도 (Windows는 대소문자 구분 안함, 하지만 명시적으로 시도)
+            # Try case variations (Windows is case-insensitive, but try explicitly)
             variants = ['$Recycle.Bin', '$RECYCLE.BIN', '$recycle.bin', 'RECYCLER']
             for variant in variants:
-                # 백슬래시 사용
+                # Use backslash
                 test_path = Path(f"{self.volume}:\\{variant}")
                 logger.debug(f"[RecycleBin] Checking path: {test_path}")
                 try:
@@ -1519,7 +3738,7 @@ class LocalMFTCollector(_LocalMFTBase):
                 _debug_print(f"[RecycleBin] $Recycle.Bin not found on {self.volume}:")
             else:
                 try:
-                    # 각 사용자 SID 폴더 순회
+                    # Traverse each user SID folder
                     sid_folders = list(recycle_bin_path.iterdir())
                     logger.info(f"[RecycleBin] Found {len(sid_folders)} folders in Recycle Bin")
 
@@ -1528,12 +3747,12 @@ class LocalMFTCollector(_LocalMFTBase):
                             logger.debug(f"[RecycleBin] Processing SID folder: {sid_folder.name}")
                             _debug_print(f"[RecycleBin] Processing SID folder: {sid_folder.name}")
                             try:
-                                # $I 파일 (메타데이터) 및 $R 파일 수집
+                                # Collect $I files (metadata) and $R files
                                 entries = list(sid_folder.iterdir())
                                 logger.debug(f"[RecycleBin] Found {len(entries)} entries in {sid_folder.name}")
 
                                 for entry in entries:
-                                    # $I 파일 (메타데이터) 수집
+                                    # Collect $I file (metadata)
                                     if entry.name.startswith('$I') and entry.is_file():
                                         try:
                                             result = self._copy_file_with_metadata(
@@ -1546,7 +3765,7 @@ class LocalMFTCollector(_LocalMFTBase):
                                                 if progress_callback:
                                                     progress_callback(result[0])
 
-                                                # 해당 $R 파일도 수집 시도
+                                                # Also try to collect corresponding $R file
                                                 r_file = sid_folder / entry.name.replace('$I', '$R')
                                                 if r_file.exists():
                                                     r_result = self._copy_file_with_metadata(
@@ -1580,8 +3799,44 @@ class LocalMFTCollector(_LocalMFTBase):
                 except OSError as e:
                     logger.error(f"[RecycleBin] OS error accessing Recycle Bin: {e}")
 
+        elif collector_type == 'collect_zone_identifier':
+            # [2026-02-15] Zone.Identifier ADS collection via Windows API
+            # MFT-based ADS scan doesn't work on live disk, read ADS directly
+            user_dirs_to_scan = ['Downloads', 'Desktop', 'Documents']
+            for user_folder in user_folders:
+                for subdir in user_dirs_to_scan:
+                    scan_dir = user_folder / subdir
+                    if not scan_dir.exists():
+                        continue
+                    try:
+                        for entry in scan_dir.iterdir():
+                            if not entry.is_file():
+                                continue
+                            ads_path = str(entry) + ':Zone.Identifier'
+                            try:
+                                with open(ads_path, 'r', encoding='utf-8', errors='replace') as f:
+                                    ads_data = f.read()
+                                if ads_data.strip():
+                                    safe_name = entry.name.replace(':', '_').replace('/', '_').replace('\\', '_')
+                                    output_file = artifact_dir / f"{safe_name}_Zone.Identifier.txt"
+                                    output_file.write_text(ads_data, encoding='utf-8')
+                                    collected_count += 1
+                                    metadata = self._get_metadata(str(entry), str(output_file), artifact_type)
+                                    metadata['original_path'] = f"{entry}:Zone.Identifier"
+                                    metadata['ads_content'] = ads_data[:500]
+                                    yield str(output_file), metadata
+                                    if progress_callback:
+                                        progress_callback(str(output_file))
+                            except (OSError, PermissionError):
+                                # No Zone.Identifier ADS on this file
+                                continue
+                    except (PermissionError, OSError) as e:
+                        logger.debug(f"[ZoneId] Cannot access {scan_dir}: {e}")
+                        continue
+            logger.info(f"[ZoneId] Collected {collected_count} Zone.Identifier ADS streams")
+
         else:
-            # 기본: paths 있으면 수집 시도
+            # Default: try to collect if paths exist
             for path_pattern in paths:
                 expanded = self._expand_path(path_pattern)
                 if '*' in expanded or '?' in expanded:
@@ -1603,15 +3858,15 @@ class LocalMFTCollector(_LocalMFTBase):
         logger.info(f"[{source}] Collected {collected_count} {artifact_type} artifacts (directory fallback)")
 
     def _expand_path(self, path: str) -> str:
-        """환경 변수 확장"""
+        """Expand environment variables"""
         volume_root = f"{self.volume}:"
-        # 환경 변수 확장
+        # Expand environment variables
         path = path.replace('%SYSTEMROOT%', f'{volume_root}\\Windows')
         path = path.replace('%WINDIR%', f'{volume_root}\\Windows')
         path = path.replace('%PROGRAMDATA%', f'{volume_root}\\ProgramData')
-        # 사용자별 경로는 현재 사용자 기준
+        # User-specific paths are based on current user
         path = os.path.expandvars(path)
-        # C: 드라이브를 현재 볼륨으로 변경
+        # Change C: drive to current volume
         if path.startswith('C:'):
             path = volume_root + path[2:]
         return path
@@ -1621,7 +3876,7 @@ class LocalMFTCollector(_LocalMFTBase):
         artifact_type: str,
         progress_callback: Optional[callable] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        """전체 디스크 스캔 (document, image, video 등)"""
+        """Full disk scan (document, image, video, etc.)"""
         if artifact_type not in ARTIFACT_MFT_FILTERS:
             return
 
@@ -1637,7 +3892,7 @@ class LocalMFTCollector(_LocalMFTBase):
         source = self._get_source_description()
         collected_count = 0
 
-        # 스캔에서 제외할 느린 디렉토리
+        # Slow directories to exclude from scan
         SKIP_DIRS = {
             'windows', '$recycle.bin', 'system volume information',
             'programdata', '$windows.~bt', '$windows.~ws',
@@ -1646,13 +3901,13 @@ class LocalMFTCollector(_LocalMFTBase):
         SKIP_SUBDIRS = {
             'winsxs', 'installer', 'assembly', 'servicing',
             'softwaredistribution', 'catroot', 'catroot2',
-            # 포렌식 수집 임시 디렉토리 제외 (E01 추출 파일이 로컬 수집에 포함되지 않도록)
+            # Exclude forensic collection temp directories (prevent E01 extracted files from being included in local collection)
             'e01_extract', 'e01_preview_',
         }
-        # 특정 패턴으로 시작하는 디렉토리 제외
+        # Exclude directories starting with specific patterns
         SKIP_PREFIXES = ('forensic_', 'e01_preview_')
 
-        # 사용자 폴더 우선 수집
+        # Prioritize user folder collection
         users_dir = os.path.join(volume_root, 'Users')
         scan_dirs = []
 
@@ -1677,7 +3932,7 @@ class LocalMFTCollector(_LocalMFTBase):
             logger.info(f"[{source}] Scanning [{dir_idx}/{total_dirs}] {scan_dir}")
 
             for root, dirs, files in os.walk(scan_dir):
-                # 제외할 디렉토리 필터링
+                # Filter out excluded directories
                 dirs[:] = [
                     d for d in dirs
                     if d.lower() not in SKIP_SUBDIRS
@@ -1703,7 +3958,6 @@ class LocalMFTCollector(_LocalMFTBase):
 
         logger.info(f"[{source}] Collected {collected_count} {artifact_type} artifacts (directory fallback)")
 
-
     def _copy_file_with_metadata(
         self,
         src_path: str,
@@ -1711,26 +3965,26 @@ class LocalMFTCollector(_LocalMFTBase):
         artifact_type: str
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
-        파일 복사 및 메타데이터 생성
+        Copy file and generate metadata
 
         Args:
-            src_path: 원본 파일 경로
-            artifact_dir: 출력 디렉토리
-            artifact_type: 아티팩트 유형
+            src_path: Source file path
+            artifact_dir: Output directory
+            artifact_type: Artifact type
 
         Returns:
-            (로컬 경로, 메타데이터) 또는 None
+            (local path, metadata) or None
         """
         try:
             src = Path(src_path)
             if not src.exists() or not src.is_file():
                 return None
 
-            # 출력 파일명 생성
+            # Generate output filename
             safe_filename = src.name
             output_file = artifact_dir / safe_filename
 
-            # 중복 방지
+            # Prevent duplicates
             if output_file.exists():
                 base = output_file.stem
                 suffix = output_file.suffix
@@ -1739,10 +3993,10 @@ class LocalMFTCollector(_LocalMFTBase):
                     output_file = artifact_dir / f"{base}_{counter}{suffix}"
                     counter += 1
 
-            # 파일 복사
+            # Copy file
             shutil.copy2(src_path, output_file)
 
-            # 해시 계산
+            # Calculate hash
             md5_hash = hashlib.md5()
             sha256_hash = hashlib.sha256()
             with open(output_file, 'rb') as f:
@@ -1750,7 +4004,7 @@ class LocalMFTCollector(_LocalMFTBase):
                     md5_hash.update(chunk)
                     sha256_hash.update(chunk)
 
-            # 메타데이터 생성
+            # Generate metadata
             stat = src.stat()
             metadata = {
                 'artifact_type': artifact_type,
@@ -1761,7 +4015,7 @@ class LocalMFTCollector(_LocalMFTBase):
                 'hash_sha256': sha256_hash.hexdigest(),
                 'collection_method': 'directory_fallback',
                 'source': self._get_source_description(),
-                'is_deleted': False,  # 디렉토리 폴백은 삭제 파일 수집 불가
+                'is_deleted': False,  # Directory fallback cannot collect deleted files
                 'created_time': datetime.fromtimestamp(stat.st_ctime).isoformat(),
                 'modified_time': datetime.fromtimestamp(stat.st_mtime).isoformat(),
                 'collected_at': datetime.now().isoformat(),
@@ -1781,32 +4035,31 @@ class LocalMFTCollector(_LocalMFTBase):
             return None
 
     def get_collection_mode(self) -> str:
-        """현재 수집 모드 반환"""
+        """Return current collection mode"""
         if self._use_directory_fallback:
             if self._bitlocker_detected:
                 return "directory_fallback (BitLocker)"
             return "directory_fallback"
         return "mft_based"
 
-
 class ArtifactCollector:
     """
     Forensic artifact collector with ForensicDiskAccessor and MFT support.
 
-    수집 우선순위:
-    1. ForensicDiskAccessor (순수 Python, raw sector access) - 잠긴 파일 직접 읽기
-    2. MFTCollector (pytsk3) - MFT 기반 수집
-    3. Legacy (shutil) - 일반 파일 복사
+    Collection priority:
+    1. ForensicDiskAccessor (pure Python, raw sector access) - direct read of locked files
+    2. MFTCollector (pytsk3) - MFT-based collection
+    3. Legacy (shutil) - normal file copy
 
-    ForensicDiskAccessor 장점:
-    - 순수 Python 구현 (외부 의존성 없음)
-    - MBR/GPT → VBR → MFT → Cluster Run 직접 파싱
-    - OS 잠금 파일 수집 가능
-    - ADS (Alternate Data Streams) 지원
-    - 삭제된 파일 복구 가능
+    ForensicDiskAccessor advantages:
+    - Pure Python implementation (no external dependencies)
+    - Direct parsing of MBR/GPT -> VBR -> MFT -> Cluster Run
+    - Can collect OS-locked files
+    - ADS (Alternate Data Streams) support
+    - Deleted file recovery possible
 
-    BitLocker 지원:
-    - decrypted_reader 파라미터로 복호화된 볼륨 전달 가능
+    BitLocker support:
+    - Pass decrypted volume via decrypted_reader parameter
     """
 
     def __init__(
@@ -1814,7 +4067,7 @@ class ArtifactCollector:
         output_dir: str,
         use_mft: bool = True,
         volume: str = 'C',
-        decrypted_reader=None  # BitLocker 복호화된 UnifiedDiskReader
+        decrypted_reader=None  # BitLocker decrypted UnifiedDiskReader
     ):
         """
         Initialize the collector.
@@ -1823,7 +4076,7 @@ class ArtifactCollector:
             output_dir: Directory to store collected artifacts
             use_mft: Whether to use MFT-based collection (default: True)
             volume: Volume to collect from (default: 'C')
-            decrypted_reader: BitLocker 복호화된 디스크 리더 (선택적)
+            decrypted_reader: BitLocker decrypted disk reader (optional)
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1836,15 +4089,15 @@ class ArtifactCollector:
         self.collection_mode = 'legacy'
 
         # ==========================================================
-        # 우선순위 1: ForensicDiskAccessor (순수 Python)
+        # Priority 1: ForensicDiskAccessor (pure Python)
         # ==========================================================
         if use_mft and FORENSIC_DISK_AVAILABLE and ForensicDiskAccessor is not None:
             try:
-                # 물리 드라이브 번호 가져오기
+                # Get physical drive number
                 drive_number = self._get_physical_drive_number()
                 if drive_number is not None:
                     self.forensic_disk_accessor = ForensicDiskAccessor.from_physical_disk(drive_number)
-                    # 볼륨에 해당하는 파티션 선택
+                    # Select partition for volume
                     partition_idx = self._find_partition_for_volume()
                     if partition_idx is not None:
                         self.forensic_disk_accessor.select_partition(partition_idx)
@@ -1855,7 +4108,7 @@ class ArtifactCollector:
                 self.forensic_disk_accessor = None
 
         # ==========================================================
-        # 우선순위 2: MFTCollector (pytsk3) - 폴백
+        # Priority 2: MFTCollector (pytsk3) - fallback
         # ==========================================================
         if self.collection_mode != 'forensic_disk_accessor' and use_mft and MFT_AVAILABLE:
             try:
@@ -1875,24 +4128,24 @@ class ArtifactCollector:
                 self.mft_collector = None
 
         # ==========================================================
-        # 우선순위 3: Legacy (shutil)
+        # Priority 3: Legacy (shutil)
         # ==========================================================
         if self.collection_mode == 'legacy':
             _debug_print("[INFO] Using legacy collection method (shutil)")
 
-        # 호환성을 위한 플래그
+        # Flag for compatibility
         self.use_mft = self.collection_mode in ('forensic_disk_accessor', 'mft')
 
     def _get_physical_drive_number(self) -> Optional[int]:
-        """볼륨 문자에서 물리 드라이브 번호 가져오기"""
+        """Get physical drive number from volume letter"""
         try:
             import ctypes
             from ctypes import wintypes
 
-            # 볼륨 경로
+            # Volume path
             volume_path = f"\\\\.\\{self.volume}:"
 
-            # 볼륨 열기
+            # Open volume
             GENERIC_READ = 0x80000000
             FILE_SHARE_READ = 0x00000001
             FILE_SHARE_WRITE = 0x00000002
@@ -1912,7 +4165,7 @@ class ArtifactCollector:
             if handle == -1:
                 return None
 
-            # IOCTL로 디스크 익스텐트 정보 가져오기
+            # Get disk extent info via IOCTL
             IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000
 
             class DISK_EXTENT(ctypes.Structure):
@@ -1954,10 +4207,10 @@ class ArtifactCollector:
 
     def _find_partition_for_volume(self) -> Optional[int]:
         """
-        현재 볼륨에 해당하는 파티션 인덱스 찾기
+        Find partition index for current volume
 
-        BitLocker 암호화된 파티션은 건너뜁니다.
-        복호화되지 않은 BitLocker 볼륨은 raw sector 접근이 불가능합니다.
+        BitLocker encrypted partitions are skipped.
+        Non-decrypted BitLocker volumes cannot be accessed via raw sector access.
         """
         if not self.forensic_disk_accessor:
             return None
@@ -1965,32 +4218,32 @@ class ArtifactCollector:
         try:
             partitions = self.forensic_disk_accessor.list_partitions()
 
-            # 1. 볼륨 크기로 가장 큰 NTFS 파티션 찾기 (보통 메인 Windows 파티션)
-            # 2. BitLocker 암호화 파티션은 건너뜀
+            # 1. Find largest NTFS partition by volume size (usually main Windows partition)
+            # 2. Skip BitLocker encrypted partitions
             best_partition = None
             best_size = 0
 
             for i, part in enumerate(partitions):
-                # BitLocker 암호화된 파티션 건너뛰기
+                # Skip BitLocker encrypted partition
                 if part.filesystem in ('BitLocker', 'bitlocker'):
                     _debug_print(f"[INFO] Partition {i} is BitLocker encrypted - skipping for ForensicDiskAccessor")
                     continue
 
-                # Recovery 파티션 건너뛰기 (Windows 폴더가 없음)
+                # Skip Recovery partition (no Windows folder)
                 if 'recovery' in part.type_name.lower():
                     continue
 
-                # NTFS 파티션 중 가장 큰 것 선택
+                # Select largest NTFS partition
                 if part.filesystem in ('NTFS', 'ntfs'):
                     if part.size > best_size:
                         best_size = part.size
                         best_partition = i
 
             if best_partition is not None:
-                # 선택한 파티션에 Windows 폴더가 있는지 확인
+                # Check if selected partition has Windows folder
                 try:
                     self.forensic_disk_accessor.select_partition(best_partition)
-                    # Windows 폴더 존재 확인 (root의 자식 중 Windows 찾기)
+                    # Check for Windows folder existence (find Windows among root's children)
                     has_windows = False
                     for entry_num in range(0, 200):
                         try:
@@ -2012,7 +4265,7 @@ class ArtifactCollector:
                     _debug_print(f"[WARNING] Cannot verify partition {best_partition}: {e}")
                     return None
 
-            # NTFS가 없으면 None 반환 (MFTCollector로 폴백)
+            # If no NTFS, return None (fallback to MFTCollector)
             _debug_print("[INFO] No suitable NTFS partition found for ForensicDiskAccessor")
             return None
 
@@ -2147,7 +4400,7 @@ class ArtifactCollector:
             return
 
         # Create artifact-specific output directory
-        # C4 보안: 경로 탈출 공격 방어 - 유틸리티 함수로 검증
+        # C4 Security: Path traversal attack defense - verify with utility functions
         artifact_dir = self.output_dir / sanitize_path_component(artifact_type)
         validate_safe_path(self.output_dir, artifact_dir)
         artifact_dir.mkdir(exist_ok=True)
@@ -2180,19 +4433,19 @@ class ArtifactCollector:
                 browser_filter, include_deleted
             )
         elif self.collection_mode == 'forensic_disk_accessor' and self.forensic_disk_accessor:
-            # 우선순위 1: ForensicDiskAccessor (순수 Python)
+            # Priority 1: ForensicDiskAccessor (pure Python)
             yield from self._collect_forensic_disk(
                 artifact_type, artifact_info, artifact_dir,
                 progress_callback, include_deleted
             )
         elif self.collection_mode == 'mft' and self.mft_collector:
-            # 우선순위 2: MFTCollector (pytsk3)
+            # Priority 2: MFTCollector (pytsk3)
             yield from self._collect_mft(
                 artifact_type, artifact_info, artifact_dir,
                 progress_callback, include_deleted
             )
         else:
-            # 우선순위 3: Legacy (shutil)
+            # Priority 3: Legacy (shutil)
             yield from self._collect_legacy(
                 artifact_type, artifact_info, artifact_dir,
                 progress_callback
@@ -2224,7 +4477,7 @@ class ArtifactCollector:
                 continue
 
             browser_name = browser_config.get('name', browser_id)
-            # C4 보안: 경로 탈출 방어
+            # C4 Security: Path traversal defense
             browser_dir = artifact_dir / sanitize_path_component(browser_id)
             validate_safe_path(self.output_dir, browser_dir)
             browser_dir.mkdir(exist_ok=True)
@@ -2342,24 +4595,34 @@ class ArtifactCollector:
         include_deleted: bool
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        ForensicDiskAccessor를 사용한 아티팩트 수집.
+        Collect artifacts using ForensicDiskAccessor.
 
-        MBR/GPT → VBR → MFT → Data Runs → Cluster 체인을 따라
-        파일 시스템을 우회하여 직접 디스크에서 파일을 읽습니다.
+        Follows MBR/GPT -> VBR -> MFT -> Data Runs -> Cluster chain
+        to read files directly from disk, bypassing the file system.
 
-        디지털 포렌식 원칙:
-        - document, image, video, email: 전체 디스크 스캔 (MFT 기반)
-        - 파일 수 제한 없음
-        - 삭제 파일 포함
-        - 시스템 폴더 포함
+        Digital forensics principles:
+        - document, image, video, email: full disk scan (MFT-based)
+        - No file count limit
+        - Include deleted files
+        - Include system folders
 
-        장점:
-        - OS 잠금 파일 (SYSTEM, SAM, NTUSER.DAT 등) 직접 수집
-        - 삭제된 파일 복구 가능
-        - ADS (Alternate Data Streams) 지원
-        - $MFT, $UsnJrnl:$J, $LogFile 등 시스템 파일 수집
+        Advantages:
+        - Direct collection of OS-locked files (SYSTEM, SAM, NTUSER.DAT, etc.)
+        - Deleted file recovery possible
+        - ADS (Alternate Data Streams) support
+        - System file collection ($MFT, $UsnJrnl:$J, $LogFile, etc.)
         """
         mft_config = artifact_info.get('mft_config', {})
+
+        # ==========================================================
+        # No mft_config → use legacy fallback
+        # ==========================================================
+        if not mft_config:
+            logger.info(f"[ForensicDisk] {artifact_type}: no mft_config, using legacy fallback")
+            yield from self._collect_legacy(
+                artifact_type, artifact_info, artifact_dir, progress_callback
+            )
+            return
 
         # ==========================================================
         # Special MFT artifacts ($MFT, $UsnJrnl, $LogFile)
@@ -2372,56 +4635,79 @@ class ArtifactCollector:
             return
 
         # ==========================================================
-        # 디지털 포렌식: document, image, video, email은 전체 디스크 스캔
+        # Digital forensics: full disk scan for document, image, video, email
         # ==========================================================
         if artifact_type in {'document', 'image', 'video', 'email'}:
             extensions = mft_config.get('extensions', None)
             if extensions:
                 _debug_print(f"[ForensicDisk] Full disk scan for {artifact_type} (Digital Forensics mode)")
                 yield from self._collect_forensic_disk_pattern(
-                    '',  # base_path 무시
+                    '',  # Ignore base_path
                     '*.*',  # pattern
                     artifact_type,
                     artifact_dir,
                     progress_callback,
-                    include_deleted=True,  # 삭제 파일 포함
+                    include_deleted=include_deleted,
                     extensions=extensions,
-                    full_disk_scan=True  # 전체 디스크 스캔
+                    full_disk_scan=True  # Full disk scan
                 )
                 return
 
         # ==========================================================
-        # User-specific paths (NTUSER.DAT, browser profiles, etc.)
+        # User-specific paths (NTUSER.DAT, browser profiles, messengers, etc.)
         # ==========================================================
         if 'user_path' in mft_config:
             yield from self._collect_forensic_disk_user_paths(
                 artifact_type, mft_config, artifact_dir,
                 progress_callback, include_deleted
             )
-            return
+            # Don't return - may also have system_base_paths or process_name
+        else:
+            # ==========================================================
+            # Pattern-based or file list collection (system paths)
+            # ==========================================================
+            base_path = mft_config.get('base_path', '')
+            pattern = mft_config.get('pattern', None)
+            files = mft_config.get('files', None)
+            extensions = mft_config.get('extensions', None)
 
-        # ==========================================================
-        # Pattern-based or file list collection
-        # ==========================================================
-        base_path = mft_config.get('base_path', '')
-        pattern = mft_config.get('pattern', None)
-        files = mft_config.get('files', None)
-        extensions = mft_config.get('extensions', None)
-
-        if pattern:
-            # 패턴 기반 수집 (확장자 필터 포함)
-            yield from self._collect_forensic_disk_pattern(
-                base_path, pattern, artifact_type, artifact_dir,
-                progress_callback, include_deleted,
-                extensions=extensions
-            )
-        elif files:
-            # 특정 파일 목록 수집
-            for filename in files:
-                file_path = f"{base_path}/{filename}" if base_path else filename
-                yield from self._collect_forensic_disk_file(
-                    file_path, artifact_type, artifact_dir, progress_callback
+            if pattern:
+                # Pattern-based collection (with extension filter)
+                yield from self._collect_forensic_disk_pattern(
+                    base_path, pattern, artifact_type, artifact_dir,
+                    progress_callback, include_deleted,
+                    extensions=extensions
                 )
+            elif files:
+                # Specific file list collection
+                for filename in files:
+                    file_path = f"{base_path}/{filename}" if base_path else filename
+                    yield from self._collect_forensic_disk_file(
+                        file_path, artifact_type, artifact_dir, progress_callback
+                    )
+
+        # ==========================================================
+        # System-wide paths (TeamViewer/AnyDesk ProgramData, etc.)
+        # ==========================================================
+        for sys_path in mft_config.get('system_base_paths', []):
+            extensions = mft_config.get('extensions', None)
+            exclude_extensions = mft_config.get('exclude_extensions', None)
+            _debug_print(f"[ForensicDisk] System path scan: {sys_path}")
+            yield from self._collect_forensic_disk_pattern(
+                sys_path, '*', artifact_type, artifact_dir,
+                progress_callback, include_deleted,
+                extensions=extensions,
+                exclude_extensions=exclude_extensions,
+            )
+
+        # ==========================================================
+        # Process memory dump (live system only, for PC messengers)
+        # ==========================================================
+        process_name = artifact_info.get('process_name')
+        if process_name:
+            yield from self._dump_process_memory(
+                artifact_type, process_name, artifact_dir
+            )
 
     def _collect_forensic_disk_special(
         self,
@@ -2431,9 +4717,9 @@ class ArtifactCollector:
         progress_callback: Optional[callable]
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        시스템 MFT 아티팩트 수집 ($MFT, $UsnJrnl:$J, $LogFile)
+        Collect system MFT artifacts ($MFT, $UsnJrnl:$J, $LogFile)
 
-        NTFS 시스템 파일 inode:
+        NTFS system file inodes:
         - $MFT: inode 0
         - $MFTMirr: inode 1
         - $LogFile: inode 2
@@ -2471,30 +4757,31 @@ class ArtifactCollector:
                         progress_callback(str(output_file))
 
             elif method_name == 'collect_usn_journal':
-                # $UsnJrnl:$J - $Extend 폴더 내 $UsnJrnl 파일의 $J ADS
+                # $UsnJrnl:$J - $J ADS of $UsnJrnl file in $Extend folder
                 _debug_print("[ForensicDisk] Collecting $UsnJrnl:$J...")
 
-                # $UsnJrnl 수집 - 전용 메서드 사용
+                # Collect $UsnJrnl - use dedicated method
                 data = None
                 try:
-                    # 전용 메서드 사용 (올바른 $J 스트림 처리)
-                    data = self.forensic_disk_accessor.read_usnjrnl_raw()
+                    # [2026-01] Skip sparse regions (fix memory/size issues)
+                    data = self.forensic_disk_accessor.read_usnjrnl_raw(skip_sparse=True)
                 except Exception as e1:
                     _debug_print(f"[DEBUG] read_usnjrnl_raw failed: {e1}")
-                    # 대체 방법: $Extend 디렉토리에서 직접 찾기
+                    # Alternative: find directly in $Extend directory
                     try:
-                        # $Extend 디렉토리 (inode 11)에서 $UsnJrnl 찾기
+                        # Find $UsnJrnl in $Extend directory (inode 11)
                         usnjrnl_inode = self.forensic_disk_accessor._find_in_directory(11, '$UsnJrnl')
                         if usnjrnl_inode:
-                            data = self.forensic_disk_accessor.read_file_by_inode(
+                            # [2026-01] Alternative method also skips sparse
+                            data = self.forensic_disk_accessor._read_file_skip_sparse(
                                 usnjrnl_inode, stream_name='$J'
                             )
                     except Exception as e2:
                         _debug_print(f"[DEBUG] Alternative USN Journal collection failed: {e2}")
 
                 if data and len(data) > 0:
-                    # USN Journal이 스파스 파일인 경우 대부분 0으로 채워짐
-                    # 실제 데이터가 있는지 확인
+                    # USN Journal is sparse file, mostly filled with zeros
+                    # Check if there's actual data
                     non_zero_bytes = sum(1 for b in data[:min(len(data), 1024*1024)] if b != 0)
                     _debug_print(f"[ForensicDisk] $UsnJrnl:$J size={len(data)} bytes, non-zero (first 1MB)={non_zero_bytes}")
 
@@ -2545,16 +4832,16 @@ class ArtifactCollector:
                         progress_callback(str(output_file))
 
             elif method_name == 'collect_zone_identifier':
-                # Zone.Identifier ADS - 다운로드 파일 출처 정보
+                # Zone.Identifier ADS - download file source info
                 _debug_print("[ForensicDisk] Collecting Zone.Identifier ADS streams...")
 
-                # 대상 사용자 디렉토리 (대소문자 무시)
+                # Target user directories (case-insensitive)
                 user_paths = ['downloads', 'desktop', 'documents']
                 ads_stream_name = 'Zone.Identifier'
                 collected_count = 0
                 checked_count = 0
 
-                # MFT 전체 스캔 (ads_streams 포함)
+                # Full MFT scan (including ads_streams)
                 scan_result = self.forensic_disk_accessor.scan_all_files(include_deleted=False)
                 all_files = scan_result.get('active_files', [])
                 _debug_print(f"[ForensicDisk] Scanning {len(all_files)} active files for Zone.Identifier...")
@@ -2564,7 +4851,7 @@ class ArtifactCollector:
                         full_path = getattr(entry, 'full_path', '') or ''
                         filename = getattr(entry, 'filename', '') or ''
                         inode = getattr(entry, 'inode', None)
-                        # ads_streams가 이미 FileCatalogEntry에 포함됨
+                        # ads_streams already included in FileCatalogEntry
                         entry_ads = getattr(entry, 'ads_streams', []) or []
 
                         if not inode or not full_path:
@@ -2572,10 +4859,10 @@ class ArtifactCollector:
 
                         full_path_lower = full_path.lower()
 
-                        # 사용자 디렉토리 필터링 (Users 폴더 하위)
+                        # Filter user directories (under Users folder)
                         is_user_path = False
                         for user_path in user_paths:
-                            # '/users/' 또는 'users/' (루트 시작 유무 모두 처리)
+                            # '/users/' or 'users/' (handle both with and without root prefix)
                             if ('users/' in full_path_lower or '/users/' in full_path_lower) and \
                                f'/{user_path}/' in full_path_lower:
                                 is_user_path = True
@@ -2586,22 +4873,22 @@ class ArtifactCollector:
 
                         checked_count += 1
 
-                        # Zone.Identifier ADS 존재 여부 확인 (캐시된 ads_streams 사용)
+                        # Check Zone.Identifier ADS existence (use cached ads_streams)
                         if ads_stream_name not in entry_ads:
                             continue
 
-                        # Zone.Identifier ADS 읽기
+                        # Read Zone.Identifier ADS
                         ads_data = self.forensic_disk_accessor.read_file_by_inode(
                             inode, stream_name=ads_stream_name
                         )
 
                         if ads_data:
-                            # 출력 파일명: 원본파일명_Zone.Identifier.txt
+                            # Output filename: originalfilename_Zone.Identifier.txt
                             safe_filename = self._sanitize_filename(filename)
                             output_filename = f"{safe_filename}_Zone.Identifier.txt"
                             output_file = artifact_dir / output_filename
 
-                            # 중복 방지
+                            # Prevent duplicates
                             if output_file.exists():
                                 counter = 1
                                 while output_file.exists():
@@ -2626,7 +4913,7 @@ class ArtifactCollector:
                                 'collected_at': datetime.now().isoformat(),
                             }
 
-                            # Zone.Identifier 내용 파싱 (ZoneId, ReferrerUrl, HostUrl)
+                            # Parse Zone.Identifier content (ZoneId, ReferrerUrl, HostUrl)
                             try:
                                 ads_text = ads_data.decode('utf-8', errors='ignore')
                                 for line in ads_text.split('\n'):
@@ -2637,7 +4924,7 @@ class ArtifactCollector:
                                         value = value.strip()
                                         if key == 'ZoneId':
                                             metadata['zone_id'] = int(value)
-                                            # Zone ID 의미:
+                                            # Zone ID meaning:
                                             # 0 = Local Machine, 1 = Local Intranet
                                             # 2 = Trusted Sites, 3 = Internet, 4 = Restricted Sites
                                             zone_names = {
@@ -2676,10 +4963,10 @@ class ArtifactCollector:
         progress_callback: Optional[callable]
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        단일 파일 수집 (ForensicDiskAccessor)
+        Single file collection (ForensicDiskAccessor)
         """
         try:
-            # 경로 정규화 (Windows → Unix 스타일)
+            # Normalize path (Windows -> Unix style)
             normalized_path = file_path.replace('\\', '/')
             if not normalized_path.startswith('/'):
                 normalized_path = '/' + normalized_path
@@ -2688,11 +4975,11 @@ class ArtifactCollector:
             data = self.forensic_disk_accessor.read_file(normalized_path)
 
             if data:
-                # 출력 파일 이름 생성
+                # Generate output filename
                 filename = Path(file_path).name
                 output_file = artifact_dir / filename
 
-                # 중복 방지
+                # Prevent duplicates
                 if output_file.exists():
                     base = output_file.stem
                     suffix = output_file.suffix
@@ -2730,32 +5017,34 @@ class ArtifactCollector:
         progress_callback: Optional[callable],
         include_deleted: bool,
         extensions: Optional[List[str]] = None,
+        exclude_extensions: Optional[List[str]] = None,
         full_disk_scan: bool = False
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        패턴 기반 수집 (ForensicDiskAccessor)
+        Pattern-based collection (ForensicDiskAccessor)
 
-        MFT를 스캔하여 패턴과 일치하는 파일을 수집합니다.
+        Scans MFT to collect files matching the pattern.
 
-        디지털 포렌식 원칙:
-        - 파일 수 제한 없음
-        - 삭제 파일 포함
-        - 시스템 폴더 포함 (full_disk_scan=True 시)
+        Digital forensics principles:
+        - No file count limit
+        - Include deleted files
+        - Include system folders (when full_disk_scan=True)
 
         Args:
-            base_path: 기본 경로 (예: 'Users/username/Documents')
-            pattern: 파일명 패턴 (예: '*.pf', '*.*')
-            artifact_type: 아티팩트 유형
-            artifact_dir: 출력 디렉토리
-            progress_callback: 진행률 콜백
-            include_deleted: 삭제 파일 포함 여부
-            extensions: 확장자 필터 (예: ['.doc', '.docx', '.pdf'])
-            full_disk_scan: True면 전체 디스크 스캔 (base_path 무시)
+            base_path: Base path (e.g., 'Users/username/Documents')
+            pattern: Filename pattern (e.g., '*.pf', '*.*')
+            artifact_type: Artifact type
+            artifact_dir: Output directory
+            progress_callback: Progress callback
+            include_deleted: Whether to include deleted files
+            extensions: Extension include filter (e.g., ['.doc', '.docx', '.pdf'])
+            exclude_extensions: Extension exclude filter (e.g., ['.png', '.jpg'])
+            full_disk_scan: If True, scan entire disk (ignore base_path)
         """
         import fnmatch
 
         try:
-            # MFT 스캔
+            # MFT scan
             if full_disk_scan:
                 _debug_print(f"[ForensicDisk] Full disk scan for {artifact_type} (extensions: {extensions})")
             else:
@@ -2765,17 +5054,17 @@ class ArtifactCollector:
                 include_deleted=include_deleted
             )
 
-            # 경로 정규화
+            # Normalize path
             base_normalized = base_path.replace('\\', '/').strip('/') if not full_disk_scan else ''
 
-            # 활성 파일과 삭제된 파일 합치기
+            # Combine active files and deleted files
             all_files = scan_result.get('active_files', [])
             if include_deleted:
                 all_files.extend(scan_result.get('deleted_files', []))
 
             collected_count = 0
 
-            # 확장자 정규화 (소문자, '.' 포함)
+            # Normalize extensions (lowercase, include '.')
             if extensions:
                 normalized_extensions = set()
                 for ext in extensions:
@@ -2785,6 +5074,16 @@ class ArtifactCollector:
                     normalized_extensions.add(ext_lower)
                 extensions = normalized_extensions
 
+            # Normalize exclude_extensions
+            normalized_exclude_ext = None
+            if exclude_extensions:
+                normalized_exclude_ext = set()
+                for ext in exclude_extensions:
+                    ext_lower = ext.lower()
+                    if not ext_lower.startswith('.'):
+                        ext_lower = '.' + ext_lower
+                    normalized_exclude_ext.add(ext_lower)
+
             for entry in all_files:
                 if entry.is_directory:
                     continue
@@ -2792,7 +5091,7 @@ class ArtifactCollector:
                 filename = entry.filename
                 filename_lower = filename.lower()
 
-                # 확장자 필터 (우선 적용 - 빠른 필터링)
+                # Extension include filter (apply first - fast filtering)
                 if extensions:
                     has_ext = False
                     if '.' in filename_lower:
@@ -2802,23 +5101,29 @@ class ArtifactCollector:
                     if not has_ext:
                         continue
 
-                # 경로 매칭 (full_disk_scan이 아닌 경우에만)
+                # Extension exclude filter (e.g., Telegram: skip media files)
+                if normalized_exclude_ext and '.' in filename_lower:
+                    file_ext = '.' + filename_lower.rsplit('.', 1)[-1]
+                    if file_ext in normalized_exclude_ext:
+                        continue
+
+                # Path matching (only when not full_disk_scan)
                 if not full_disk_scan and base_normalized:
                     entry_path = entry.full_path.replace('\\', '/').strip('/')
                     if not entry_path.lower().startswith(base_normalized.lower()):
                         continue
 
-                # 패턴 매칭 (확장자 필터가 없는 경우에만)
-                if not extensions and pattern:
+                # Pattern matching (only when no extension filter)
+                if not extensions and not normalized_exclude_ext and pattern:
                     if not fnmatch.fnmatch(filename_lower, pattern.lower()):
                         continue
 
-                # 파일 수집
+                # Collect file
                 try:
                     data = self.forensic_disk_accessor.read_file_by_inode(entry.inode)
 
                     if data:
-                        # 출력 파일 이름 (삭제된 파일은 접두사 추가)
+                        # Output filename (add prefix for deleted files)
                         if entry.is_deleted:
                             output_filename = f"[DELETED]_{filename}"
                         else:
@@ -2826,7 +5131,7 @@ class ArtifactCollector:
 
                         output_file = artifact_dir / output_filename
 
-                        # 중복 방지
+                        # Prevent duplicates
                         if output_file.exists():
                             base = output_file.stem
                             suffix = output_file.suffix
@@ -2875,64 +5180,74 @@ class ArtifactCollector:
         include_deleted: bool
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        사용자별 경로 수집 (NTUSER.DAT, browser profiles 등)
+        Per-user path collection (NTUSER.DAT, browser profiles, messengers, etc.)
 
-        디지털 포렌식 원칙:
-        - 확장자 필터 적용
-        - 삭제 파일 포함
+        Digital forensics principles:
+        - Apply extension filter (include or exclude)
+        - Include deleted files
+        - Support user_path as string or list (e.g., WeChat dual layout)
         """
         users_dir = Path(r'C:\Users')
+
+        # Support user_path as string or list
+        raw_user_path = mft_config.get('user_path', '')
+        if isinstance(raw_user_path, str):
+            user_path_list = [raw_user_path]
+        else:
+            user_path_list = raw_user_path
+
+        pattern = mft_config.get('pattern', None)
+        files = mft_config.get('files', None)
+        extensions = mft_config.get('extensions', None)
+        exclude_extensions = mft_config.get('exclude_extensions', None)
 
         for user_dir in users_dir.iterdir():
             if not user_dir.is_dir():
                 continue
 
-            # 시스템 디렉토리 제외
+            # Exclude system directories
             if user_dir.name.lower() in ['public', 'default', 'default user', 'all users']:
                 continue
 
-            user_path = mft_config.get('user_path', '')
-            pattern = mft_config.get('pattern', None)
-            files = mft_config.get('files', None)
-            extensions = mft_config.get('extensions', None)  # 확장자 필터
-
-            # 사용자별 출력 디렉토리
+            # Per-user output directory
             user_output_dir = artifact_dir / user_dir.name
             user_output_dir.mkdir(exist_ok=True)
 
-            try:
-                if pattern:
-                    # 패턴 기반 수집 (확장자 필터 포함)
-                    full_base_path = f"Users/{user_dir.name}/{user_path}"
-                    for result in self._collect_forensic_disk_pattern(
-                        full_base_path, pattern, artifact_type,
-                        user_output_dir, progress_callback, include_deleted,
-                        extensions=extensions  # 확장자 필터 전달
-                    ):
-                        result[1]['username'] = user_dir.name
-                        yield result
-
-                elif files:
-                    # 파일 목록 수집
-                    for filename in files:
-                        file_path = f"Users/{user_dir.name}/{user_path}/{filename}"
-                        for result in self._collect_forensic_disk_file(
-                            file_path, artifact_type, user_output_dir, progress_callback
+            for user_path in user_path_list:
+                try:
+                    if pattern:
+                        # Pattern-based collection (with extension filter)
+                        full_base_path = f"Users/{user_dir.name}/{user_path}"
+                        for result in self._collect_forensic_disk_pattern(
+                            full_base_path, pattern, artifact_type,
+                            user_output_dir, progress_callback, include_deleted,
+                            extensions=extensions,
+                            exclude_extensions=exclude_extensions,
                         ):
                             result[1]['username'] = user_dir.name
                             yield result
 
-                elif user_path:
-                    # 단일 파일 (예: NTUSER.DAT)
-                    full_path = f"Users/{user_dir.name}/{user_path}"
-                    for result in self._collect_forensic_disk_file(
-                        full_path, artifact_type, user_output_dir, progress_callback
-                    ):
-                        result[1]['username'] = user_dir.name
-                        yield result
+                    elif files:
+                        # File list collection
+                        for filename in files:
+                            file_path = f"Users/{user_dir.name}/{user_path}/{filename}"
+                            for result in self._collect_forensic_disk_file(
+                                file_path, artifact_type, user_output_dir, progress_callback
+                            ):
+                                result[1]['username'] = user_dir.name
+                                yield result
 
-            except Exception as e:
-                _debug_print(f"[WARNING] ForensicDisk error for user {user_dir.name}: {e}")
+                    elif user_path:
+                        # Single file (e.g., NTUSER.DAT)
+                        full_path = f"Users/{user_dir.name}/{user_path}"
+                        for result in self._collect_forensic_disk_file(
+                            full_path, artifact_type, user_output_dir, progress_callback
+                        ):
+                            result[1]['username'] = user_dir.name
+                            yield result
+
+                except Exception as e:
+                    _debug_print(f"[WARNING] ForensicDisk error for user {user_dir.name}/{user_path}: {e}")
 
     def _collect_mft(
         self,
@@ -2946,6 +5261,14 @@ class ArtifactCollector:
         Collect artifacts using MFT-based method.
         """
         mft_config = artifact_info.get('mft_config', {})
+
+        # No mft_config → use legacy fallback
+        if not mft_config:
+            logger.info(f"[MFT] {artifact_type}: no mft_config, using legacy fallback")
+            yield from self._collect_legacy(
+                artifact_type, artifact_info, artifact_dir, progress_callback
+            )
+            return
 
         # Handle special collection methods
         if 'special' in mft_config:
@@ -2964,32 +5287,56 @@ class ArtifactCollector:
                 artifact_type, mft_config, artifact_dir,
                 progress_callback, include_deleted
             )
-            return
+            # Don't return - may also have system_base_paths or process_name
+        else:
+            # Handle pattern-based collection (system paths)
+            base_path = mft_config.get('base_path', '')
+            pattern = mft_config.get('pattern', None)
+            files = mft_config.get('files', None)
 
-        # Handle pattern-based collection
-        base_path = mft_config.get('base_path', '')
-        pattern = mft_config.get('pattern', None)
-        files = mft_config.get('files', None)
-
-        if pattern:
-            # Pattern-based collection
-            for result in self.mft_collector.collect_by_pattern(
-                base_path, pattern, artifact_type, include_deleted
-            ):
-                yield result
-                if progress_callback:
-                    progress_callback(result[0])
-
-        elif files:
-            # Specific files collection
-            for filename in files:
-                file_path = f"{base_path}/{filename}" if base_path else filename
-                for result in self.mft_collector.collect_by_path(
-                    file_path, artifact_type, include_deleted
+            if pattern:
+                for result in self.mft_collector.collect_by_pattern(
+                    base_path, pattern, artifact_type, include_deleted
                 ):
                     yield result
                     if progress_callback:
                         progress_callback(result[0])
+
+            elif files:
+                for filename in files:
+                    file_path = f"{base_path}/{filename}" if base_path else filename
+                    for result in self.mft_collector.collect_by_path(
+                        file_path, artifact_type, include_deleted
+                    ):
+                        yield result
+                        if progress_callback:
+                            progress_callback(result[0])
+
+        # System-wide paths (TeamViewer/AnyDesk ProgramData, etc.)
+        for sys_path in mft_config.get('system_base_paths', []):
+            extensions = mft_config.get('extensions', None)
+            logger.debug(f"[MFT] System path scan: {sys_path}")
+            try:
+                for result in self.mft_collector.collect_by_pattern(
+                    sys_path, '*', artifact_type, include_deleted
+                ):
+                    # Apply extension filter manually for MFT mode
+                    if extensions:
+                        filename = result[0].lower() if isinstance(result[0], str) else str(result[0]).lower()
+                        if not any(filename.endswith(ext.lower()) for ext in extensions):
+                            continue
+                    yield result
+                    if progress_callback:
+                        progress_callback(result[0])
+            except Exception as e:
+                logger.debug(f"[MFT] System path {sys_path} not found or inaccessible: {e}")
+
+        # Process memory dump (live system only, for PC messengers)
+        process_name = artifact_info.get('process_name')
+        if process_name:
+            yield from self._dump_process_memory(
+                artifact_type, process_name, artifact_dir
+            )
 
     def _collect_mft_user_paths(
         self,
@@ -3001,8 +5348,29 @@ class ArtifactCollector:
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         Collect artifacts from user profile directories using MFT.
+        Supports user_path as string or list (e.g., WeChat dual layout).
         """
         users_dir = Path(r'C:\Users')
+
+        # Support user_path as string or list
+        raw_user_path = mft_config.get('user_path', '')
+        if isinstance(raw_user_path, str):
+            user_path_list = [raw_user_path]
+        else:
+            user_path_list = raw_user_path
+
+        pattern = mft_config.get('pattern', None)
+        files = mft_config.get('files', None)
+        extensions = mft_config.get('extensions', None)
+        exclude_extensions = mft_config.get('exclude_extensions', None)
+
+        # Normalize exclude_extensions for fast lookup
+        exclude_ext_set = None
+        if exclude_extensions:
+            exclude_ext_set = {
+                ext.lower() if ext.startswith('.') else f'.{ext.lower()}'
+                for ext in exclude_extensions
+            }
 
         for user_dir in users_dir.iterdir():
             if not user_dir.is_dir():
@@ -3012,53 +5380,98 @@ class ArtifactCollector:
             if user_dir.name.lower() in ['public', 'default', 'default user', 'all users']:
                 continue
 
-            user_path = mft_config.get('user_path', '')
-            pattern = mft_config.get('pattern', None)
-            files = mft_config.get('files', None)
-            extensions = mft_config.get('extensions', None)  # [버그 수정] 확장자 필터 추가
+            for user_path in user_path_list:
+                full_base_path = f"Users/{user_dir.name}/{user_path}"
 
-            full_base_path = f"Users/{user_dir.name}/{user_path}"
+                try:
+                    if pattern:
+                        for result in self.mft_collector.collect_by_pattern(
+                            full_base_path, pattern, artifact_type, include_deleted
+                        ):
+                            file_name = result[0].lower() if isinstance(result[0], str) else str(result[0]).lower()
 
-            try:
-                if pattern:
-                    for result in self.mft_collector.collect_by_pattern(
-                        full_base_path, pattern, artifact_type, include_deleted
-                    ):
-                        # [버그 수정] 확장자 필터 적용
-                        if extensions:
-                            file_name = result[0].lower()
-                            if not any(file_name.endswith(ext.lower()) for ext in extensions):
-                                continue  # 확장자 불일치 시 건너뛰기
+                            # Extension include filter
+                            if extensions:
+                                if not any(file_name.endswith(ext.lower()) for ext in extensions):
+                                    continue
 
-                        result[1]['username'] = user_dir.name
-                        yield result
-                        if progress_callback:
-                            progress_callback(result[0])
+                            # Extension exclude filter (e.g., Telegram media)
+                            if exclude_ext_set and '.' in file_name:
+                                file_ext = '.' + file_name.rsplit('.', 1)[-1]
+                                if file_ext in exclude_ext_set:
+                                    continue
 
-                elif files:
-                    for filename in files:
-                        file_path = f"{full_base_path}/{filename}"
+                            result[1]['username'] = user_dir.name
+                            yield result
+                            if progress_callback:
+                                progress_callback(result[0])
+
+                    elif files:
+                        for filename in files:
+                            file_path = f"{full_base_path}/{filename}"
+                            for result in self.mft_collector.collect_by_path(
+                                file_path, artifact_type, include_deleted
+                            ):
+                                result[1]['username'] = user_dir.name
+                                yield result
+                                if progress_callback:
+                                    progress_callback(result[0])
+
+                    elif user_path:
+                        # Single file (like NTUSER.DAT)
                         for result in self.mft_collector.collect_by_path(
-                            file_path, artifact_type, include_deleted
+                            f"Users/{user_dir.name}/{user_path}",
+                            artifact_type, include_deleted
                         ):
                             result[1]['username'] = user_dir.name
                             yield result
                             if progress_callback:
                                 progress_callback(result[0])
 
-                elif user_path:
-                    # Single file (like NTUSER.DAT)
-                    for result in self.mft_collector.collect_by_path(
-                        f"Users/{user_dir.name}/{user_path}",
-                        artifact_type, include_deleted
-                    ):
-                        result[1]['username'] = user_dir.name
-                        yield result
-                        if progress_callback:
-                            progress_callback(result[0])
+                except Exception as e:
+                    _debug_print(f"[MFT] Error collecting from {user_dir.name}/{user_path}: {e}")
 
-            except Exception as e:
-                _debug_print(f"[MFT] Error collecting from {user_dir.name}: {e}")
+    def _dump_process_memory(
+        self,
+        artifact_type: str,
+        process_name: str,
+        artifact_dir: Path,
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Dump process memory for encryption key extraction (live system only).
+        Gracefully fails on dead disk (E01) or when process is not running.
+        """
+        if getattr(self, f'_memory_dumped_{artifact_type}', False):
+            return  # Already dumped in this session
+        setattr(self, f'_memory_dumped_{artifact_type}', True)
+
+        try:
+            from collectors.process_memory_dumper import ProcessMemoryDumper
+            dumper = ProcessMemoryDumper()
+            dump_filename = f"{process_name.replace('.exe', '').lower()}_memory.dmp"
+            dump_path = str(artifact_dir / dump_filename)
+
+            _debug_print(f"[MEMORY] Dumping {process_name}...")
+            dump_result = dumper.dump_process_lightweight(process_name, dump_path)
+
+            if dump_result.get('success'):
+                size_mb = dump_result.get('size', 0) / 1024 / 1024
+                _debug_print(f"[MEMORY] Dump success: {dump_filename} ({size_mb:.1f} MB)")
+                yield dump_path, {
+                    'type': artifact_type,
+                    'name': dump_filename,
+                    'path': dump_path,
+                    'size': dump_result.get('size', 0),
+                    'process_pid': dump_result.get('pid'),
+                    'is_memory_dump': True,
+                    'collection_method': 'process_memory_dump',
+                }
+            else:
+                _debug_print(f"[MEMORY] Dump skipped: {dump_result.get('error', 'process not found')}")
+        except ImportError:
+            _debug_print("[MEMORY] ProcessMemoryDumper not available")
+        except Exception as e:
+            _debug_print(f"[MEMORY] Error: {e}")
 
     def _collect_legacy(
         self,
@@ -3081,8 +5494,17 @@ class ArtifactCollector:
 
         collector_method = getattr(self, collector_method_name)
 
+        # Get exclude extensions if specified
+        exclude_extensions = artifact_info.get('exclude_extensions')
+
         for path_pattern in artifact_info['paths']:
-            for result in collector_method(path_pattern, artifact_dir, artifact_type):
+            # Pass exclude_extensions for methods that support it
+            if collector_method_name in ('collect_user_glob', 'collect_messenger_with_memory') and exclude_extensions:
+                results = collector_method(path_pattern, artifact_dir, artifact_type, exclude_extensions)
+            else:
+                results = collector_method(path_pattern, artifact_dir, artifact_type)
+
+            for result in results:
                 # Mark as legacy collection
                 result[1]['collection_method'] = 'legacy_file_api'
                 result[1]['warning'] = 'Collected via legacy method - limited forensic value'
@@ -3223,11 +5645,37 @@ class ArtifactCollector:
         self,
         pattern: str,
         output_dir: Path,
-        artifact_type: str
+        artifact_type: str,
+        exclude_extensions: Optional[List[str]] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        """Collect files matching a glob pattern with environment variable expansion (legacy)"""
+        """Collect files matching a glob pattern with environment variable expansion (legacy)
+
+        Args:
+            pattern: Glob pattern with environment variables
+            output_dir: Output directory path
+            artifact_type: Artifact type identifier
+            exclude_extensions: List of file extensions to exclude (e.g., ['.png', '.jpg'])
+        """
         expanded_pattern = os.path.expandvars(pattern)
+
+        # Normalize exclude extensions to lowercase with leading dot
+        if exclude_extensions:
+            exclude_set = {ext.lower() if ext.startswith('.') else f'.{ext.lower()}'
+                          for ext in exclude_extensions}
+        else:
+            exclude_set = set()
+
         for src_path in glob.glob(expanded_pattern, recursive=True):
+            # Skip directories
+            if os.path.isdir(src_path):
+                continue
+
+            # Check extension exclusion
+            if exclude_set:
+                _, ext = os.path.splitext(src_path)
+                if ext.lower() in exclude_set:
+                    continue
+
             try:
                 dst_path = output_dir / Path(src_path).name
                 shutil.copy2(src_path, dst_path)
@@ -3235,6 +5683,208 @@ class ArtifactCollector:
             except (PermissionError, OSError) as e:
                 _debug_print(f"[LEGACY] Cannot access {src_path}: {e}")
                 continue
+
+    def collect_messenger_with_memory(
+        self,
+        pattern: str,
+        output_dir: Path,
+        artifact_type: str,
+        exclude_extensions: Optional[List[str]] = None
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Collect messenger app data with process memory dump.
+        Preserves directory structure for parser compatibility.
+
+        This collector:
+        1. Collects user data files (preserving directory structure)
+        2. Creates a process memory dump (if process is running)
+
+        Args:
+            pattern: Glob pattern with environment variables
+            output_dir: Output directory path
+            artifact_type: Artifact type identifier
+            exclude_extensions: List of file extensions to exclude
+        """
+        # 1. Collect user data files (preserving directory structure)
+        expanded_pattern = os.path.expandvars(pattern)
+
+        # Normalize exclude extensions
+        if exclude_extensions:
+            exclude_set = {ext.lower() if ext.startswith('.') else f'.{ext.lower()}'
+                          for ext in exclude_extensions}
+        else:
+            exclude_set = set()
+
+        # Find base directory from pattern (e.g., %LOCALAPPDATA%\Kakao\KakaoTalk\users)
+        # We want to preserve structure from 'users' directory onwards
+        base_marker = None
+        for marker in ['users', 'Users', 'AppData']:
+            if marker in expanded_pattern:
+                base_idx = expanded_pattern.find(marker)
+                base_marker = expanded_pattern[:base_idx + len(marker)]
+                break
+
+        for src_path in glob.glob(expanded_pattern, recursive=True):
+            # Skip directories
+            if os.path.isdir(src_path):
+                continue
+
+            # Check extension exclusion
+            if exclude_set:
+                _, ext = os.path.splitext(src_path)
+                if ext.lower() in exclude_set:
+                    continue
+
+            try:
+                # Preserve directory structure from base_marker
+                if base_marker and base_marker in src_path:
+                    rel_path = src_path[len(base_marker):].lstrip(os.sep).lstrip('/')
+                    dst_path = output_dir / rel_path
+                else:
+                    dst_path = output_dir / Path(src_path).name
+
+                # Create parent directories
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, dst_path)
+                yield str(dst_path), self._get_metadata(src_path, dst_path, artifact_type)
+            except (PermissionError, OSError) as e:
+                _debug_print(f"[LEGACY] Cannot access {src_path}: {e}")
+                continue
+
+        # 2. Collect process memory dump (only once per artifact type)
+        artifact_info = ARTIFACT_TYPES.get(artifact_type, {})
+        process_name = artifact_info.get('process_name')
+
+        if process_name and not getattr(self, f'_memory_dumped_{artifact_type}', False):
+            setattr(self, f'_memory_dumped_{artifact_type}', True)
+
+            try:
+                from collectors.process_memory_dumper import ProcessMemoryDumper
+                dumper = ProcessMemoryDumper()
+                dump_filename = f"{process_name.replace('.exe', '').lower()}_memory.dmp"
+                dump_path = str(output_dir / dump_filename)
+
+                _debug_print(f"[MEMORY] Dumping {process_name}...")
+                dump_result = dumper.dump_process_lightweight(process_name, dump_path)
+
+                if dump_result.get('success'):
+                    size_mb = dump_result.get('size', 0) / 1024 / 1024
+                    _debug_print(f"[MEMORY] Dump success: {dump_filename} ({size_mb:.1f} MB)")
+                    yield dump_path, {
+                        'type': artifact_type,
+                        'name': dump_filename,
+                        'path': dump_path,
+                        'size': dump_result.get('size', 0),
+                        'process_pid': dump_result.get('pid'),
+                        'is_memory_dump': True,
+                        'collection_method': 'process_memory_dump',
+                    }
+                else:
+                    _debug_print(f"[MEMORY] Dump failed: {dump_result.get('error')}")
+            except ImportError:
+                _debug_print("[MEMORY] ProcessMemoryDumper not available")
+            except Exception as e:
+                _debug_print(f"[MEMORY] Error: {e}")
+
+    def collect_recycle_bin(
+        self,
+        _: str,
+        output_dir: Path,
+        artifact_type: str
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Collect Recycle Bin metadata files ($I files).
+
+        Collects metadata ($I) and original file contents ($R) of deleted files from Recycle Bin.
+        $I file: Metadata including original path, deletion time, etc.
+        $R file: Actual deleted file contents
+
+        Note: Requires admin privileges for full access.
+        """
+        collected_count = 0
+
+        # Try case variations (Windows is case-insensitive)
+        variants = ['$Recycle.Bin', '$RECYCLE.BIN', '$recycle.bin', 'RECYCLER']
+        recycle_bin_path = None
+
+        for variant in variants:
+            test_path = Path(f"{self.volume}:\\{variant}")
+            _debug_print(f"[RecycleBin] Checking path: {test_path}")
+            try:
+                if test_path.exists():
+                    recycle_bin_path = test_path
+                    _debug_print(f"[RecycleBin] Found at: {recycle_bin_path}")
+                    break
+            except (PermissionError, OSError) as e:
+                _debug_print(f"[RecycleBin] Cannot check {test_path}: {e}")
+                continue
+
+        if recycle_bin_path is None:
+            _debug_print(f"[RecycleBin] $Recycle.Bin not found on {self.volume}:")
+            return
+
+        try:
+            # Traverse each user SID folder
+            sid_folders = list(recycle_bin_path.iterdir())
+            _debug_print(f"[RecycleBin] Found {len(sid_folders)} folders in Recycle Bin")
+
+            for sid_folder in sid_folders:
+                if sid_folder.is_dir() and sid_folder.name.startswith('S-1-'):
+                    _debug_print(f"[RecycleBin] Processing SID folder: {sid_folder.name}")
+
+                    # Create per-SID output directory
+                    sid_output_dir = output_dir / sid_folder.name
+                    sid_output_dir.mkdir(exist_ok=True)
+
+                    try:
+                        entries = list(sid_folder.iterdir())
+                        _debug_print(f"[RecycleBin] Found {len(entries)} entries in {sid_folder.name}")
+
+                        for entry in entries:
+                            # Collect $I file (metadata)
+                            if entry.name.startswith('$I') and entry.is_file():
+                                try:
+                                    dst_path = sid_output_dir / entry.name
+                                    shutil.copy2(entry, dst_path)
+                                    metadata = self._get_metadata(str(entry), dst_path, artifact_type)
+                                    metadata['user_sid'] = sid_folder.name
+                                    metadata['file_type'] = 'metadata'
+                                    collected_count += 1
+                                    _debug_print(f"[RecycleBin] Collected: {entry.name}")
+                                    yield str(dst_path), metadata
+
+                                    # Also try to collect corresponding $R file
+                                    r_file = sid_folder / entry.name.replace('$I', '$R')
+                                    if r_file.exists():
+                                        try:
+                                            r_dst_path = sid_output_dir / r_file.name
+                                            shutil.copy2(r_file, r_dst_path)
+                                            r_metadata = self._get_metadata(str(r_file), r_dst_path, artifact_type)
+                                            r_metadata['user_sid'] = sid_folder.name
+                                            r_metadata['file_type'] = 'content'
+                                            collected_count += 1
+                                            _debug_print(f"[RecycleBin] Collected: {r_file.name}")
+                                            yield str(r_dst_path), r_metadata
+                                        except (PermissionError, OSError) as e:
+                                            _debug_print(f"[RecycleBin] Cannot access $R file {r_file}: {e}")
+
+                                except (PermissionError, OSError) as e:
+                                    _debug_print(f"[RecycleBin] Permission denied: {entry} - {e}")
+                                    continue
+
+                    except PermissionError as e:
+                        _debug_print(f"[RecycleBin] Cannot access SID folder: {sid_folder} - {e}")
+                        continue
+                    except OSError as e:
+                        _debug_print(f"[RecycleBin] OS error on SID folder: {sid_folder} - {e}")
+                        continue
+
+            _debug_print(f"[RecycleBin] Collection complete: {collected_count} files")
+
+        except PermissionError as e:
+            _debug_print(f"[RecycleBin] Cannot access Recycle Bin: {e} - requires admin privileges")
+        except OSError as e:
+            _debug_print(f"[RecycleBin] OS error accessing Recycle Bin: {e}")
 
     def collect_ntuser(
         self,
@@ -3387,7 +6037,7 @@ class ArtifactCollector:
                         _debug_print(f"[FIREFOX] Cannot access {src_path}: {e}")
 
     def _sanitize_filename(self, filename: str) -> str:
-        """파일명에서 유효하지 않은 문자 제거"""
+        """Remove invalid characters from filename"""
         import re
         sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', filename)
         sanitized = re.sub(r'_+', '_', sanitized)
@@ -3448,49 +6098,58 @@ class ArtifactCollector:
         **kwargs
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        Collect Android forensics artifacts via ADB.
+        Collect Android forensics artifacts via USB (adb-shell).
 
         Args:
-            artifact_type: Type of Android artifact
+            artifact_type: Type of Android artifact (e.g., 'mobile_android_kakaotalk')
             artifact_info: Artifact configuration
             artifact_dir: Output directory
             progress_callback: Progress callback
             **kwargs: device_serial for specific device
         """
-        from collectors.android_collector import AndroidCollector
+        from collectors.android_collector import AndroidCollector, ANDROID_ARTIFACT_TYPES
 
         device_serial = kwargs.get('device_serial')
-        artifact_key = artifact_info.get('artifact_key', '')
+
+        # Check if artifact_type is supported by AndroidCollector
+        if artifact_type not in ANDROID_ARTIFACT_TYPES:
+            _debug_print(f"[ANDROID] Artifact type not in ANDROID_ARTIFACT_TYPES: {artifact_type}")
+            return
 
         try:
-            collector = AndroidCollector(device_serial, str(artifact_dir))
+            # Use context manager for automatic cleanup
+            # AndroidCollector(output_dir, device_serial) - correct order
+            with AndroidCollector(str(artifact_dir), device_serial) as collector:
+                # Connect to device
+                collector.connect(device_serial)
+                _debug_print(f"[ANDROID] Connected to device: {collector.device_serial}")
 
-            # Map artifact_key to collector method
-            method_map = {
-                'sms': collector.collect_sms,
-                'call': collector.collect_call_history,
-                'contacts': collector.collect_contacts,
-                'app': collector.collect_app_data,
-                'wifi': collector.collect_wifi_settings,
-                'location': collector.collect_location_data,
-                'media': collector.collect_media_files,
-            }
+                # Use generic collect() method - handles all artifact types
+                for result in collector.collect(artifact_type, progress_callback):
+                    file_path, file_metadata = result
 
-            if artifact_key not in method_map:
-                _debug_print(f"[ANDROID] Unknown artifact key: {artifact_key}")
-                return
+                    # Skip error results (empty path)
+                    if not file_path:
+                        if file_metadata.get('status') == 'error':
+                            _debug_print(f"[ANDROID] Collection error: {file_metadata.get('error', 'Unknown')}")
+                        continue
 
-            method = method_map[artifact_key]
+                    # Add standard fields if not already present
+                    if 'artifact_type' not in file_metadata:
+                        file_metadata['artifact_type'] = artifact_type
+                    if 'device_serial' not in file_metadata:
+                        file_metadata['device_serial'] = device_serial or collector.device_serial
+                    if 'collected_at' not in file_metadata:
+                        file_metadata['collected_at'] = datetime.utcnow().isoformat()
 
-            for result in method(progress_callback=progress_callback):
-                file_path, file_metadata = result
-                # Add standard fields
-                file_metadata['artifact_type'] = artifact_type
-                file_metadata['collection_method'] = 'adb'
-                file_metadata['device_serial'] = device_serial or 'auto-detected'
-                file_metadata['collected_at'] = datetime.utcnow().isoformat()
-                yield file_path, file_metadata
+                    yield file_path, file_metadata
 
+        except RuntimeError as e:
+            # USB/device connection errors
+            _debug_print(f"[ANDROID] Connection failed: {e}")
+        except ValueError as e:
+            # Invalid artifact type or device not found
+            _debug_print(f"[ANDROID] Invalid configuration: {e}")
         except Exception as e:
             _debug_print(f"[ANDROID] Collection failed for {artifact_type}: {e}")
 
@@ -3510,16 +6169,20 @@ class ArtifactCollector:
         Collect iOS forensics artifacts from iTunes/Finder backup.
 
         Args:
-            artifact_type: Type of iOS artifact
+            artifact_type: Type of iOS artifact (e.g., 'mobile_ios_kakaotalk')
             artifact_info: Artifact configuration
             artifact_dir: Output directory
             progress_callback: Progress callback
             **kwargs: backup_path for specific backup
         """
-        from collectors.ios_collector import iOSCollector, find_ios_backups
+        from collectors.ios_collector import iOSCollector, find_ios_backups, IOS_ARTIFACT_TYPES
 
         backup_path = kwargs.get('backup_path')
-        artifact_key = artifact_info.get('artifact_key', '')
+
+        # Check if artifact_type is supported by iOSCollector
+        if artifact_type not in IOS_ARTIFACT_TYPES:
+            _debug_print(f"[iOS] Artifact type not in IOS_ARTIFACT_TYPES: {artifact_type}")
+            return
 
         # If no backup path specified, try to find one
         if not backup_path:
@@ -3532,40 +6195,47 @@ class ArtifactCollector:
             _debug_print(f"[iOS] Using backup: {backups[0].device_name} ({backups[0].ios_version})")
 
         try:
-            collector = iOSCollector(backup_path, str(artifact_dir))
+            # iOSCollector(output_dir, backup_path) - correct order
+            collector = iOSCollector(str(artifact_dir), backup_path)
 
-            # Check if backup is encrypted
-            if collector.is_encrypted:
-                _debug_print(f"[iOS] Backup is encrypted - cannot extract artifacts")
-                _debug_print("[iOS] Please create an unencrypted backup or provide decryption key")
+            # Select backup first
+            if not collector.select_backup(backup_path):
+                _debug_print(f"[iOS] Failed to select backup: {backup_path}")
                 return
 
-            # Map artifact_key to collector method
-            method_map = {
-                'sms': collector.collect_sms,
-                'call': collector.collect_call_history,
-                'contacts': collector.collect_contacts,
-                'app': collector.collect_app_data,
-                'safari': collector.collect_safari_data,
-                'location': collector.collect_location_data,
-                'backup': collector.collect_backup_metadata,
-            }
-
-            if artifact_key not in method_map:
-                _debug_print(f"[iOS] Unknown artifact key: {artifact_key}")
+            # Check if backup is encrypted without decryptor
+            if collector.is_encrypted and not getattr(collector, '_encrypted_backup', None):
+                _debug_print("[iOS] Backup is encrypted - decryptor not provided, skipping")
                 return
 
-            method = method_map[artifact_key]
-
-            for result in method(progress_callback=progress_callback):
+            # Use generic collect() method - handles all artifact types
+            for result in collector.collect(artifact_type, progress_callback):
                 file_path, file_metadata = result
-                # Add standard fields
-                file_metadata['artifact_type'] = artifact_type
-                file_metadata['collection_method'] = 'ios_backup'
-                file_metadata['backup_path'] = backup_path
-                file_metadata['collected_at'] = datetime.utcnow().isoformat()
+
+                # Skip error results (empty path)
+                if not file_path:
+                    if file_metadata.get('status') == 'error':
+                        _debug_print(f"[iOS] Collection error: {file_metadata.get('error', 'Unknown')}")
+                    continue
+
+                # Add standard fields if not already present
+                if 'artifact_type' not in file_metadata:
+                    file_metadata['artifact_type'] = artifact_type
+                if 'collection_method' not in file_metadata:
+                    file_metadata['collection_method'] = 'ios_backup'
+                if 'backup_path' not in file_metadata:
+                    file_metadata['backup_path'] = backup_path
+                if 'collected_at' not in file_metadata:
+                    file_metadata['collected_at'] = datetime.utcnow().isoformat()
+
                 yield file_path, file_metadata
 
+        except RuntimeError as e:
+            # Backup selection errors
+            _debug_print(f"[iOS] Backup error: {e}")
+        except ValueError as e:
+            # Invalid artifact type
+            _debug_print(f"[iOS] Invalid configuration: {e}")
         except Exception as e:
             _debug_print(f"[iOS] Collection failed for {artifact_type}: {e}")
 
@@ -3680,9 +6350,14 @@ class ArtifactCollector:
             _debug_print(f"[MACOS] Collection failed for {artifact_type}: {e}")
 
     def _get_vss_path(self, file_path: str) -> Optional[str]:
-        """Get path to file in latest Volume Shadow Copy"""
+        """Get path to file in latest Volume Shadow Copy
+
+        [SECURITY] Validates VSS path to prevent path traversal attacks.
+        """
         try:
             import subprocess
+            import re
+
             result = subprocess.run(
                 ['vssadmin', 'list', 'shadows'],
                 capture_output=True,
@@ -3693,15 +6368,45 @@ class ArtifactCollector:
             for line in result.stdout.split('\n'):
                 if 'Shadow Copy Volume' in line:
                     vss_volume = line.split(':')[-1].strip()
-                    drive = file_path[0]
-                    relative_path = file_path[2:]  # Remove 'C:'
-                    return f"{vss_volume}{relative_path}"
 
-        except Exception:
-            pass
+                    # [SECURITY] Validate VSS volume format
+                    # Expected: \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy{N}\
+                    if not re.match(r'^\\\\[\?\.]\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy\d+\\?$', vss_volume):
+                        logger.warning(f"[SECURITY] Invalid VSS volume format: {vss_volume}")
+                        continue
+
+                    # [SECURITY] Validate file_path format (must be absolute Windows path)
+                    if len(file_path) < 3 or file_path[1] != ':':
+                        logger.warning(f"[SECURITY] Invalid file path format: {file_path}")
+                        return None
+
+                    drive = file_path[0].upper()
+                    relative_path = file_path[2:]  # Remove 'C:'
+
+                    # [SECURITY] Check for path traversal attempts
+                    if '..' in relative_path or relative_path.startswith('/'):
+                        logger.warning(f"[SECURITY] Path traversal detected: {relative_path}")
+                        return None
+
+                    # Construct and validate final path
+                    vss_path = f"{vss_volume}{relative_path}"
+
+                    # [SECURITY] Verify path stays within VSS volume
+                    try:
+                        resolved = Path(vss_path).resolve()
+                        if not str(resolved).startswith(vss_volume.rstrip('\\')):
+                            logger.warning(f"[SECURITY] Path escape detected: {resolved}")
+                            return None
+                    except (OSError, ValueError):
+                        # Path resolution failed - reject for safety
+                        return None
+
+                    return vss_path
+
+        except Exception as e:
+            logger.debug(f"VSS path resolution failed: {e}")
 
         return None
-
 
 def get_collection_mode() -> str:
     """
@@ -3719,7 +6424,6 @@ def get_collection_mode() -> str:
         except Exception:
             return 'legacy'
     return 'legacy (no pytsk3)'
-
 
 if __name__ == "__main__":
     import sys

@@ -2,13 +2,16 @@
 # Forensic Collector - Git Ignore
 # =============================================================================
 
-# 민감한 설정 파일 (API 키, 서버 URL 등)
+# Sensitive config files (API keys, server URLs, etc.)
 config.json
 config.local.json
+config.development.json
+config.production.json
+config.staging.json
 *.secret
 *.credentials
 
-# 수집된 아티팩트 (용량 및 개인정보)
+# Collected artifacts (large files, personal data)
 collected_artifacts/
 artifacts/
 output/
@@ -16,11 +19,11 @@ extracted/
 temp/
 tmp/
 
-# 로그 파일
+# Log files
 logs/
 *.log
 
-# 증거 이미지 파일 (대용량)
+# Forensic image files (large)
 *.E01
 *.e01
 *.Ex01
@@ -31,13 +34,13 @@ logs/
 *.dmg
 *.iso
 
-# 모바일 백업 (개인정보)
+# Mobile backups (personal data)
 **/MobileSync/
 **/Backup/
 *.ab
 *.ab.bak
 
-# iOS 백업 관련
+# iOS backup files
 Manifest.db
 Manifest.plist
 Info.plist
@@ -113,12 +116,12 @@ chain_of_custody/
 *.backup
 *.old
 
-# Database files (might contain evidence)
+# Database files (may contain evidence)
 *.db
 *.sqlite
 *.sqlite3
 
-# Encryption keys (NEVER commit these)
+# Encryption keys (NEVER commit)
 *.key
 *.pem
 *.crt
@@ -144,3 +147,20 @@ tools/libimobiledevice/LICENSE
 # Downloaded archives
 tools/*.zip
 tools/*.tar.gz
+
+# =============================================================================
+# Third-party binaries (downloaded separately, not redistributable)
+# =============================================================================
+
+# Memory acquisition tool (Apache 2.0 — https://github.com/Velocidex/WinPmem)
+resources/winpmem_mini_x64.exe
+
+# USB library binary (install via pip: libusb1)
+resources/libusb-1.0.dll
+
+# Android APK files (copyrighted third-party apps, not redistributable)
+resources/downgrade_apks/*.apk
+!resources/downgrade_apks/README.txt
+
+# NUL placeholder
+resources/downgrade_apks/NUL

@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Secure Upload Manager - 보안 데이터 업로드 모듈
+Secure Upload Manager - Secure data upload module
 
-수집된 포렌식 아티팩트를 서버에 안전하게 전송합니다.
+Securely transfers collected forensic artifacts to the server.
 
-보안 기능:
-- AES-256-GCM 데이터 암호화
-- JWT 토큰 기반 인증
-- SHA-256 무결성 검증
-- TLS 1.3 필수 (HTTPS)
-- 세션별 암호화 키 발급
+Security Features:
+- AES-256-GCM data encryption
+- JWT token-based authentication
+- SHA-256 integrity verification
+- TLS 1.3 required (HTTPS)
+- Per-session encryption key issuance
 
 Usage:
     from core.secure_upload import SecureUploadManager
@@ -19,10 +19,10 @@ Usage:
         api_key="your-api-key"
     )
 
-    # 인증
+    # Authenticate
     manager.authenticate(user_token="jwt-token")
 
-    # 파일 업로드
+    # Upload file
     result = manager.upload_file(
         file_path="/path/to/artifact.db",
         case_id="case-123"
@@ -74,7 +74,7 @@ MIN_TLS_VERSION = 'TLSv1.2'  # Minimum TLS version
 
 @dataclass
 class UploadResult:
-    """업로드 결과"""
+    """Upload result"""
     success: bool
     file_id: Optional[str] = None
     sha256_local: Optional[str] = None
@@ -88,7 +88,7 @@ class UploadResult:
 
 @dataclass
 class SessionInfo:
-    """세션 정보"""
+    """Session information"""
     session_id: str
     encryption_key: bytes
     expires_at: datetime
@@ -101,9 +101,9 @@ class SessionInfo:
 
 class AESGCMCipher:
     """
-    AES-256-GCM 암호화 클래스
+    AES-256-GCM encryption class
 
-    NIST 권장 AES-GCM 모드를 사용하여 기밀성과 무결성을 동시에 보장합니다.
+    Uses NIST-recommended AES-GCM mode for simultaneous confidentiality and integrity.
     """
 
     def __init__(self, key: bytes):
@@ -158,12 +158,12 @@ class AESGCMCipher:
 
 def derive_key(master_secret: bytes, salt: bytes, info: bytes = b"forensic-upload") -> bytes:
     """
-    HKDF를 사용하여 마스터 시크릿에서 암호화 키 유도.
+    Derive encryption key from master secret using HKDF.
 
     Args:
-        master_secret: 서버에서 받은 마스터 시크릿
-        salt: 세션별 솔트
-        info: 컨텍스트 정보
+        master_secret: Master secret received from server
+        salt: Per-session salt
+        info: Context information
 
     Returns:
         256-bit derived key
@@ -182,10 +182,10 @@ def derive_key(master_secret: bytes, salt: bytes, info: bytes = b"forensic-uploa
 
 def compute_file_hash(file_path: Path) -> str:
     """
-    파일의 SHA-256 해시 계산.
+    Compute SHA-256 hash of file.
 
     Args:
-        file_path: 해시할 파일 경로
+        file_path: Path to file to hash
 
     Returns:
         Hex-encoded SHA-256 hash
@@ -203,9 +203,9 @@ def compute_file_hash(file_path: Path) -> str:
 
 class SecureUploadManager:
     """
-    보안 업로드 관리자
+    Secure upload manager
 
-    수집된 포렌식 아티팩트를 서버에 안전하게 전송합니다.
+    Securely transfers collected forensic artifacts to the server.
     """
 
     def __init__(
@@ -268,11 +268,11 @@ class SecureUploadManager:
         case_id: Optional[str] = None
     ) -> bool:
         """
-        서버 인증 및 세션 키 발급.
+        Server authentication and session key issuance.
 
         Args:
-            user_token: JWT 사용자 토큰
-            case_id: 케이스 ID (선택)
+            user_token: JWT user token
+            case_id: Case ID (optional)
 
         Returns:
             True if authentication successful
@@ -328,17 +328,17 @@ class SecureUploadManager:
         progress_callback: Optional[callable] = None
     ) -> UploadResult:
         """
-        파일을 서버에 안전하게 업로드.
+        Upload file to server securely.
 
         Args:
-            file_path: 업로드할 파일 경로
-            artifact_type: 아티팩트 유형
-            metadata: 추가 메타데이터
-            encrypt: 암호화 여부
-            progress_callback: 진행률 콜백 (percent: int)
+            file_path: Path to file to upload
+            artifact_type: Artifact type
+            metadata: Additional metadata
+            encrypt: Whether to encrypt
+            progress_callback: Progress callback (percent: int)
 
         Returns:
-            UploadResult 객체
+            UploadResult object
         """
         import time
         start_time = time.time()
@@ -431,12 +431,18 @@ class SecureUploadManager:
                     metadata=upload_metadata
                 )
             else:
+                # [2026-01-29] Include error response body (for CLEANUP_IN_PROGRESS detection)
+                error_text = ""
+                try:
+                    error_text = response.text[:500]  # Max 500 chars
+                except Exception:
+                    pass
                 return UploadResult(
                     success=False,
                     sha256_local=sha256_local,
                     size_bytes=file_size,
                     duration_seconds=duration,
-                    error=f"Upload failed: HTTP {response.status_code}"
+                    error=f"Upload failed: HTTP {response.status_code}: {error_text}"
                 )
 
         except Exception as e:
@@ -454,16 +460,16 @@ class SecureUploadManager:
         progress_callback: Optional[callable] = None
     ) -> List[UploadResult]:
         """
-        디렉토리 내 모든 파일 업로드.
+        Upload all files in directory.
 
         Args:
-            directory_path: 업로드할 디렉토리 경로
-            artifact_type: 아티팩트 유형
-            recursive: 하위 디렉토리 포함 여부
-            progress_callback: 진행률 콜백
+            directory_path: Path to directory to upload
+            artifact_type: Artifact type
+            recursive: Whether to include subdirectories
+            progress_callback: Progress callback
 
         Returns:
-            UploadResult 리스트
+            List of UploadResult
         """
         results = []
         path = Path(directory_path)
@@ -493,11 +499,11 @@ class SecureUploadManager:
 
     def verify_upload(self, file_id: str, expected_hash: str) -> bool:
         """
-        업로드된 파일의 무결성 검증.
+        Verify integrity of uploaded file.
 
         Args:
-            file_id: 서버 파일 ID
-            expected_hash: 예상되는 SHA-256 해시
+            file_id: Server file ID
+            expected_hash: Expected SHA-256 hash
 
         Returns:
             True if verification successful
@@ -550,9 +556,9 @@ class SecureUploadManager:
 
 class ChainOfCustodyLogger:
     """
-    연계 보관 로거
+    Chain of custody logger
 
-    포렌식 증거의 취급 이력을 기록합니다.
+    Records the handling history of forensic evidence.
     """
 
     def __init__(self, log_file: str):
@@ -656,23 +662,48 @@ class ChainOfCustodyLogger:
 
 def load_config_from_env() -> Dict[str, Any]:
     """
-    환경 변수에서 설정 로드.
+    Load configuration from environment variables.
 
     Environment Variables:
         FORENSIC_SERVER_URL: Server URL
         FORENSIC_API_KEY: API key
         FORENSIC_VERIFY_SSL: SSL verification (true/false)
+        FORENSIC_DEV_MODE: Development mode flag (required to disable SSL)
     """
+    # [SECURITY] SSL verification can only be disabled in explicit dev mode
+    # Release builds (PyInstaller) always enforce SSL — no bypass possible
+    verify_ssl = True
+    is_release = getattr(__import__('sys'), 'frozen', False)
+
+    if is_release:
+        # Packaged binary: SSL always enforced, ignore env vars
+        verify_ssl = True
+    else:
+        verify_ssl_env = os.environ.get('FORENSIC_VERIFY_SSL', 'true').lower()
+        dev_mode = os.environ.get('FORENSIC_DEV_MODE', 'false').lower() == 'true'
+
+        if verify_ssl_env == 'false':
+            if dev_mode:
+                logger.warning("[SECURITY] SSL verification disabled - DEV MODE ONLY")
+                verify_ssl = False
+            else:
+                logger.error(
+                    "[SECURITY] Cannot disable SSL verification without FORENSIC_DEV_MODE=true. "
+                    "SSL verification remains enabled for security."
+                )
+                # Keep verify_ssl = True (ignore the request to disable)
+
     return {
         'server_url': os.environ.get('FORENSIC_SERVER_URL', ''),
         'api_key': os.environ.get('FORENSIC_API_KEY', ''),
-        'verify_ssl': os.environ.get('FORENSIC_VERIFY_SSL', 'true').lower() == 'true',
+        'verify_ssl': verify_ssl,
+        'dev_mode': dev_mode,
     }
 
 
 def load_config_from_file(config_path: str) -> Dict[str, Any]:
     """
-    설정 파일에서 설정 로드.
+    Load configuration from file.
 
     Args:
         config_path: Path to config.json

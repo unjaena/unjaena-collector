@@ -2,27 +2,27 @@
 """
 Base MFT Collector Module
 
-E01 이미지와 로컬 디스크 모두에서 사용할 수 있는 MFT 기반 아티팩트 수집기.
+MFT-based artifact collector that works with both E01 images and local disks.
 
-디지털 포렌식 원칙:
-- MFT 파싱 기반 수집 (디렉토리 탐색 최소화)
-- 파일 수 제한 없음
-- 삭제 파일 포함
-- 시스템 폴더 포함
+Digital Forensics Principles:
+- MFT parsing-based collection (minimizing directory traversal)
+- No file count limits
+- Includes deleted files
+- Includes system folders
 
-지원 운영체제:
+Supported Operating Systems:
 - Windows (NTFS/FAT/exFAT)
 - Linux (ext2/3/4)
 - macOS (APFS/HFS+)
 
 Usage:
-    # E01 이미지
+    # E01 image
     collector = E01ArtifactCollector(e01_path, output_dir)
 
-    # 로컬 디스크
+    # Local disk
     collector = LocalArtifactCollector(output_dir, volume='C')
 
-    # 공통 인터페이스
+    # Common interface
     for path, metadata in collector.collect('document'):
         print(f"Collected: {path}")
 """
@@ -36,7 +36,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Generator, Tuple, Set
 
-# OS별 아티팩트 정의 임포트
+# Import OS-specific artifact definitions
 try:
     from .linux_artifacts import LINUX_ARTIFACT_FILTERS
 except ImportError:
@@ -54,9 +54,9 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 def _debug_log(message: str):
-    """디버그 로그 (프로덕션에서는 비활성화)"""
-    # 프로덕션에서는 출력하지 않음
-    # 디버그 필요시 아래 주석 해제
+    """Debug logging (disabled in production)"""
+    # Disabled in production
+    # Uncomment below for debugging
     # logger.debug(message)
     pass
 
@@ -66,14 +66,14 @@ def _debug_log(message: str):
 
 @dataclass
 class CollectedArtifact:
-    """수집된 아티팩트 정보"""
-    local_path: str           # 추출된 로컬 파일 경로
-    original_path: str        # 원본 경로
-    filename: str             # 파일명
-    size: int                 # 파일 크기
-    md5: str                  # MD5 해시
-    sha256: str               # SHA256 해시
-    artifact_type: str        # 아티팩트 유형
+    """Collected artifact information"""
+    local_path: str           # Extracted local file path
+    original_path: str        # Original path
+    filename: str             # Filename
+    size: int                 # File size
+    md5: str                  # MD5 hash
+    sha256: str               # SHA256 hash
+    artifact_type: str        # Artifact type
     inode: Optional[int] = None
     is_deleted: bool = False
     created_time: Optional[str] = None
@@ -87,18 +87,18 @@ class CollectedArtifact:
 
 def detect_os_type(filesystem: str, root_entries: List[str] = None) -> str:
     """
-    파일시스템과 루트 디렉토리 구조를 기반으로 OS 타입 감지
+    Detect OS type based on filesystem and root directory structure
 
     Args:
-        filesystem: 파일시스템 타입 (NTFS, ext4, APFS 등)
-        root_entries: 루트 디렉토리의 파일/폴더 목록
+        filesystem: Filesystem type (NTFS, ext4, APFS, etc.)
+        root_entries: List of files/folders in root directory
 
     Returns:
         'windows', 'linux', 'macos', 'unknown'
     """
     filesystem_lower = filesystem.lower()
 
-    # 파일시스템 기반 1차 감지
+    # Filesystem-based primary detection
     if filesystem_lower in ('ntfs', 'fat32', 'fat16', 'fat12', 'exfat'):
         return 'windows'
     elif filesystem_lower in ('apfs', 'hfs+', 'hfsx', 'hfs'):
@@ -106,20 +106,20 @@ def detect_os_type(filesystem: str, root_entries: List[str] = None) -> str:
     elif filesystem_lower in ('ext2', 'ext3', 'ext4'):
         return 'linux'
 
-    # 루트 디렉토리 구조 기반 2차 감지
+    # Root directory structure-based secondary detection
     if root_entries:
         entries_lower = {e.lower() for e in root_entries}
 
-        # Windows 특징
+        # Windows characteristics
         if 'windows' in entries_lower or 'program files' in entries_lower:
             return 'windows'
 
-        # macOS 특징
+        # macOS characteristics
         if 'applications' in entries_lower or 'library' in entries_lower:
             if 'system' in entries_lower:
                 return 'macos'
 
-        # Linux 특징
+        # Linux characteristics
         if 'etc' in entries_lower and 'var' in entries_lower:
             if 'home' in entries_lower or 'root' in entries_lower:
                 return 'linux'
@@ -129,13 +129,13 @@ def detect_os_type(filesystem: str, root_entries: List[str] = None) -> str:
 
 def get_artifact_filters_for_os(os_type: str) -> Dict[str, Any]:
     """
-    OS 타입에 맞는 아티팩트 필터 반환
+    Return artifact filters for the specified OS type
 
     Args:
         os_type: 'windows', 'linux', 'macos'
 
     Returns:
-        해당 OS의 아티팩트 필터 딕셔너리
+        Artifact filter dictionary for the OS
     """
     if os_type == 'linux':
         return LINUX_ARTIFACT_FILTERS
@@ -146,18 +146,18 @@ def get_artifact_filters_for_os(os_type: str) -> Dict[str, Any]:
 
 
 def get_all_artifact_filters() -> Dict[str, Dict[str, Any]]:
-    """모든 OS의 아티팩트 필터 통합 반환"""
+    """Return combined artifact filters for all operating systems"""
     all_filters = {}
 
-    # Windows 아티팩트 (기본)
+    # Windows artifacts (default)
     for key, value in ARTIFACT_MFT_FILTERS.items():
         all_filters[f'windows_{key}'] = {**value, 'os_type': 'windows'}
 
-    # Linux 아티팩트
+    # Linux artifacts
     for key, value in LINUX_ARTIFACT_FILTERS.items():
         all_filters[key] = {**value, 'os_type': 'linux'}
 
-    # macOS 아티팩트
+    # macOS artifacts
     for key, value in MACOS_ARTIFACT_FILTERS.items():
         all_filters[key] = {**value, 'os_type': 'macos'}
 
@@ -165,7 +165,7 @@ def get_all_artifact_filters() -> Dict[str, Dict[str, Any]]:
 
 
 # =============================================================================
-# MFT Filter Definitions (E01 + Local 통합) - Windows
+# MFT Filter Definitions (E01 + Local combined) - Windows
 # =============================================================================
 
 ARTIFACT_MFT_FILTERS = {
@@ -194,7 +194,7 @@ ARTIFACT_MFT_FILTERS = {
     'amcache': {
         'files': {'amcache.hve'},
         'path_pattern': r'windows/appcompat/programs/',
-        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
+        'path_optional': True,  # Unique filename - collect even without path
         'include_deleted': True,
         'description': 'Application compatibility cache',
     },
@@ -239,7 +239,7 @@ ARTIFACT_MFT_FILTERS = {
             r'appdata/local/microsoft/edge/',
             r'appdata/roaming/mozilla/firefox/',
         ],
-        'path_optional': True,  # MFT 스캔 시 경로 없어도 파일명만으로 수집
+        'path_optional': True,  # Collect by filename only during MFT scan even without path
         'include_deleted': True,
         'description': 'Browser history, cookies, credentials',
     },
@@ -250,7 +250,7 @@ ARTIFACT_MFT_FILTERS = {
     'usb': {
         'files': {'setupapi.dev.log'},
         'path_pattern': r'windows/inf/',
-        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
+        'path_optional': True,  # Unique filename - collect even without path
         'include_deleted': True,
         'description': 'USB device connection history',
     },
@@ -286,11 +286,11 @@ ARTIFACT_MFT_FILTERS = {
     # Recycle Bin
     # =========================================================================
     'recycle_bin': {
-        # 휴지통 경로 패턴 (다양한 형태 지원)
+        # Recycle Bin path patterns (only forward slashes after path normalization)
         'path_patterns': [
-            r'\$recycle\.bin[/\\]',     # 표준: $Recycle.Bin/ 또는 $Recycle.Bin\
-            r'recycle\.bin[/\\]',       # $ 없는 형태
-            r'\$recycle\.bin$',         # 경로 끝이 $Recycle.Bin인 경우
+            r'\$recycle\.bin/',         # Standard: $Recycle.Bin/
+            r'recycle\.bin/',           # Without $ prefix
+            r'\$recycle\.bin$',         # Path ends with $Recycle.Bin
         ],
         'include_deleted': True,
         'description': 'Deleted files in Recycle Bin ($I metadata + $R files)',
@@ -302,7 +302,7 @@ ARTIFACT_MFT_FILTERS = {
     'srum': {
         'files': {'srudb.dat'},
         'path_patterns': [r'windows/system32/sru/'],
-        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
+        'path_optional': True,  # Unique filename - collect even without path
         'include_deleted': True,
         'description': 'System Resource Usage Monitor',
     },
@@ -329,7 +329,7 @@ ARTIFACT_MFT_FILTERS = {
     },
 
     # =========================================================================
-    # User Files - 서버 분석 가능한 확장자만 (server_parsing_service.py 기준)
+    # User Files - Server-parseable extensions only (based on server_parsing_service.py)
     # =========================================================================
     'document': {
         'extensions': {
@@ -337,7 +337,7 @@ ARTIFACT_MFT_FILTERS = {
             '.xls', '.xlsx',      # Excel (openpyxl, olefile)
             '.ppt', '.pptx',      # PowerPoint (olefile)
             '.pdf',               # PDF (pypdf)
-            '.hwp', '.hwpx',      # 한글 (olefile)
+            '.hwp', '.hwpx',      # Hangul (olefile)
         },
         'include_deleted': True,
         'include_system_folders': True,
@@ -358,7 +358,7 @@ ARTIFACT_MFT_FILTERS = {
     'powershell_history': {
         'files': {'consolehost_history.txt'},
         'path_pattern': r'appdata/roaming/microsoft/windows/powershell/psreadline/',
-        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
+        'path_optional': True,  # Unique filename - collect even without path
         'include_deleted': True,
         'description': 'PowerShell command history (PSReadLine)',
     },
@@ -379,40 +379,63 @@ ARTIFACT_MFT_FILTERS = {
     },
 
     # =========================================================================
-    # Phase 3: 보완 아티팩트
+    # Phase 3: Supplementary Artifacts
     # =========================================================================
     'wlan_event': {
         'files': {'microsoft-windows-wlan-autoconfig%4operational.evtx'},
         'path_pattern': r'windows/system32/winevt/logs/',
-        'path_optional': True,  # 고유 파일명 - 경로 없어도 수집
+        'path_optional': True,  # Unique filename - collect even without path
         'include_deleted': True,
         'description': 'WLAN Auto-Config event log (WiFi connection history)',
     },
     'profile_list': {
-        # ProfileList는 SOFTWARE 레지스트리에 포함됨
-        # registry 수집에서 자동으로 처리됨
+        # ProfileList is included in SOFTWARE registry
+        # Automatically handled during registry collection
         'files': {'software'},
         'path_pattern': r'windows/system32/config/',
         'include_deleted': True,
         'description': 'User profile list (SOFTWARE registry)',
     },
-    # image, video 제외됨 - 포렌식 관점에서 중요도 낮음 + 해시 계산으로 인한 속도 저하
+    # [2026-01-29] Added image, video - server parsing support (EXIF, ffprobe)
+    'image': {
+        'path_patterns': [
+            r'users/[^/]+/pictures/',
+            r'users/[^/]+/downloads/',
+            r'users/[^/]+/desktop/',
+            r'users/[^/]+/documents/',
+        ],
+        'extensions': {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.heic', '.heif', '.webp'},
+        'include_deleted': False,  # Exclude deleted images (storage concerns)
+        'max_file_size': 50 * 1024 * 1024,  # 50MB limit
+        'description': 'Image files with EXIF/GPS metadata',
+    },
+    'video': {
+        'path_patterns': [
+            r'users/[^/]+/videos/',
+            r'users/[^/]+/downloads/',
+            r'users/[^/]+/desktop/',
+        ],
+        'extensions': {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'},
+        'include_deleted': False,  # Exclude deleted videos (storage concerns)
+        'max_file_size': 500 * 1024 * 1024,  # 500MB limit
+        'description': 'Video files with metadata (ffprobe)',
+    },
 
     # =========================================================================
-    # [2026-01] P0 신규 아티팩트 - 높은 포렌식 가치
+    # [2026-01] P0 New Artifacts - High Forensic Value
     # =========================================================================
     'activities_cache': {
         'path_pattern': r'appdata/local/connecteddevicesplatform/',
         'files': {'activitiescache.db', 'activitiescache.db-wal', 'activitiescache.db-shm'},
         'path_optional': True,
         'include_deleted': True,
-        'description': 'Windows Timeline (ActivitiesCache.db) - 앱 실행 지속시간 포함',
+        'description': 'Windows Timeline (ActivitiesCache.db) - includes app execution duration',
     },
     'pca_launch': {
         'path_pattern': r'windows/appcompat/pca/',
         'name_pattern': r'pca.*\.txt',
         'include_deleted': True,
-        'description': 'Program Compatibility Assistant (Win11+) - 실행 기록',
+        'description': 'Program Compatibility Assistant (Win11+) - execution records',
     },
     'etl_log': {
         'path_patterns': [
@@ -422,14 +445,14 @@ ARTIFACT_MFT_FILTERS = {
         ],
         'extensions': {'.etl'},
         'include_deleted': True,
-        'description': 'ETW AutoLogger - 이벤트 로그 삭제 후에도 유지',
+        'description': 'ETW AutoLogger - persists even after event log deletion',
     },
     'wmi_subscription': {
         'path_pattern': r'windows/system32/wbem/repository/',
         'files': {'objects.data', 'index.btr'},
         'name_pattern': r'mapping.*\.map',
         'include_deleted': True,
-        'description': 'WMI 이벤트 구독 - 지속성 메커니즘 탐지 (MITRE T1546.003)',
+        'description': 'WMI Event Subscription - persistence mechanism detection (MITRE T1546.003)',
     },
     'defender_detection': {
         'path_patterns': [
@@ -438,61 +461,61 @@ ARTIFACT_MFT_FILTERS = {
         ],
         'name_pattern': r'(mpdetection.*\.bin|mplog.*\.log)',
         'include_deleted': True,
-        'description': 'Windows Defender 탐지 기록',
+        'description': 'Windows Defender detection history',
     },
     'zone_identifier': {
-        # Zone.Identifier는 Alternate Data Stream (ADS)
-        # MFT 직접 수집 불가 - artifact_collector의 collect_zone_identifier 사용
+        # Zone.Identifier is an Alternate Data Stream (ADS)
+        # Cannot collect directly via MFT - use artifact_collector's collect_zone_identifier
         'special': 'collect_zone_identifier',
         'include_deleted': False,
-        'description': 'Zone.Identifier (ADS) - 다운로드 파일 출처 정보',
+        'description': 'Zone.Identifier (ADS) - download file origin information',
     },
     'bits_jobs': {
         'path_pattern': r'programdata/microsoft/network/downloader/',
         'files': {'qmgr0.dat', 'qmgr1.dat'},
         'path_optional': True,
         'include_deleted': True,
-        'description': 'BITS Transfer Jobs - 악성코드 다운로드 탐지 (MITRE T1197)',
+        'description': 'BITS Transfer Jobs - malware download detection (MITRE T1197)',
     },
 
     # =========================================================================
-    # [2026-01] 네트워크/RDP/공유 아티팩트
+    # [2026-01] Network/RDP/Share Artifacts
     # =========================================================================
     'rdp_history': {
-        # RDP 연결 기록 (Terminal Server Client)
-        # 레지스트리: NTUSER.DAT\Software\Microsoft\Terminal Server Client
+        # RDP connection history (Terminal Server Client)
+        # Registry: NTUSER.DAT\Software\Microsoft\Terminal Server Client
         'files': {'ntuser.dat'},
         'path_pattern': r'users/',
         'include_deleted': True,
-        'description': 'RDP 연결 기록 (Terminal Server Client MRU)',
+        'description': 'RDP connection history (Terminal Server Client MRU)',
     },
     'wireless_profile': {
-        # WiFi 프로필 (NetworkList)
-        # 레지스트리: SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList
+        # WiFi profiles (NetworkList)
+        # Registry: SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList
         'files': {'software'},
         'path_pattern': r'windows/system32/config/',
         'include_deleted': True,
-        'description': 'WiFi 프로필 (NetworkList - SSID, MAC, 연결 시간)',
+        'description': 'WiFi profiles (NetworkList - SSID, MAC, connection time)',
     },
     'shared_folder': {
-        # 공유 폴더 설정 (LanmanServer\Shares)
-        # 레지스트리: SYSTEM\CurrentControlSet\Services\LanmanServer\Shares
+        # Shared folder settings (LanmanServer\Shares)
+        # Registry: SYSTEM\CurrentControlSet\Services\LanmanServer\Shares
         'files': {'system'},
         'path_pattern': r'windows/system32/config/',
         'include_deleted': True,
-        'description': '공유 폴더 설정 (LanmanServer\\Shares)',
+        'description': 'Shared folder settings (LanmanServer\\Shares)',
     },
     'mapped_drive': {
-        # 네트워크 드라이브 매핑 (HKCU\Network)
-        # 레지스트리: NTUSER.DAT\Network, Map Network Drive MRU
+        # Network drive mapping (HKCU\Network)
+        # Registry: NTUSER.DAT\Network, Map Network Drive MRU
         'files': {'ntuser.dat'},
         'path_pattern': r'users/',
         'include_deleted': True,
-        'description': '네트워크 드라이브 매핑 (HKCU\\Network)',
+        'description': 'Network drive mapping (HKCU\\Network)',
     },
 
     # =========================================================================
-    # [2026-01] 클라우드 스토리지 아티팩트
+    # [2026-01] Cloud Storage Artifacts
     # =========================================================================
     'cloud_onedrive': {
         'path_patterns': [
@@ -503,7 +526,7 @@ ARTIFACT_MFT_FILTERS = {
         'extensions': {'.odl', '.etl'},
         'path_optional': True,
         'include_deleted': True,
-        'description': 'Microsoft OneDrive 동기화 로그 및 설정',
+        'description': 'Microsoft OneDrive sync logs and settings',
     },
     'cloud_google_drive': {
         'path_patterns': [
@@ -513,7 +536,7 @@ ARTIFACT_MFT_FILTERS = {
         'files': {'sync_log.log', 'sync_config.db', 'cloud_graph.db', 'metadata_sqlite_db'},
         'path_optional': True,
         'include_deleted': True,
-        'description': 'Google Drive 동기화 로그 (파일 해시, 이메일 포함)',
+        'description': 'Google Drive sync logs (includes file hashes, emails)',
     },
     'cloud_dropbox': {
         'path_patterns': [
@@ -523,7 +546,7 @@ ARTIFACT_MFT_FILTERS = {
         'files': {'filecache.db', 'host.db', 'config.dbx', 'sync_history.db', 'aggregation.dbx'},
         'path_optional': True,
         'include_deleted': True,
-        'description': 'Dropbox 동기화 DB 및 캐시',
+        'description': 'Dropbox sync DB and cache',
     },
     'cloud_naver_mybox': {
         'path_patterns': [
@@ -535,7 +558,7 @@ ARTIFACT_MFT_FILTERS = {
         'extensions': {'.db', '.log'},
         'path_optional': True,
         'include_deleted': True,
-        'description': 'Naver MyBox (네이버 클라우드) 동기화 DB',
+        'description': 'Naver MyBox (Naver Cloud) sync DB',
     },
     'cloud_icloud': {
         'path_patterns': [
@@ -546,35 +569,105 @@ ARTIFACT_MFT_FILTERS = {
         'files': {'cloudkit.db', 'sqlite3'},
         'path_optional': True,
         'include_deleted': True,
-        'description': 'iCloud Drive 동기화 데이터',
+        'description': 'iCloud Drive sync data',
     },
 
     # =========================================================================
-    # [2026-01] Office MRU 및 어플리케이션 MRU
+    # [2026-01] Office MRU and Application MRU
     # =========================================================================
     'office_mru': {
-        # Office MRU는 NTUSER.DAT에서 파싱
-        # 경로: NTUSER.DAT\Software\Microsoft\Office\{버전}\{앱}\File MRU
+        # Office MRU is parsed from NTUSER.DAT
+        # Path: NTUSER.DAT\Software\Microsoft\Office\{version}\{app}\File MRU
         'files': {'ntuser.dat'},
         'path_pattern': r'users/',
         'include_deleted': True,
-        'description': 'Office 문서 MRU (Word, Excel, PowerPoint 최근 파일)',
+        'description': 'Office document MRU (Word, Excel, PowerPoint recent files)',
     },
     'comdlg_mru': {
-        # ComDlg32 MRU (공통 대화상자)
-        # 경로: NTUSER.DAT\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32
+        # ComDlg32 MRU (common dialog boxes)
+        # Path: NTUSER.DAT\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32
         'files': {'ntuser.dat'},
         'path_pattern': r'users/',
         'include_deleted': True,
-        'description': '공통 대화상자 MRU (OpenSavePidlMRU, LastVisitedPidlMRU)',
+        'description': 'Common dialog MRU (OpenSavePidlMRU, LastVisitedPidlMRU)',
     },
     'application_mru': {
-        # 어플리케이션별 MRU (Paint, ALZip, Acrobat 등)
-        # 경로: NTUSER.DAT\Software\{앱경로}\Recent File List
+        # Application-specific MRU (Paint, ALZip, Acrobat, etc.)
+        # Path: NTUSER.DAT\Software\{app_path}\Recent File List
         'files': {'ntuser.dat'},
         'path_pattern': r'users/',
         'include_deleted': True,
-        'description': '앱별 MRU (Paint, ALZip, Acrobat 등 최근 파일)',
+        'description': 'Per-application MRU (Paint, ALZip, Acrobat, etc. recent files)',
+    },
+
+    # =========================================================================
+    # [2026-02-15] PC Messengers & Programs
+    # Collect only parser-required file types (not entire directories)
+    # =========================================================================
+    'windows_kakaotalk': {
+        'path_pattern': r'appdata/local/kakao/kakaotalk/',
+        'extensions': {'.edb', '.dat', '.ini'},
+        'include_deleted': False,
+        'description': 'KakaoTalk PC (*.edb, profile.dat, appstate.dat)',
+    },
+    'windows_line': {
+        'path_pattern': r'appdata/local/line/data/',
+        'extensions': {'.edb'},
+        'include_deleted': False,
+        'description': 'LINE PC encrypted databases (*.edb)',
+    },
+    'windows_telegram': {
+        'path_pattern': r'appdata/roaming/telegram desktop/tdata/',
+        # tdata files are extensionless binary; exclude media/stickers
+        'exclude_extensions': {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg',
+                               '.tiff', '.heic', '.tgs', '.mp4', '.avi', '.mov', '.webm',
+                               '.mp3', '.ogg', '.wav', '.html', '.css', '.js'},
+        'include_deleted': False,
+        'description': 'Telegram Desktop tdata (keys + encrypted data)',
+    },
+    'windows_wechat': {
+        'path_patterns': [r'documents/xwechat_files/', r'documents/wechat files/'],
+        'extensions': {'.db', '.db-wal', '.db-shm'},
+        'include_deleted': False,
+        'description': 'WeChat Desktop encrypted databases (*.db)',
+    },
+    'windows_whatsapp': {
+        'path_pattern': r'appdata/local/packages/5319275a.whatsappdesktop.*localstate/',
+        'extensions': {'.db', '.db-wal', '.db-shm', '.dat', '.ldb', '.log'},
+        'include_deleted': False,
+        'description': 'WhatsApp Desktop (SEE DBs, DPAPI keys, IndexedDB)',
+    },
+    'windows_discord': {
+        'path_patterns': [
+            r'appdata/roaming/discord/local storage/leveldb/',
+            r'appdata/roaming/discord/userdatacache\.json',
+        ],
+        'include_deleted': False,
+        'description': 'Discord Desktop LevelDB + user data cache',
+    },
+    'windows_teamviewer': {
+        'path_patterns': [r'appdata/roaming/teamviewer/', r'programdata/teamviewer/'],
+        'extensions': {'.txt', '.log'},
+        'include_deleted': False,
+        'description': 'TeamViewer connection logs (*.txt, *.log)',
+    },
+    'windows_anydesk': {
+        'path_patterns': [r'appdata/roaming/anydesk/', r'programdata/anydesk/'],
+        'extensions': {'.trace', '.conf', '.txt'},
+        'include_deleted': False,
+        'description': 'AnyDesk trace and config files',
+    },
+    'windows_google_drive': {
+        'path_pattern': r'appdata/local/google/drivefs/',
+        'extensions': {'.db', '.db-wal', '.db-shm'},
+        'include_deleted': False,
+        'description': 'Google Drive Desktop sync databases (*.db)',
+    },
+    'windows_thunderbird': {
+        'path_pattern': r'appdata/roaming/thunderbird/',
+        'extensions': {'.sqlite', '.js'},
+        'include_deleted': False,
+        'description': 'Thunderbird email databases and config (*.sqlite, prefs.js)',
     },
 }
 
@@ -585,57 +678,57 @@ ARTIFACT_MFT_FILTERS = {
 
 class BaseMFTCollector(ABC):
     """
-    MFT 기반 아티팩트 수집기 베이스 클래스
+    Base class for MFT-based artifact collectors
 
-    E01 이미지와 로컬 디스크 모두에서 사용 가능한 공통 인터페이스 제공.
+    Provides a common interface for both E01 images and local disks.
 
-    디지털 포렌식 원칙:
-    - MFT 파싱 기반 수집 (디렉토리 탐색 최소화)
-    - 파일 수 제한 없음
-    - 삭제 파일 포함 (기본값)
-    - 시스템 폴더 포함
+    Digital Forensics Principles:
+    - MFT parsing-based collection (minimizing directory traversal)
+    - No file count limits
+    - Includes deleted files (by default)
+    - Includes system folders
     """
 
     def __init__(self, output_dir: str):
         """
         Args:
-            output_dir: 추출된 아티팩트 저장 디렉토리
+            output_dir: Directory to store extracted artifacts
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # MFT 인덱스 캐시
+        # MFT index cache
         self._mft_indexed: bool = False
         self._mft_cache: Dict[str, List[Any]] = {
             'active_files': [],
             'deleted_files': [],
             'directories': [],
         }
-        # 확장자 → 파일 엔트리 맵 (빠른 조회용)
+        # Extension -> file entry map (for fast lookup)
         self._extension_index: Dict[str, List[Any]] = {}
 
-        # 서브클래스에서 설정
+        # Set by subclass
         self._accessor = None
 
     @abstractmethod
     def _initialize_accessor(self) -> bool:
         """
-        ForensicDiskAccessor 초기화 (서브클래스에서 구현)
+        Initialize ForensicDiskAccessor (implemented by subclass)
 
         Returns:
-            초기화 성공 여부
+            Whether initialization was successful
         """
         pass
 
     @abstractmethod
     def _get_source_description(self) -> str:
         """
-        소스 설명 반환 (예: "E01: image.E01" 또는 "Local: C:")
+        Return source description (e.g., "E01: image.E01" or "Local: C:")
         """
         pass
 
     def close(self):
-        """리소스 정리"""
+        """Clean up resources"""
         if self._accessor:
             try:
                 self._accessor.close()
@@ -659,12 +752,12 @@ class BaseMFTCollector(ABC):
 
     def _build_mft_index(self) -> None:
         """
-        MFT 전체 인덱스 구축 (최초 1회)
+        Build complete MFT index (first time only)
 
-        디지털 포렌식 원칙:
-        - 파일 수 제한 없음
-        - 삭제 파일 포함
-        - 시스템 폴더 포함
+        Digital Forensics Principles:
+        - No file count limits
+        - Includes deleted files
+        - Includes system folders
         """
         if self._mft_indexed or not self._accessor:
             return
@@ -673,7 +766,7 @@ class BaseMFTCollector(ABC):
         logger.info(f"[{source}] Building MFT index (Digital Forensics: Complete collection)...")
 
         try:
-            # MFT 전체 스캔 - 제한 없음, 삭제 파일 포함
+            # Full MFT scan - no limits, includes deleted files
             scan_result = self._accessor.scan_all_files(
                 include_deleted=True,
                 max_entries=None,
@@ -688,7 +781,7 @@ class BaseMFTCollector(ABC):
                        f"({len(self._mft_cache['active_files']):,} active, "
                        f"{len(self._mft_cache['deleted_files']):,} deleted)")
 
-            # 확장자 인덱스 구축
+            # Build extension index
             self._build_extension_index()
 
             self._mft_indexed = True
@@ -698,7 +791,7 @@ class BaseMFTCollector(ABC):
             self._mft_indexed = False
 
     def _build_extension_index(self) -> None:
-        """확장자별 인덱스 구축 (빠른 조회용)"""
+        """Build extension-based index (for fast lookup)"""
         self._extension_index = {}
 
         all_files = self._mft_cache['active_files'] + self._mft_cache['deleted_files']
@@ -724,48 +817,53 @@ class BaseMFTCollector(ABC):
         **kwargs
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        아티팩트 수집 (MFT 기반)
+        Collect artifacts (MFT-based)
 
-        디지털 포렌식 원칙:
-        - MFT 파싱만 사용 (디렉토리 탐색 금지)
-        - 파일 수 제한 없음
-        - 삭제 파일 포함
-        - 시스템 폴더 포함
+        Digital Forensics Principles:
+        - Uses only MFT parsing (no directory traversal)
+        - No file count limits
+        - Includes deleted files
+        - Includes system folders
 
         Args:
-            artifact_type: 수집할 아티팩트 유형
-            progress_callback: 진행률 콜백
+            artifact_type: Type of artifact to collect
+            progress_callback: Progress callback function
 
         Yields:
-            (로컬 경로, 메타데이터) 튜플
+            (local_path, metadata) tuple
         """
         if not self._accessor:
             logger.error("Accessor not initialized")
             return
 
         if artifact_type not in ARTIFACT_MFT_FILTERS:
-            logger.warning(f"Unknown artifact type: {artifact_type}")
+            logger.debug(f"Skipping unsupported artifact type: {artifact_type}")
             return
 
-        mft_filter = ARTIFACT_MFT_FILTERS[artifact_type]
+        mft_filter = dict(ARTIFACT_MFT_FILTERS[artifact_type])  # shallow copy to allow override
+        # UI include_deleted override
+        if 'include_deleted' in kwargs:
+            mft_filter['include_deleted'] = kwargs['include_deleted']
         source = self._get_source_description()
+        logger.info(f"[{source}] Collecting {artifact_type}, filter={mft_filter}")
 
-        # MFT 인덱스 구축 (최초 1회)
+        # Build MFT index (first time only)
         if not self._mft_indexed:
             self._build_mft_index()
 
-        # 아티팩트별 출력 디렉토리
+        # Per-artifact output directory
         artifact_dir = self.output_dir / artifact_type
         artifact_dir.mkdir(exist_ok=True)
 
-        # 특수 아티팩트 처리 ($MFT, $LogFile, $UsnJrnl)
+        # Handle special artifacts ($MFT, $LogFile, $UsnJrnl)
         if 'special' in mft_filter:
+            logger.info(f"[{source}] Detected special artifact: {mft_filter.get('special')}")
             yield from self._collect_special_artifact(
                 artifact_type, mft_filter, artifact_dir, progress_callback
             )
             return
 
-        # 일반 아티팩트 수집 (MFT 필터 기반)
+        # Regular artifact collection (MFT filter-based)
         logger.info(f"[{source}] Collecting {artifact_type} using MFT filter...")
 
         extracted_count = 0
@@ -784,45 +882,47 @@ class BaseMFTCollector(ABC):
         artifact_dir: Path
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        MFT 필터를 사용한 아티팩트 수집
+        Collect artifacts using MFT filter
 
         Args:
-            artifact_type: 아티팩트 유형
-            mft_filter: MFT 필터 설정
-            artifact_dir: 출력 디렉토리
+            artifact_type: Artifact type
+            mft_filter: MFT filter configuration
+            artifact_dir: Output directory
 
         Yields:
-            (로컬 경로, 메타데이터) 튜플
+            (local_path, metadata) tuple
         """
         include_deleted = mft_filter.get('include_deleted', True)
         full_disk_scan = mft_filter.get('full_disk_scan', False)
+        max_file_size = mft_filter.get('max_file_size', 0)  # 0 = unlimited
 
-        # 수집 대상 파일 리스트
+        # Files to collect
         files_to_check = list(self._mft_cache['active_files'])
         if include_deleted:
             files_to_check.extend(self._mft_cache['deleted_files'])
 
-        # 필터 조건
+        # Filter conditions
         extensions = mft_filter.get('extensions', set())
+        exclude_extensions = mft_filter.get('exclude_extensions', set())
         target_files = mft_filter.get('files', set())
         path_pattern = mft_filter.get('path_pattern')
         path_patterns = mft_filter.get('path_patterns', [])
         name_pattern = mft_filter.get('name_pattern')
-        path_optional = mft_filter.get('path_optional', False)  # 경로 없어도 파일명만으로 수집
+        path_optional = mft_filter.get('path_optional', False)  # Collect by filename only even without path
 
-        # 경로 패턴 컴파일
+        # Compile path patterns
         compiled_patterns = []
         if path_pattern:
             compiled_patterns.append(re.compile(path_pattern, re.IGNORECASE))
         for pp in path_patterns:
             compiled_patterns.append(re.compile(pp, re.IGNORECASE))
 
-        # 이름 패턴 컴파일
+        # Compile name pattern
         compiled_name_pattern = None
         if name_pattern:
             compiled_name_pattern = re.compile(name_pattern, re.IGNORECASE)
 
-        # 확장자 기반 빠른 필터링 (전체 디스크 스캔 시)
+        # Extension-based fast filtering (for full disk scan)
         if extensions and full_disk_scan:
             file_counter = 0
             for ext in extensions:
@@ -834,6 +934,12 @@ class BaseMFTCollector(ABC):
                     if not include_deleted and getattr(entry, 'is_deleted', False):
                         continue
 
+                    # max_file_size check (0 = unlimited)
+                    if max_file_size > 0:
+                        entry_size = getattr(entry, 'size', 0)
+                        if entry_size > max_file_size:
+                            continue
+
                     file_counter += 1
                     filename = entry.filename if hasattr(entry, 'filename') else str(entry)
                     if file_counter % 500 == 0:
@@ -842,34 +948,35 @@ class BaseMFTCollector(ABC):
                     yield from self._extract_entry(artifact_type, entry, artifact_dir)
             return
 
-        # 전체 스캔 (경로/파일명 기반)
+        # Full scan (path/filename based)
         for entry in files_to_check:
             filename = entry.filename if hasattr(entry, 'filename') else str(entry)
             filename_lower = filename.lower()
             full_path = entry.full_path if hasattr(entry, 'full_path') else ""
-            full_path_lower = full_path.lower() if full_path else ""
+            # [2026-01-29] Normalize path separators (backslash -> forward slash)
+            full_path_lower = full_path.lower().replace('\\', '/') if full_path else ""
 
             if not include_deleted and getattr(entry, 'is_deleted', False):
                 continue
 
             matched = False
 
-            # 1. 파일명 일치 검사
+            # 1. Filename match check
             if target_files and filename_lower in target_files:
                 if compiled_patterns and full_path_lower:
-                    # 경로가 있으면 경로 패턴도 확인
+                    # If path exists, also verify path pattern
                     for pattern in compiled_patterns:
                         if pattern.search(full_path_lower):
                             matched = True
                             break
                 elif path_optional:
-                    # path_optional=True면 파일명만으로 수집 (MFT 경로 복원 안됐을 때)
+                    # If path_optional=True, collect by filename only (when MFT path not recovered)
                     matched = True
                 elif not compiled_patterns:
-                    # 경로 패턴 없으면 파일명만으로 수집
+                    # If no path pattern, collect by filename only
                     matched = True
 
-            # 2. 확장자 일치 검사
+            # 2. Extension match check
             if not matched and extensions:
                 if '.' in filename_lower:
                     ext = '.' + filename_lower.rsplit('.', 1)[-1]
@@ -882,19 +989,30 @@ class BaseMFTCollector(ABC):
                         elif path_optional or not compiled_patterns:
                             matched = True
 
-            # 3. 경로 패턴만 검사
+            # 3. Path pattern only check
             if not matched and compiled_patterns and not extensions and not target_files:
                 for pattern in compiled_patterns:
                     if pattern.search(full_path_lower):
                         matched = True
                         break
 
-            # 4. 이름 패턴 검사
+            # 4. Name pattern check
             if compiled_name_pattern and not matched:
                 if compiled_name_pattern.match(filename_lower):
                     matched = True
 
             if matched:
+                # exclude_extensions check (skip image/video files for messenger artifacts)
+                if exclude_extensions and '.' in filename_lower:
+                    ext = '.' + filename_lower.rsplit('.', 1)[-1]
+                    if ext in exclude_extensions:
+                        continue
+                # max_file_size check (0 = unlimited)
+                if max_file_size > 0:
+                    entry_size = getattr(entry, 'size', 0)
+                    if entry_size > max_file_size:
+                        _debug_log(f"[SKIP] {filename} exceeds max size ({entry_size / 1024 / 1024:.1f}MB > {max_file_size / 1024 / 1024:.0f}MB)")
+                        continue
                 yield from self._extract_entry(artifact_type, entry, artifact_dir)
 
     def _extract_entry(
@@ -904,15 +1022,15 @@ class BaseMFTCollector(ABC):
         artifact_dir: Path
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        MFT 엔트리에서 파일 추출 (청크 스트리밍)
+        Extract file from MFT entry (chunk streaming)
 
         Args:
-            artifact_type: 아티팩트 유형
+            artifact_type: Artifact type
             entry: FileCatalogEntry
-            artifact_dir: 출력 디렉토리
+            artifact_dir: Output directory
 
         Yields:
-            (로컬 경로, 메타데이터) 튜플
+            (local_path, metadata) tuple
         """
         import time
 
@@ -925,19 +1043,19 @@ class BaseMFTCollector(ABC):
         if inode is None:
             return
 
-        # 디버깅: 대용량 파일 경고
-        if file_size > 100 * 1024 * 1024:  # 100MB 이상
+        # Debug: Large file warning
+        if file_size > 100 * 1024 * 1024:  # 100MB or larger
             _debug_log(f"[DEBUG] Large file detected: {filename} ({file_size / 1024 / 1024:.1f}MB)")
 
         try:
-            # 출력 파일명 생성
+            # Generate output filename
             safe_filename = self._sanitize_filename(filename)
             if is_deleted:
                 safe_filename = f"[DELETED]_{safe_filename}"
 
             output_file = artifact_dir / safe_filename
 
-            # 중복 방지
+            # Prevent duplicates
             if output_file.exists():
                 base = output_file.stem
                 suffix = output_file.suffix
@@ -946,21 +1064,21 @@ class BaseMFTCollector(ABC):
                     output_file = artifact_dir / f"{base}_{counter}{suffix}"
                     counter += 1
 
-            # 청크 스트리밍으로 파일 쓰기 + 해시 계산
+            # Write file with chunk streaming + hash calculation
             md5_hash = hashlib.md5()
             sha256_hash = hashlib.sha256()
             total_size = 0
             has_data = False
 
-            # 타임아웃 설정 (파일당 최대 5분, 청크당 30초)
-            FILE_TIMEOUT = 300  # 5분
-            CHUNK_TIMEOUT = 30  # 30초
+            # Timeout settings (max 5 minutes per file, 30 seconds per chunk)
+            FILE_TIMEOUT = 300  # 5 minutes
+            CHUNK_TIMEOUT = 30  # 30 seconds
             start_time = time.time()
             last_chunk_time = start_time
 
-            # 스트리밍 메서드 확인
+            # Check for streaming method
             if hasattr(self._accessor, 'stream_file_by_inode'):
-                # 청크 스트리밍 (대용량 파일 지원)
+                # Chunk streaming (supports large files)
                 try:
                     _debug_log(f"[EXTRACT START] {filename} (inode={inode}, size={file_size})")
                     with open(output_file, 'wb') as f:
@@ -970,7 +1088,7 @@ class BaseMFTCollector(ABC):
                         for chunk in stream_generator:
                             current_time = time.time()
 
-                            # 파일 전체 타임아웃 체크
+                            # Check overall file timeout
                             if current_time - start_time > FILE_TIMEOUT:
                                 _debug_log(f"[TIMEOUT] File extraction timeout ({FILE_TIMEOUT}s): {filename}")
                                 break
@@ -984,19 +1102,19 @@ class BaseMFTCollector(ABC):
                                 chunk_count += 1
                                 last_chunk_time = current_time
 
-                                # 진행 로그 (100MB마다)
+                                # Progress log (every 100MB)
                                 if total_size % (100 * 1024 * 1024) < len(chunk):
                                     _debug_log(f"[PROGRESS] {filename}: {total_size / 1024 / 1024:.1f}MB written")
 
                 except Exception as stream_error:
                     _debug_log(f"[STREAM ERROR] {filename}: {stream_error}")
-                    # 부분적으로 쓰인 파일 삭제
+                    # Delete partially written file
                     if output_file.exists() and total_size == 0:
                         output_file.unlink()
                     return
 
             else:
-                # 폴백: 전체 읽기 (작은 파일용)
+                # Fallback: full read (for small files)
                 data = self._accessor.read_file_by_inode(inode)
                 if data:
                     output_file.write_bytes(data)
@@ -1006,7 +1124,7 @@ class BaseMFTCollector(ABC):
                     has_data = True
 
             if has_data:
-                # 메타데이터 생성
+                # Generate metadata
                 metadata = {
                     'artifact_type': artifact_type,
                     'name': filename,
@@ -1025,7 +1143,7 @@ class BaseMFTCollector(ABC):
 
                 yield str(output_file), metadata
             else:
-                # 빈 파일 삭제
+                # Delete empty file
                 if output_file.exists():
                     output_file.unlink()
 
@@ -1040,7 +1158,7 @@ class BaseMFTCollector(ABC):
         progress_callback: Optional[callable]
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        특수 시스템 아티팩트 수집 ($MFT, $LogFile, $UsnJrnl)
+        Collect special system artifacts ($MFT, $LogFile, $UsnJrnl)
         """
         special_method = mft_filter.get('special')
         source = self._get_source_description()
@@ -1104,17 +1222,26 @@ class BaseMFTCollector(ABC):
                 data = None
 
                 try:
-                    data = self._accessor.read_usnjrnl_raw()
-                except Exception:
-                    # 대체 방법: $Extend 디렉토리에서 찾기
+                    # [2026-01] Skip sparse regions (solves memory/size issues)
+                    data = self._accessor.read_usnjrnl_raw(skip_sparse=True)
+                except Exception as e:
+                    logger.warning(f"[{source}] read_usnjrnl_raw failed: {e}")
+                    # Fallback: find in $Extend directory
                     try:
                         usnjrnl_inode = self._accessor._find_in_directory(11, '$UsnJrnl')
                         if usnjrnl_inode:
-                            data = self._accessor.read_file_by_inode(
+                            # Fallback method also uses sparse skip
+                            data = self._accessor._read_file_skip_sparse(
                                 usnjrnl_inode, stream_name='$J'
                             )
-                    except Exception:
-                        pass
+                        else:
+                            logger.warning(f"[{source}] $UsnJrnl not found in $Extend directory")
+                    except Exception as e2:
+                        logger.warning(f"[{source}] Fallback USN collection failed: {e2}")
+
+                # [2026-01-29] Clear log when USN Journal is not available
+                if not data or len(data) == 0:
+                    logger.warning(f"[{source}] $UsnJrnl:$J not available (may be disabled or empty)")
 
                 if data and len(data) > 0:
                     output_file = artifact_dir / '$UsnJrnl_J'
@@ -1138,14 +1265,14 @@ class BaseMFTCollector(ABC):
                         progress_callback(str(output_file))
 
             elif special_method == 'collect_zone_identifier':
-                # Zone.Identifier ADS - 다운로드 파일 출처 정보
+                # Zone.Identifier ADS - download file origin information
                 logger.info(f"[{source}] Collecting Zone.Identifier ADS streams...")
 
-                # MFT 인덱스 구축 (최초 1회)
+                # Build MFT index (first time only)
                 if not self._mft_indexed:
                     self._build_mft_index()
 
-                # 대상 사용자 디렉토리 (대소문자 무시)
+                # Target user directories (case insensitive)
                 user_paths = ['downloads', 'desktop', 'documents']
                 ads_stream_name = 'Zone.Identifier'
                 collected_count = 0
@@ -1159,7 +1286,7 @@ class BaseMFTCollector(ABC):
                         full_path = getattr(entry, 'full_path', '') or ''
                         filename = getattr(entry, 'filename', '') or ''
                         inode = getattr(entry, 'inode', None)
-                        # ads_streams가 이미 FileCatalogEntry에 포함됨
+                        # ads_streams is already included in FileCatalogEntry
                         entry_ads = getattr(entry, 'ads_streams', []) or []
 
                         if not inode or not full_path:
@@ -1167,10 +1294,10 @@ class BaseMFTCollector(ABC):
 
                         full_path_lower = full_path.lower()
 
-                        # 사용자 디렉토리 필터링 (Users 폴더 하위)
+                        # Filter for user directories (under Users folder)
                         is_user_path = False
                         for user_path in user_paths:
-                            # '/users/' 또는 'users/' (루트 시작 유무 모두 처리)
+                            # '/users/' or 'users/' (handles both root-starting and non-root paths)
                             if ('users/' in full_path_lower or '/users/' in full_path_lower) and \
                                f'/{user_path}/' in full_path_lower:
                                 is_user_path = True
@@ -1181,22 +1308,22 @@ class BaseMFTCollector(ABC):
 
                         checked_count += 1
 
-                        # Zone.Identifier ADS 존재 여부 확인 (캐시된 ads_streams 사용)
+                        # Check for Zone.Identifier ADS presence (using cached ads_streams)
                         if ads_stream_name not in entry_ads:
                             continue
 
-                        # Zone.Identifier ADS 읽기
+                        # Read Zone.Identifier ADS
                         ads_data = self._accessor.read_file_by_inode(
                             inode, stream_name=ads_stream_name
                         )
 
                         if ads_data:
-                            # 출력 파일명: 원본파일명_Zone.Identifier.txt
+                            # Output filename: originalfilename_Zone.Identifier.txt
                             safe_filename = self._sanitize_filename(filename)
                             output_filename = f"{safe_filename}_Zone.Identifier.txt"
                             output_file = artifact_dir / output_filename
 
-                            # 중복 방지
+                            # Prevent duplicates
                             if output_file.exists():
                                 counter = 1
                                 while output_file.exists():
@@ -1222,7 +1349,7 @@ class BaseMFTCollector(ABC):
                                 'collected_at': datetime.now().isoformat(),
                             }
 
-                            # Zone.Identifier 내용 파싱
+                            # Parse Zone.Identifier content
                             try:
                                 ads_text = ads_data.decode('utf-8', errors='ignore')
                                 for line in ads_text.split('\n'):
@@ -1266,7 +1393,7 @@ class BaseMFTCollector(ABC):
     # =========================================================================
 
     def _sanitize_filename(self, filename: str) -> str:
-        """파일명에서 유효하지 않은 문자 제거"""
+        """Remove invalid characters from filename"""
         sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', filename)
         sanitized = re.sub(r'_+', '_', sanitized)
         sanitized = sanitized.strip(' _.')
@@ -1275,7 +1402,7 @@ class BaseMFTCollector(ABC):
         return sanitized
 
     def get_available_artifacts(self) -> List[Dict[str, Any]]:
-        """사용 가능한 아티팩트 목록 반환"""
+        """Return list of available artifacts"""
         artifacts = []
         for type_id, mft_filter in ARTIFACT_MFT_FILTERS.items():
             artifacts.append({

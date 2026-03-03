@@ -2,7 +2,7 @@
 Hardware ID Generation Module
 
 Creates a unique hardware identifier for device binding.
-P0 보안 강화: 다중 하드웨어 요소 수집으로 변조 방지
+P0 Security Enhancement: Multi-component hardware collection to prevent tampering
 """
 import hashlib
 import subprocess
@@ -11,23 +11,23 @@ from typing import Dict, Optional, Tuple
 
 
 class HardwareIdError(Exception):
-    """하드웨어 ID 생성 오류"""
+    """Hardware ID generation error"""
     pass
 
 
 def _get_wmi():
-    """WMI 객체 반환"""
+    """Return WMI object"""
     try:
         import wmi
         return wmi.WMI()
     except ImportError:
-        raise HardwareIdError("WMI 모듈이 설치되지 않았습니다")
+        raise HardwareIdError("WMI module is not installed")
     except Exception as e:
-        raise HardwareIdError(f"WMI 초기화 실패: {e}")
+        raise HardwareIdError(f"WMI initialization failed: {e}")
 
 
 def get_cpu_id() -> Optional[str]:
-    """CPU ID 조회"""
+    """Retrieve CPU ID"""
     try:
         c = _get_wmi()
         cpu = c.Win32_Processor()[0]
@@ -38,7 +38,7 @@ def get_cpu_id() -> Optional[str]:
 
 
 def get_disk_serial() -> Optional[str]:
-    """디스크 시리얼 번호 조회"""
+    """Retrieve disk serial number"""
     try:
         c = _get_wmi()
         disk = c.Win32_DiskDrive()[0]
@@ -49,7 +49,7 @@ def get_disk_serial() -> Optional[str]:
 
 
 def get_mac_address() -> Optional[str]:
-    """MAC 주소 조회"""
+    """Retrieve MAC address"""
     try:
         c = _get_wmi()
         for nic in c.Win32_NetworkAdapterConfiguration(IPEnabled=True):
@@ -62,12 +62,12 @@ def get_mac_address() -> Optional[str]:
 
 
 def get_bios_serial() -> Optional[str]:
-    """BIOS 시리얼 번호 조회 (P0 추가)"""
+    """Retrieve BIOS serial number (P0 addition)"""
     try:
         c = _get_wmi()
         bios = c.Win32_BIOS()[0]
         serial = bios.SerialNumber.strip() if bios.SerialNumber else None
-        # 가상화 환경에서 'None' 또는 'To Be Filled' 등 제외
+        # Exclude placeholder values common in virtualized environments
         if serial and serial.lower() not in ['none', 'to be filled by o.e.m.', 'default string']:
             return serial
         return None
@@ -76,7 +76,7 @@ def get_bios_serial() -> Optional[str]:
 
 
 def get_baseboard_serial() -> Optional[str]:
-    """메인보드 시리얼 번호 조회 (P0 추가)"""
+    """Retrieve motherboard serial number (P0 addition)"""
     try:
         c = _get_wmi()
         board = c.Win32_BaseBoard()[0]
@@ -89,7 +89,7 @@ def get_baseboard_serial() -> Optional[str]:
 
 
 def get_volume_serial() -> Optional[str]:
-    """C 드라이브 볼륨 시리얼 번호 조회 (P0 추가)"""
+    """Retrieve C: drive volume serial number (P0 addition)"""
     try:
         c = _get_wmi()
         for vol in c.Win32_LogicalDisk():
@@ -103,10 +103,10 @@ def get_volume_serial() -> Optional[str]:
 
 def get_hardware_components() -> Dict[str, Optional[str]]:
     """
-    모든 하드웨어 식별자 수집 (P0 보안 강화)
+    Collect all hardware identifiers (P0 security enhancement)
 
     Returns:
-        dict: 각 하드웨어 구성요소의 식별자
+        dict: Identifiers for each hardware component
     """
     return {
         'cpu_id': get_cpu_id(),
@@ -121,57 +121,57 @@ def get_hardware_components() -> Dict[str, Optional[str]]:
 def get_hardware_id(require_minimum: int = 3) -> str:
     """
     Generate a unique hardware identifier.
-    P0 보안 강화: 다중 요소 수집 및 최소 요건 검증
+    P0 security enhancement: Multi-component collection and minimum requirements validation
 
     Uses:
     - CPU ID
     - Disk Serial Number
     - MAC Address
-    - BIOS Serial Number (추가)
-    - Baseboard Serial Number (추가)
-    - Volume Serial Number (추가)
+    - BIOS Serial Number (added)
+    - Baseboard Serial Number (added)
+    - Volume Serial Number (added)
 
     Args:
-        require_minimum: 최소 유효 구성요소 수 (기본 3)
+        require_minimum: Minimum number of valid components required (default 3)
 
     Returns:
         str: SHA256 hash of combined hardware identifiers (first 32 chars)
 
     Raises:
-        HardwareIdError: 최소 요건 미충족 시
+        HardwareIdError: When minimum requirements are not met
     """
     try:
         components = get_hardware_components()
 
-        # 유효한 구성요소만 필터링
+        # Filter only valid components
         valid_components = {k: v for k, v in components.items() if v}
 
         if len(valid_components) < require_minimum:
             raise HardwareIdError(
-                f"충분한 하드웨어 식별자를 수집할 수 없습니다. "
-                f"필요: {require_minimum}개, 수집됨: {len(valid_components)}개 "
-                f"(수집된 요소: {list(valid_components.keys())})"
+                f"Unable to collect sufficient hardware identifiers. "
+                f"Required: {require_minimum}, Collected: {len(valid_components)} "
+                f"(Collected components: {list(valid_components.keys())})"
             )
 
-        # 정렬된 값으로 해시 생성 (일관성 유지)
+        # Generate hash from sorted values (maintain consistency)
         combined = '-'.join(sorted(valid_components.values()))
         return hashlib.sha256(combined.encode()).hexdigest()[:32]
 
     except HardwareIdError:
         raise
     except Exception as e:
-        # [보안 경고] Fallback 사용 - 약한 하드웨어 바인딩
+        # [Security Warning] Using fallback - weak hardware binding
         import logging
         logger = logging.getLogger(__name__)
         logger.error(
-            f"[HardwareID] WMI 접근 실패 - 약한 fallback 사용됨!\n"
-            f"  원인: {e}\n"
-            f"  위험: 하드웨어 바인딩이 약해져 보안이 저하될 수 있습니다.\n"
-            f"  해결: WMI 서비스 활성화 또는 관리자 권한 실행 필요"
+            f"[HardwareID] WMI access failed - weak fallback used!\n"
+            f"  Cause: {e}\n"
+            f"  Risk: Hardware binding is weakened, security may be compromised.\n"
+            f"  Solution: Enable WMI service or run with administrator privileges"
         )
         print("=" * 50)
-        print("[보안 경고] 하드웨어 ID 생성에 fallback 사용됨")
-        print("  WMI 접근이 필요합니다. 관리자 권한으로 실행하세요.")
+        print("[Security Warning] Fallback used for hardware ID generation")
+        print("  WMI access required. Please run as administrator.")
         print("=" * 50)
         fallback = f"{platform.node()}-{platform.machine()}-{platform.processor()}"
         return hashlib.sha256(fallback.encode()).hexdigest()[:32]
@@ -179,7 +179,7 @@ def get_hardware_id(require_minimum: int = 3) -> str:
 
 def get_hardware_id_with_components(require_minimum: int = 3) -> Tuple[str, Dict[str, Optional[str]]]:
     """
-    하드웨어 ID와 개별 구성요소 반환 (서버 바인딩용)
+    Return hardware ID and individual components (for server binding)
 
     Returns:
         tuple: (hardware_id, components_dict)
@@ -189,8 +189,8 @@ def get_hardware_id_with_components(require_minimum: int = 3) -> Tuple[str, Dict
 
     if len(valid_components) < require_minimum:
         raise HardwareIdError(
-            f"충분한 하드웨어 식별자를 수집할 수 없습니다. "
-            f"필요: {require_minimum}개, 수집됨: {len(valid_components)}개"
+            f"Unable to collect sufficient hardware identifiers. "
+            f"Required: {require_minimum}, Collected: {len(valid_components)}"
         )
 
     combined = '-'.join(sorted(valid_components.values()))
@@ -220,7 +220,7 @@ def get_system_info() -> dict:
             'hostname': platform.node(),
             'platform': platform.platform(),
             'hardware_id': get_hardware_id(),
-            'hardware_components': get_hardware_components(),  # P0 추가
+            'hardware_components': get_hardware_components(),  # P0 addition
         }
     except Exception as e:
         return {

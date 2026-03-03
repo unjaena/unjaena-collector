@@ -2,15 +2,17 @@
 """
 E01 Selection Dialog
 
-E01 증거 이미지 선택 및 파티션 미리보기 대화상자.
+Dialog for E01 evidence image selection and partition preview.
 
 Features:
-    - E01/RAW 이미지 파일 선택
-    - 파티션 목록 표시
-    - 이미지 정보 미리보기
+    - E01/RAW image file selection
+    - Partition list display
+    - Image information preview
 """
 
 import logging
+import os
+import sys
 import tempfile
 import shutil
 from pathlib import Path
@@ -34,26 +36,28 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 class PartitionAnalyzer(QThread):
-    """파티션 분석 워커 스레드"""
+    """Partition analysis worker thread"""
 
-    analysis_complete = pyqtSignal(list)  # 파티션 정보 리스트
-    analysis_failed = pyqtSignal(str)     # 에러 메시지
-    progress_update = pyqtSignal(str)     # 진행 상태 메시지
+    analysis_complete = pyqtSignal(list)  # Partition info list
+    analysis_failed = pyqtSignal(str)     # Error message
+    progress_update = pyqtSignal(str)     # Progress status message
 
     def __init__(self, file_path: str):
         super().__init__()
         self.file_path = file_path
 
     def run(self):
-        """파티션 분석 실행"""
+        """Execute partition analysis"""
         temp_dir = None
         try:
             self.progress_update.emit("Loading image...")
 
             from collectors.e01_artifact_collector import E01ArtifactCollector
 
-            # 임시 디렉토리 사용 (로컬 수집 시 E01 파일이 포함되지 않도록)
+            # Use temporary directory (to avoid including E01 file in local collection)
             temp_dir = tempfile.mkdtemp(prefix="e01_preview_")
+            if sys.platform != 'win32':
+                os.chmod(temp_dir, 0o700)  # Unix: owner-only access
             collector = E01ArtifactCollector(self.file_path, output_dir=temp_dir)
 
             self.progress_update.emit("Analyzing partitions...")
@@ -68,7 +72,7 @@ class PartitionAnalyzer(QThread):
             self.analysis_failed.emit(str(e))
 
         finally:
-            # 임시 디렉토리 정리
+            # Clean up temporary directory
             if temp_dir and Path(temp_dir).exists():
                 try:
                     shutil.rmtree(temp_dir)
@@ -82,9 +86,9 @@ class PartitionAnalyzer(QThread):
 
 class E01SelectionDialog(QDialog):
     """
-    E01 이미지 선택 대화상자
+    E01 image selection dialog.
 
-    사용자가 E01/RAW 이미지를 선택하고 파티션 정보를 미리보기할 수 있습니다.
+    Allows users to select E01/RAW images and preview partition information.
 
     Usage:
         dialog = E01SelectionDialog(parent)
@@ -92,7 +96,7 @@ class E01SelectionDialog(QDialog):
             file_path = dialog.get_selected_path()
     """
 
-    # 지원하는 확장자
+    # Supported extensions
     SUPPORTED_EXTENSIONS = "*.E01 *.e01 *.Ex01 *.ex01 *.dd *.raw *.img *.bin"
 
     def __init__(self, parent=None):
@@ -105,7 +109,7 @@ class E01SelectionDialog(QDialog):
         self._apply_styles()
 
     def _setup_ui(self):
-        """UI 구성"""
+        """Setup UI"""
         self.setWindowTitle("Add Forensic Image")
         self.setMinimumSize(650, 500)
         self.setModal(True)
@@ -114,29 +118,29 @@ class E01SelectionDialog(QDialog):
         layout.setSpacing(16)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # 파일 선택 섹션
+        # File selection section
         file_group = self._create_file_section()
         layout.addWidget(file_group)
 
-        # 이미지 정보 섹션
+        # Image information section
         info_group = self._create_info_section()
         layout.addWidget(info_group)
 
-        # 파티션 목록 섹션
+        # Partition list section
         partition_group = self._create_partition_section()
         layout.addWidget(partition_group, 1)
 
-        # 버튼 영역
+        # Button area
         button_layout = self._create_button_section()
         layout.addLayout(button_layout)
 
     def _create_file_section(self) -> QGroupBox:
-        """파일 선택 섹션"""
+        """Create file selection section"""
         group = QGroupBox("Select Forensic Image")
 
         layout = QVBoxLayout(group)
 
-        # 파일 선택 버튼
+        # File selection button
         btn_layout = QHBoxLayout()
 
         self.browse_btn = QPushButton("Browse...")
@@ -147,15 +151,15 @@ class E01SelectionDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
-        # 선택된 파일 경로
+        # Selected file path
         self.file_label = QLabel("No file selected")
         self.file_label.setObjectName("mutedLabel")
         self.file_label.setWordWrap(True)
         layout.addWidget(self.file_label)
 
-        # 진행 표시
+        # Progress indicator
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)  # 무한 진행
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
@@ -167,12 +171,12 @@ class E01SelectionDialog(QDialog):
         return group
 
     def _create_info_section(self) -> QGroupBox:
-        """이미지 정보 섹션"""
+        """Create image information section"""
         group = QGroupBox("Image Information")
 
         layout = QHBoxLayout(group)
 
-        # 정보 라벨들
+        # Info labels
         info_frame = QFrame()
         info_layout = QVBoxLayout(info_frame)
         info_layout.setSpacing(8)
@@ -192,7 +196,7 @@ class E01SelectionDialog(QDialog):
         return group
 
     def _create_info_row(self, label: str, value: str) -> QHBoxLayout:
-        """정보 행 생성"""
+        """Create information row"""
         layout = QHBoxLayout()
         layout.setSpacing(12)
 
@@ -205,25 +209,25 @@ class E01SelectionDialog(QDialog):
         value_widget.setObjectName("value")
         layout.addWidget(value_widget, 1)
 
-        # value 위젯에 대한 참조 저장
+        # Store reference to value widget
         layout.value_widget = value_widget
 
         return layout
 
     def _create_partition_section(self) -> QGroupBox:
-        """파티션 목록 섹션"""
+        """Create partition list section"""
         group = QGroupBox("Detected Partitions")
 
         layout = QVBoxLayout(group)
 
-        # 테이블
+        # Table
         self.partition_table = QTableWidget()
         self.partition_table.setColumnCount(5)
         self.partition_table.setHorizontalHeaderLabels([
             "Index", "Filesystem", "Size", "Type", "Status"
         ])
 
-        # 열 크기 조정
+        # Adjust column sizes
         header = self.partition_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -235,13 +239,13 @@ class E01SelectionDialog(QDialog):
         self.partition_table.setColumnWidth(2, 100)
         self.partition_table.setColumnWidth(4, 80)
 
-        # 선택 모드
+        # Selection mode
         self.partition_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.partition_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
 
         layout.addWidget(self.partition_table)
 
-        # 빈 상태 메시지
+        # Empty state message
         self.empty_label = QLabel("Select an image file to view partitions")
         self.empty_label.setObjectName("mutedLabel")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -250,17 +254,17 @@ class E01SelectionDialog(QDialog):
         return group
 
     def _create_button_section(self) -> QHBoxLayout:
-        """버튼 영역"""
+        """Create button area"""
         layout = QHBoxLayout()
 
         layout.addStretch()
 
-        # 취소 버튼
+        # Cancel button
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         layout.addWidget(cancel_btn)
 
-        # 추가 버튼
+        # Add button
         self.add_btn = QPushButton("Add Image")
         self.add_btn.setObjectName("primaryButton")
         self.add_btn.setEnabled(False)
@@ -270,7 +274,7 @@ class E01SelectionDialog(QDialog):
         return layout
 
     def _apply_styles(self):
-        """스타일 적용"""
+        """Apply styles"""
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {COLORS['bg_primary']};
@@ -354,7 +358,7 @@ class E01SelectionDialog(QDialog):
         """)
 
     def _on_browse_clicked(self):
-        """파일 선택 버튼 클릭"""
+        """Browse button clicked"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Forensic Image",
@@ -366,14 +370,14 @@ class E01SelectionDialog(QDialog):
             self._load_image(file_path)
 
     def _load_image(self, file_path: str):
-        """이미지 로드 및 분석"""
+        """Load and analyze image"""
         path = Path(file_path)
 
-        # 파일 정보 표시
+        # Display file info
         self.file_label.setText(str(path))
-        self.file_label.setObjectName("")  # 스타일 리셋
+        self.file_label.setObjectName("")  # Reset style
 
-        # 이미지 유형
+        # Image type
         ext = path.suffix.lower()
         if ext in ('.e01', '.ex01'):
             image_type = "E01 (EnCase)"
@@ -382,25 +386,25 @@ class E01SelectionDialog(QDialog):
         else:
             image_type = "Unknown"
 
-        # 파일 크기
+        # File size
         try:
             size = path.stat().st_size
             size_display = self._format_size(size)
         except:
             size_display = "Unknown"
 
-        # 정보 업데이트
+        # Update info
         self.info_labels['type'].value_widget.setText(image_type)
         self.info_labels['size'].value_widget.setText(size_display)
         self.info_labels['partitions'].value_widget.setText("Analyzing...")
 
-        # 진행 표시
+        # Progress display
         self.progress_bar.setVisible(True)
         self.status_label.setVisible(True)
         self.status_label.setText("Loading image...")
         self.add_btn.setEnabled(False)
 
-        # 파티션 분석 시작
+        # Start partition analysis
         self._analyzer = PartitionAnalyzer(file_path)
         self._analyzer.analysis_complete.connect(self._on_analysis_complete)
         self._analyzer.analysis_failed.connect(self._on_analysis_failed)
@@ -410,23 +414,23 @@ class E01SelectionDialog(QDialog):
         self.selected_path = file_path
 
     def _on_analysis_complete(self, partitions: list):
-        """파티션 분석 완료"""
+        """Partition analysis complete"""
         self.progress_bar.setVisible(False)
         self.status_label.setVisible(False)
         self.partitions = partitions
 
-        # 정보 업데이트
+        # Update info
         self.info_labels['partitions'].value_widget.setText(str(len(partitions)))
 
-        # 테이블 업데이트
+        # Update table
         self._update_partition_table(partitions)
 
-        # 버튼 활성화
+        # Enable button
         self.add_btn.setEnabled(True)
         self.empty_label.setVisible(False)
 
     def _on_analysis_failed(self, error: str):
-        """파티션 분석 실패"""
+        """Partition analysis failed"""
         self.progress_bar.setVisible(False)
         self.status_label.setVisible(True)
         self.status_label.setText(f"Error: {error}")
@@ -442,11 +446,11 @@ class E01SelectionDialog(QDialog):
         )
 
     def _on_progress_update(self, message: str):
-        """진행 상태 업데이트"""
+        """Progress status update"""
         self.status_label.setText(message)
 
     def _update_partition_table(self, partitions: list):
-        """파티션 테이블 업데이트"""
+        """Update partition table"""
         self.partition_table.setRowCount(len(partitions))
 
         for row, p in enumerate(partitions):
@@ -474,18 +478,18 @@ class E01SelectionDialog(QDialog):
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.partition_table.setItem(row, 4, status_item)
 
-        # 첫 번째 NTFS 파티션 선택
+        # Select first NTFS partition
         for row in range(len(partitions)):
             if getattr(partitions[row], 'filesystem', '').upper() == 'NTFS':
                 self.partition_table.selectRow(row)
                 break
 
     def get_selected_path(self) -> Optional[str]:
-        """선택된 이미지 경로 반환"""
+        """Return selected image path"""
         return self.selected_path
 
     def get_selected_partition(self) -> Optional[int]:
-        """선택된 파티션 인덱스 반환"""
+        """Return selected partition index"""
         selected = self.partition_table.selectedItems()
         if selected:
             row = selected[0].row()
@@ -494,7 +498,7 @@ class E01SelectionDialog(QDialog):
 
     @staticmethod
     def _format_size(size_bytes: int) -> str:
-        """크기 포맷팅"""
+        """Format size"""
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
             if size_bytes < 1024:
                 return f"{size_bytes:.1f} {unit}"
@@ -502,7 +506,7 @@ class E01SelectionDialog(QDialog):
         return f"{size_bytes:.1f} PB"
 
     def closeEvent(self, event):
-        """대화상자 닫기"""
+        """Dialog close event"""
         if self._analyzer and self._analyzer.isRunning():
             self._analyzer.terminate()
             self._analyzer.wait()

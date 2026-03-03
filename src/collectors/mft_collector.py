@@ -1,23 +1,31 @@
 """
 MFT-based Artifact Collector Module
 
-NTFS MFT (Master File Table) Entry 기반 아티팩트 수집.
-디지털 포렌식 표준에 맞춘 수집 방식으로:
-- 삭제된 파일 복구 가능
-- 파일 잠금 우회
-- MFT Entry 메타데이터 보존
-- 연계보관성(Chain of Custody) 확보
+NTFS MFT (Master File Table) Entry-based artifact collection.
+Collection method aligned with digital forensics standards:
+- Deleted file recovery capable
+- File lock bypass
+- MFT Entry metadata preservation
+- Chain of Custody established
 
-Note: 관리자 권한 필요 (Raw Disk Access)
+Note: Administrator privileges required (Raw Disk Access)
 """
 import os
 import sys
 import struct
 import hashlib
+import logging
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Generator, Tuple, Dict, Any, Optional, List
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
+
+
+def _debug_print(message: str):
+    """Debug output for MFT collection (mirrors artifact_collector._debug_print)."""
+    logger.debug(message)
 
 
 # Check for pytsk3 availability
@@ -32,7 +40,7 @@ except ImportError:
 
 @dataclass
 class MFTEntryInfo:
-    """MFT Entry 정보"""
+    """MFT Entry information"""
     entry_number: int
     sequence_number: int
     parent_entry: int
@@ -78,15 +86,15 @@ class MFTEntryInfo:
 
 class MFTCollector:
     """
-    MFT (Master File Table) 기반 아티팩트 수집기.
+    MFT (Master File Table) based artifact collector.
 
-    NTFS 파일 시스템에서 MFT Entry를 직접 읽어 파일을 수집합니다.
-    일반 파일 API를 사용하지 않으므로:
-    - 삭제된 파일 복구 가능
-    - OS 잠금 파일 수집 가능
-    - 메타데이터 완전 보존
+    Collects files by directly reading MFT Entries from NTFS file system.
+    Since it does not use regular file APIs:
+    - Deleted file recovery capable
+    - OS-locked file collection capable
+    - Complete metadata preservation
 
-    Note: 관리자 권한 필요
+    Note: Administrator privileges required
     """
 
     # NTFS constants
@@ -174,27 +182,26 @@ class MFTCollector:
 
     def _get_entry_name_bytes(self, name_info) -> Optional[bytes]:
         """
-        안전하게 entry.info.name에서 파일명 bytes를 추출.
+        Safely extract filename bytes from entry.info.name.
 
-        pytsk3 버전에 따라 name_info가:
-        - TSK_FS_NAME 객체 (.name 속성 있음)
-        - bytes 객체 (직접 사용)
-        일 수 있음.
+        Depending on pytsk3 version, name_info can be:
+        - TSK_FS_NAME object (has .name attribute)
+        - bytes object (use directly)
 
         Args:
-            name_info: entry.info.name 값
+            name_info: entry.info.name value
 
         Returns:
-            파일명 bytes 또는 None
+            Filename bytes or None
         """
         if name_info is None:
             return None
 
-        # bytes인 경우 직접 반환
+        # Return directly if bytes
         if isinstance(name_info, bytes):
             return name_info
 
-        # 객체인 경우 .name 속성 사용
+        # Use .name attribute if object
         if hasattr(name_info, 'name'):
             return name_info.name
 
@@ -217,7 +224,7 @@ class MFTCollector:
             if meta is None or name_info is None:
                 return None
 
-            # 안전하게 파일명 bytes 추출
+            # Safely extract filename bytes
             name_bytes = self._get_entry_name_bytes(name_info)
             if name_bytes is None:
                 return None
@@ -312,7 +319,8 @@ class MFTCollector:
         base_path: str,
         pattern: str,
         artifact_type: str = "unknown",
-        include_deleted: bool = True
+        include_deleted: bool = True,
+        recursive: bool = True
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         Collect files matching a pattern using MFT scan.
@@ -322,6 +330,7 @@ class MFTCollector:
             pattern: Filename pattern to match (e.g., "*.pf")
             artifact_type: Type of artifact for metadata
             include_deleted: Include deleted files
+            recursive: Recursively walk subdirectories (default: True)
 
         Yields:
             Tuple of (output_path, metadata)
@@ -335,15 +344,15 @@ class MFTCollector:
             # Open directory (use open_dir for proper directory listing)
             dir_obj = self.fs.open_dir(f"/{base_path}")
 
-            for entry in self._walk_directory(dir_obj, base_path, include_deleted):
-                # meta 속성 존재 확인
+            for entry in self._walk_directory(dir_obj, base_path, include_deleted, recursive=recursive):
+                # Check meta attribute existence
                 if not hasattr(entry.info, 'meta') or entry.info.meta is None:
                     continue
 
                 if entry.info.meta.type != pytsk3.TSK_FS_META_TYPE_REG:
                     continue
 
-                # 안전하게 파일명 bytes 추출
+                # Safely extract filename bytes
                 name_bytes = self._get_entry_name_bytes(entry.info.name)
                 if name_bytes is None:
                     continue
@@ -383,14 +392,14 @@ class MFTCollector:
         """
         try:
             for entry in directory:
-                # pytsk3.TSK_FS_ATTR 객체는 info.name 속성이 없음 - 건너뜀
+                # pytsk3.TSK_FS_ATTR objects don't have info.name attribute - skip
                 if not hasattr(entry, 'info') or entry.info is None:
                     continue
 
                 if not hasattr(entry.info, 'name') or entry.info.name is None:
                     continue
 
-                # 안전하게 파일명 bytes 추출
+                # Safely extract filename bytes
                 name_bytes = self._get_entry_name_bytes(entry.info.name)
                 if name_bytes is None:
                     continue
@@ -401,7 +410,7 @@ class MFTCollector:
                 if name in ['.', '..']:
                     continue
 
-                # Check if deleted (meta가 있는 경우에만)
+                # Check if deleted (only if meta exists)
                 if hasattr(entry.info, 'meta') and entry.info.meta:
                     is_allocated = bool(entry.info.meta.flags & pytsk3.TSK_FS_META_FLAG_ALLOC)
                     if not include_deleted and not is_allocated:

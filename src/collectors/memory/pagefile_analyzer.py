@@ -1,23 +1,23 @@
 """
-pagefile.sys 분석기
+pagefile.sys Analyzer
 
-Windows 페이지 파일(pagefile.sys) 분석을 위한 모듈
-- 문자열 추출 (ASCII/Unicode)
-- URL 패턴 검색
-- 이메일 주소 검색
-- IP 주소 검색
-- 파일 경로 검색
-- 레지스트리 키 검색
+Module for analyzing Windows Page Files (pagefile.sys)
+- String extraction (ASCII/Unicode)
+- URL pattern search
+- Email address search
+- IP address search
+- File path search
+- Registry key search
 
-참조: Windows 페이지 파일 구조
-- 4KB 페이지 단위
-- 메모리에서 스왑된 데이터 포함
-- 삭제된 데이터 복구 가능
+Reference: Windows Page File structure
+- 4KB page units
+- Contains data swapped from memory
+- Deleted data recovery possible
 
-Raw Disk Access 지원:
-- ForensicDiskAccessor를 통한 raw sector 기반 pagefile 읽기
-- Windows 파일 잠금 완전 우회
-- E01 이미지에서도 동일하게 동작
+Raw Disk Access Support:
+- Raw sector-based pagefile reading via ForensicDiskAccessor
+- Complete bypass of Windows file locks
+- Works identically with E01 images
 """
 
 import re
@@ -37,12 +37,12 @@ def _debug_print(msg):
 
 
 class PagefileAnalyzer:
-    """pagefile.sys 분석기"""
+    """pagefile.sys Analyzer"""
 
-    PAGE_SIZE = 4096  # Windows 기본 페이지 크기
-    CHUNK_SIZE = 1024 * 1024 * 64  # 64MB 단위 처리 (메모리 효율)
+    PAGE_SIZE = 4096  # Windows default page size
+    CHUNK_SIZE = 1024 * 1024 * 64  # 64MB chunk processing (memory efficient)
 
-    # 정규표현식 패턴
+    # Regular expression patterns
     PATTERNS = {
         'url': re.compile(
             rb'https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&\'()*+,;=%]+',
@@ -80,7 +80,7 @@ class PagefileAnalyzer:
         ),
     }
 
-    # 제외할 일반적인 시스템 URL
+    # Common system URLs to exclude
     EXCLUDED_URLS = {
         b'http://www.w3.org',
         b'http://schemas.microsoft.com',
@@ -92,8 +92,8 @@ class PagefileAnalyzer:
     def __init__(self, pagefile_path: str = None, pagefile_data: bytes = None):
         """
         Args:
-            pagefile_path: pagefile.sys 파일 경로
-            pagefile_data: pagefile 바이너리 데이터 (직접 제공 시)
+            pagefile_path: Path to pagefile.sys file
+            pagefile_data: pagefile binary data (when provided directly)
         """
         self.pagefile_path = pagefile_path
         self.pagefile_data = pagefile_data
@@ -111,7 +111,7 @@ class PagefileAnalyzer:
             self.file_size = len(pagefile_data)
 
     def __enter__(self):
-        """Context manager 진입"""
+        """Context manager entry"""
         if self.pagefile_path and Path(self.pagefile_path).exists():
             self._file = open(self.pagefile_path, 'rb')
             try:
@@ -122,14 +122,14 @@ class PagefileAnalyzer:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager 종료"""
+        """Context manager exit"""
         if self._mmap:
             self._mmap.close()
         if hasattr(self, '_file'):
             self._file.close()
 
     def _read_chunk(self, offset: int, size: int) -> bytes:
-        """데이터 청크 읽기"""
+        """Read data chunk"""
         if self.pagefile_data:
             return self.pagefile_data[offset:offset + size]
 
@@ -147,11 +147,11 @@ class PagefileAnalyzer:
         string_type: str = 'both'
     ) -> Generator[Dict, None, None]:
         """
-        pagefile에서 문자열 추출
+        Extract strings from pagefile
 
         Args:
-            min_length: 최소 문자열 길이
-            max_length: 최대 문자열 길이
+            min_length: Minimum string length
+            max_length: Maximum string length
             string_type: 'ascii', 'unicode', 'both'
 
         Yields:
@@ -162,14 +162,14 @@ class PagefileAnalyzer:
                 'page_num': int,
             }
         """
-        _debug_print(f"[Pagefile] 문자열 추출 시작 (min_len={min_length})...")
+        _debug_print(f"[Pagefile] Starting string extraction (min_len={min_length})...")
 
-        # ASCII 문자열 패턴
+        # ASCII string pattern
         ascii_pattern = re.compile(
             rb'[\x20-\x7E]{' + str(min_length).encode() + rb',}'
         )
 
-        # Unicode (UTF-16-LE) 문자열 패턴
+        # Unicode (UTF-16-LE) string pattern
         unicode_pattern = re.compile(
             rb'(?:[\x20-\x7E]\x00){' + str(min_length).encode() + rb',}'
         )
@@ -182,7 +182,7 @@ class PagefileAnalyzer:
             if not chunk:
                 break
 
-            # ASCII 문자열
+            # ASCII strings
             if string_type in ['ascii', 'both']:
                 for match in ascii_pattern.finditer(chunk):
                     string = match.group()
@@ -196,7 +196,7 @@ class PagefileAnalyzer:
                         }
                         total_strings += 1
 
-            # Unicode 문자열
+            # Unicode strings
             if string_type in ['unicode', 'both']:
                 for match in unicode_pattern.finditer(chunk):
                     string = match.group()
@@ -215,21 +215,21 @@ class PagefileAnalyzer:
                         except:
                             pass
 
-            offset += self.CHUNK_SIZE - 1024  # 경계 중복 처리
+            offset += self.CHUNK_SIZE - 1024  # Handle boundary overlap
 
-        _debug_print(f"[Pagefile] 총 {total_strings:,}개 문자열 추출")
+        _debug_print(f"[Pagefile] Total {total_strings:,} strings extracted")
 
     def find_urls(self, unique_only: bool = True) -> List[Dict]:
         """
-        URL 패턴 검색
+        Search for URL patterns
 
         Args:
-            unique_only: 중복 제거 여부
+            unique_only: Whether to remove duplicates
 
         Returns:
-            URL 정보 리스트
+            List of URL information
         """
-        _debug_print("[Pagefile] URL 검색 중...")
+        _debug_print("[Pagefile] Searching for URLs...")
 
         urls = []
         seen: Set[bytes] = set()
@@ -243,11 +243,11 @@ class PagefileAnalyzer:
             for match in self.PATTERNS['url'].finditer(chunk):
                 url = match.group()
 
-                # 제외 목록 확인
+                # Check exclusion list
                 if any(url.startswith(exc) for exc in self.EXCLUDED_URLS):
                     continue
 
-                # 중복 확인
+                # Check for duplicates
                 if unique_only and url in seen:
                     continue
 
@@ -262,20 +262,20 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 2048
 
-        _debug_print(f"[Pagefile] {len(urls):,}개 URL 발견")
+        _debug_print(f"[Pagefile] {len(urls):,} URLs found")
         return urls
 
     def find_emails(self, unique_only: bool = True) -> List[Dict]:
         """
-        이메일 주소 검색
+        Search for email addresses
 
         Args:
-            unique_only: 중복 제거 여부
+            unique_only: Whether to remove duplicates
 
         Returns:
-            이메일 정보 리스트
+            List of email information
         """
-        _debug_print("[Pagefile] 이메일 주소 검색 중...")
+        _debug_print("[Pagefile] Searching for email addresses...")
 
         emails = []
         seen: Set[bytes] = set()
@@ -303,17 +303,17 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 512
 
-        _debug_print(f"[Pagefile] {len(emails):,}개 이메일 주소 발견")
+        _debug_print(f"[Pagefile] {len(emails):,} email addresses found")
         return emails
 
     def find_ip_addresses(self, unique_only: bool = True) -> List[Dict]:
         """
-        IP 주소 검색 (IPv4, IPv6)
+        Search for IP addresses (IPv4, IPv6)
 
         Returns:
-            IP 주소 정보 리스트
+            List of IP address information
         """
-        _debug_print("[Pagefile] IP 주소 검색 중...")
+        _debug_print("[Pagefile] Searching for IP addresses...")
 
         ips = []
         seen: Set[bytes] = set()
@@ -328,7 +328,7 @@ class PagefileAnalyzer:
             for match in self.PATTERNS['ipv4'].finditer(chunk):
                 ip = match.group()
 
-                # 일반적인 내부 IP 제외 (선택적)
+                # Exclude common internal IPs (optional)
                 ip_str = ip.decode('ascii')
                 # if ip_str.startswith(('127.', '0.', '255.')):
                 #     continue
@@ -365,17 +365,17 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 256
 
-        _debug_print(f"[Pagefile] {len(ips):,}개 IP 주소 발견")
+        _debug_print(f"[Pagefile] {len(ips):,} IP addresses found")
         return ips
 
     def find_file_paths(self, unique_only: bool = True) -> List[Dict]:
         """
-        Windows 파일 경로 검색
+        Search for Windows file paths
 
         Returns:
-            파일 경로 정보 리스트
+            List of file path information
         """
-        _debug_print("[Pagefile] 파일 경로 검색 중...")
+        _debug_print("[Pagefile] Searching for file paths...")
 
         paths = []
         seen: Set[bytes] = set()
@@ -389,7 +389,7 @@ class PagefileAnalyzer:
             for match in self.PATTERNS['windows_path'].finditer(chunk):
                 path = match.group()
 
-                if len(path) < 10:  # 너무 짧은 경로 제외
+                if len(path) < 10:  # Exclude paths that are too short
                     continue
 
                 if unique_only and path in seen:
@@ -411,17 +411,17 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 1024
 
-        _debug_print(f"[Pagefile] {len(paths):,}개 파일 경로 발견")
+        _debug_print(f"[Pagefile] {len(paths):,} file paths found")
         return paths
 
     def find_registry_keys(self, unique_only: bool = True) -> List[Dict]:
         """
-        레지스트리 키 검색
+        Search for registry keys
 
         Returns:
-            레지스트리 키 정보 리스트
+            List of registry key information
         """
-        _debug_print("[Pagefile] 레지스트리 키 검색 중...")
+        _debug_print("[Pagefile] Searching for registry keys...")
 
         keys = []
         seen: Set[bytes] = set()
@@ -435,7 +435,7 @@ class PagefileAnalyzer:
             for match in self.PATTERNS['registry_key'].finditer(chunk):
                 key = match.group()
 
-                if len(key) < 15:  # 너무 짧은 키 제외
+                if len(key) < 15:  # Exclude keys that are too short
                     continue
 
                 if unique_only and key in seen:
@@ -452,17 +452,17 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 1024
 
-        _debug_print(f"[Pagefile] {len(keys):,}개 레지스트리 키 발견")
+        _debug_print(f"[Pagefile] {len(keys):,} registry keys found")
         return keys
 
     def find_sensitive_data(self) -> Dict[str, List]:
         """
-        민감한 데이터 검색 (신용카드, SSN 등)
+        Search for sensitive data (credit cards, SSN, etc.)
 
         Returns:
-            민감 데이터 카테고리별 리스트
+            List of sensitive data by category
         """
-        _debug_print("[Pagefile] 민감 데이터 검색 중...")
+        _debug_print("[Pagefile] Searching for sensitive data...")
 
         results = {
             'credit_cards': [],
@@ -476,7 +476,7 @@ class PagefileAnalyzer:
             if not chunk:
                 break
 
-            # 신용카드 번호
+            # Credit card numbers
             for match in self.PATTERNS['credit_card'].finditer(chunk):
                 cc = match.group()
                 abs_offset = offset + match.start()
@@ -486,7 +486,7 @@ class PagefileAnalyzer:
                     'page_num': abs_offset // self.PAGE_SIZE,
                 })
 
-            # SSN (미국 사회보장번호)
+            # SSN (US Social Security Number)
             for match in self.PATTERNS['ssn'].finditer(chunk):
                 ssn = match.group()
                 abs_offset = offset + match.start()
@@ -508,19 +508,19 @@ class PagefileAnalyzer:
 
             offset += self.CHUNK_SIZE - 256
 
-        _debug_print(f"[Pagefile] 민감 데이터: CC={len(results['credit_cards'])}, "
+        _debug_print(f"[Pagefile] Sensitive data: CC={len(results['credit_cards'])}, "
               f"SSN={len(results['ssn'])}, GUID={len(results['guids'])}")
 
         return results
 
     def analyze_all(self) -> Dict:
         """
-        전체 분석 수행
+        Perform full analysis
 
         Returns:
-            분석 결과 딕셔너리
+            Analysis results dictionary
         """
-        _debug_print(f"[Pagefile] 전체 분석 시작 (크기: {self.file_size / 1024 / 1024:.1f} MB)...")
+        _debug_print(f"[Pagefile] Starting full analysis (size: {self.file_size / 1024 / 1024:.1f} MB)...")
 
         results = {
             'file_path': self.pagefile_path,
@@ -535,7 +535,7 @@ class PagefileAnalyzer:
             'analysis_time': datetime.now().isoformat(),
         }
 
-        # 요약 통계
+        # Summary statistics
         results['summary'] = {
             'total_urls': len(results['urls']),
             'total_emails': len(results['emails']),
@@ -546,7 +546,7 @@ class PagefileAnalyzer:
             'total_ssns': len(results['sensitive_data']['ssn']),
         }
 
-        _debug_print(f"[Pagefile] 분석 완료:")
+        _debug_print(f"[Pagefile] Analysis complete:")
         for key, value in results['summary'].items():
             _debug_print(f"  - {key}: {value:,}")
 
@@ -559,22 +559,22 @@ class PagefileAnalyzer:
         progress_callback=None
     ) -> Dict:
         """
-        YARA 룰을 사용한 IOC 스캔
+        IOC scanning using YARA rules
 
         Args:
-            custom_rules_path: 사용자 정의 YARA 룰 디렉토리 경로
-            include_default: 기본 룰 포함 여부 (default: True)
-            progress_callback: 진행률 콜백 (message, progress 0.0-1.0)
+            custom_rules_path: Path to custom YARA rules directory
+            include_default: Whether to include default rules (default: True)
+            progress_callback: Progress callback (message, progress 0.0-1.0)
 
         Returns:
-            YARA 스캔 결과:
-            - total_matches: 전체 매치 수
-            - matches_by_rule: 룰별 매치 수
-            - matches_by_severity: 심각도별 매치
-            - critical_matches: 치명적 매치 목록
-            - high_matches: 높음 심각도 매치 목록
-            - medium_matches: 중간 심각도 매치 목록
-            - low_matches: 낮음 심각도 매치 목록
+            YARA scan results:
+            - total_matches: Total number of matches
+            - matches_by_rule: Matches by rule
+            - matches_by_severity: Matches by severity
+            - critical_matches: List of critical matches
+            - high_matches: List of high severity matches
+            - medium_matches: List of medium severity matches
+            - low_matches: List of low severity matches
         """
         try:
             from .yara_scanner import YaraScanner
@@ -592,26 +592,26 @@ class PagefileAnalyzer:
             if rules_count == 0:
                 return {'error': 'No YARA rules loaded', 'total_matches': 0}
 
-            _debug_print(f"[Pagefile] YARA 스캔 시작 ({rules_count}개 룰 파일)...")
+            _debug_print(f"[Pagefile] Starting YARA scan ({rules_count} rule files)...")
 
             results = scanner.scan_pagefile(
                 self,
                 progress_callback=progress_callback
             )
 
-            # 결과 요약 출력
+            # Output results summary
             total = results.get('total_matches', 0)
             critical = len(results.get('critical_matches', []))
             high = len(results.get('high_matches', []))
             medium = len(results.get('medium_matches', []))
 
-            _debug_print(f"[Pagefile] YARA 스캔 완료: {total}개 매치")
+            _debug_print(f"[Pagefile] YARA scan complete: {total} matches")
             if critical > 0:
-                _debug_print(f"  [CRITICAL] {critical}개 치명적 탐지")
+                _debug_print(f"  [CRITICAL] {critical} critical detections")
             if high > 0:
-                _debug_print(f"  [HIGH] {high}개 높음 심각도 탐지")
+                _debug_print(f"  [HIGH] {high} high severity detections")
             if medium > 0:
-                _debug_print(f"  [MEDIUM] {medium}개 중간 심각도 탐지")
+                _debug_print(f"  [MEDIUM] {medium} medium severity detections")
 
             return results
 
@@ -625,22 +625,22 @@ class PagefileAnalyzer:
 
 def analyze_pagefile_from_image(img_info, pagefile_offset: int, pagefile_size: int) -> Dict:
     """
-    디스크 이미지에서 pagefile 분석
+    Analyze pagefile from disk image
 
     Args:
-        img_info: 이미지 핸들
-        pagefile_offset: pagefile 시작 오프셋
-        pagefile_size: pagefile 크기
+        img_info: Image handle
+        pagefile_offset: pagefile start offset
+        pagefile_size: pagefile size
 
     Returns:
-        분석 결과
+        Analysis results
     """
-    _debug_print(f"[Pagefile] 이미지에서 pagefile 읽기 (offset={pagefile_offset}, size={pagefile_size})...")
+    _debug_print(f"[Pagefile] Reading pagefile from image (offset={pagefile_offset}, size={pagefile_size})...")
 
-    # 데이터 읽기
+    # Read data
     pagefile_data = img_info.read(pagefile_offset, pagefile_size)
 
-    # 분석
+    # Analyze
     analyzer = PagefileAnalyzer(pagefile_data=pagefile_data)
     return analyzer.analyze_all()
 
@@ -655,18 +655,18 @@ def create_pagefile_analyzer_raw_disk(
     pagefile_name: str = 'pagefile.sys'
 ) -> Optional[PagefileAnalyzer]:
     """
-    Raw Disk Access로 PagefileAnalyzer 생성
+    Create PagefileAnalyzer via Raw Disk Access
 
-    Windows 파일 잠금을 완전히 우회하여 pagefile.sys를 읽습니다.
-    관리자 권한이 필요합니다.
+    Completely bypasses Windows file locks to read pagefile.sys.
+    Administrator privileges required.
 
     Args:
-        drive_number: 물리 디스크 번호 (기본: 0)
-        partition_index: 파티션 인덱스 (None이면 첫 번째 NTFS 파티션)
-        pagefile_name: 페이지파일 이름 (기본: pagefile.sys)
+        drive_number: Physical disk number (default: 0)
+        partition_index: Partition index (None for first NTFS partition)
+        pagefile_name: Pagefile name (default: pagefile.sys)
 
     Returns:
-        PagefileAnalyzer 인스턴스 또는 None
+        PagefileAnalyzer instance or None
 
     Usage:
         analyzer = create_pagefile_analyzer_raw_disk()
@@ -679,7 +679,7 @@ def create_pagefile_analyzer_raw_disk(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    _debug_print(f"[Pagefile] Raw Disk Access로 {pagefile_name} 읽기 시작...")
+    _debug_print(f"[Pagefile] Starting {pagefile_name} read via Raw Disk Access...")
 
     try:
         with ForensicDiskAccessor.from_physical_disk(drive_number) as disk:
@@ -689,14 +689,14 @@ def create_pagefile_analyzer_raw_disk(
                 logger.error("No partitions found")
                 return None
 
-            # 파티션 선택
+            # Select partition
             if partition_index is not None:
                 if partition_index >= len(partitions):
                     logger.error(f"Invalid partition index: {partition_index}")
                     return None
                 disk.select_partition(partition_index)
             else:
-                # 첫 번째 NTFS 파티션 자동 선택
+                # Auto-select first NTFS partition
                 ntfs_idx = None
                 for i, p in enumerate(partitions):
                     if p.filesystem == 'NTFS':
@@ -708,24 +708,24 @@ def create_pagefile_analyzer_raw_disk(
                     return None
 
                 disk.select_partition(ntfs_idx)
-                _debug_print(f"[Pagefile] 파티션 {ntfs_idx} 선택 (NTFS)")
+                _debug_print(f"[Pagefile] Selected partition {ntfs_idx} (NTFS)")
 
-            # pagefile.sys 스트리밍 읽기
+            # Stream read pagefile.sys
             pagefile_path = f'/{pagefile_name}'
 
-            _debug_print(f"[Pagefile] {pagefile_name} 데이터 스트리밍 중...")
+            _debug_print(f"[Pagefile] Streaming {pagefile_name} data...")
 
-            # 대용량 파일이므로 스트리밍으로 읽기
+            # Stream read for large files
             chunks = []
             total_size = 0
 
             for chunk in disk.stream_file(pagefile_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                _debug_print(f"[Pagefile] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Pagefile] Read progress: {total_size / 1024 / 1024:.1f} MB")
 
             pagefile_data = b''.join(chunks)
-            _debug_print(f"[Pagefile] 총 {len(pagefile_data) / 1024 / 1024:.1f} MB 읽기 완료 [raw disk]")
+            _debug_print(f"[Pagefile] Total {len(pagefile_data) / 1024 / 1024:.1f} MB read complete [raw disk]")
 
             return PagefileAnalyzer(pagefile_data=pagefile_data)
 
@@ -741,15 +741,15 @@ def create_pagefile_analyzer_e01(
     pagefile_name: str = 'pagefile.sys'
 ) -> Optional[PagefileAnalyzer]:
     """
-    E01 이미지에서 PagefileAnalyzer 생성
+    Create PagefileAnalyzer from E01 image
 
     Args:
-        e01_path: E01 파일 경로
-        partition_index: 파티션 인덱스 (None이면 첫 번째 NTFS 파티션)
-        pagefile_name: 페이지파일 이름 (기본: pagefile.sys)
+        e01_path: E01 file path
+        partition_index: Partition index (None for first NTFS partition)
+        pagefile_name: Pagefile name (default: pagefile.sys)
 
     Returns:
-        PagefileAnalyzer 인스턴스 또는 None
+        PagefileAnalyzer instance or None
 
     Usage:
         analyzer = create_pagefile_analyzer_e01("evidence.E01")
@@ -762,8 +762,8 @@ def create_pagefile_analyzer_e01(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    _debug_print(f"[Pagefile] E01 이미지에서 {pagefile_name} 읽기 시작...")
-    _debug_print(f"[Pagefile] E01 경로: {e01_path}")
+    _debug_print(f"[Pagefile] Starting {pagefile_name} read from E01 image...")
+    _debug_print(f"[Pagefile] E01 path: {e01_path}")
 
     try:
         with ForensicDiskAccessor.from_e01(e01_path) as disk:
@@ -773,14 +773,14 @@ def create_pagefile_analyzer_e01(
                 logger.error("No partitions found in E01 image")
                 return None
 
-            # 파티션 선택
+            # Select partition
             if partition_index is not None:
                 if partition_index >= len(partitions):
                     logger.error(f"Invalid partition index: {partition_index}")
                     return None
                 disk.select_partition(partition_index)
             else:
-                # 첫 번째 NTFS 파티션 자동 선택
+                # Auto-select first NTFS partition
                 ntfs_idx = None
                 for i, p in enumerate(partitions):
                     if p.filesystem == 'NTFS':
@@ -792,12 +792,12 @@ def create_pagefile_analyzer_e01(
                     return None
 
                 disk.select_partition(ntfs_idx)
-                _debug_print(f"[Pagefile] 파티션 {ntfs_idx} 선택 (NTFS)")
+                _debug_print(f"[Pagefile] Selected partition {ntfs_idx} (NTFS)")
 
-            # pagefile.sys 스트리밍 읽기
+            # Stream read pagefile.sys
             pagefile_path = f'/{pagefile_name}'
 
-            _debug_print(f"[Pagefile] {pagefile_name} 데이터 스트리밍 중...")
+            _debug_print(f"[Pagefile] Streaming {pagefile_name} data...")
 
             chunks = []
             total_size = 0
@@ -805,10 +805,10 @@ def create_pagefile_analyzer_e01(
             for chunk in disk.stream_file(pagefile_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                _debug_print(f"[Pagefile] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Pagefile] Read progress: {total_size / 1024 / 1024:.1f} MB")
 
             pagefile_data = b''.join(chunks)
-            _debug_print(f"[Pagefile] 총 {len(pagefile_data) / 1024 / 1024:.1f} MB 읽기 완료 [E01]")
+            _debug_print(f"[Pagefile] Total {len(pagefile_data) / 1024 / 1024:.1f} MB read complete [E01]")
 
             return PagefileAnalyzer(pagefile_data=pagefile_data)
 
@@ -825,22 +825,22 @@ def stream_pagefile_raw_disk(
     chunk_size: int = 64 * 1024 * 1024
 ):
     """
-    Raw Disk Access로 pagefile 스트리밍 (메모리 효율적)
+    Stream pagefile via Raw Disk Access (memory efficient)
 
-    대용량 pagefile을 메모리에 전부 로드하지 않고 청크 단위로 분석할 때 사용합니다.
+    Use this to analyze large pagefiles chunk by chunk without loading entirely into memory.
 
     Args:
-        drive_number: 물리 디스크 번호
-        partition_index: 파티션 인덱스
-        pagefile_name: 페이지파일 이름
-        chunk_size: 청크 크기 (기본 64MB)
+        drive_number: Physical disk number
+        partition_index: Partition index
+        pagefile_name: Pagefile name
+        chunk_size: Chunk size (default 64MB)
 
     Yields:
         (chunk_data: bytes, offset: int, total_size: int)
 
     Usage:
         for chunk, offset, total in stream_pagefile_raw_disk():
-            # 청크별 분석
+            # Analyze per chunk
             analyze_chunk(chunk, offset)
     """
     try:
@@ -856,7 +856,7 @@ def stream_pagefile_raw_disk(
             if not partitions:
                 return
 
-            # 파티션 선택
+            # Select partition
             if partition_index is not None:
                 disk.select_partition(partition_index)
             else:
@@ -871,7 +871,7 @@ def stream_pagefile_raw_disk(
             offset = 0
 
             for chunk in disk.stream_file(pagefile_path, chunk_size=chunk_size):
-                yield chunk, offset, -1  # total_size는 미리 알 수 없음
+                yield chunk, offset, -1  # total_size is not known in advance
                 offset += len(chunk)
 
     except Exception as e:
@@ -884,10 +884,10 @@ if __name__ == "__main__":
     print("=" * 60)
 
     print("Usage:")
-    print("  # 파일에서 분석")
+    print("  # Analyze from file")
     print("  analyzer = PagefileAnalyzer('C:\\pagefile.sys')")
     print("  with analyzer:")
     print("      results = analyzer.analyze_all()")
     print()
-    print("  # 이미지에서 분석")
+    print("  # Analyze from image")
     print("  results = analyze_pagefile_from_image(img_info, offset, size)")

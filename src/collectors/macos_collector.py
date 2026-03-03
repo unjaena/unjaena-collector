@@ -1,22 +1,23 @@
 """
 macOS Forensic Artifact Collector
 
-macOS 시스템 포렌식 아티팩트 수집 모듈.
-로컬 시스템 또는 마운트된 APFS/HFS+ 이미지에서 아티팩트를 수집합니다.
+macOS system forensic artifact collection module.
+Collects artifacts from local systems, mounted APFS/HFS+ images, or E01 images.
 
-수집 방식:
-1. 로컬 수집: 현재 시스템 아티팩트
-2. 이미지 수집: APFS/HFS+ 이미지 파싱
-3. Time Machine 백업 수집
+Collection Methods:
+1. Local collection: Current system artifacts (target_root='/')
+2. Mount collection: Collect after mounting APFS/HFS+ image (target_root='/Volumes/macOS')
+3. E01 direct collection: Direct filesystem collection from E01 using pyewf + pytsk3 (e01_path specified)
+4. Time Machine backup collection
 
-핵심 아티팩트:
+Core Artifacts:
 - Unified Log (log show --predicate)
-- Launch Agents/Daemons (지속성)
-- TCC.db (권한 데이터베이스)
-- KnowledgeC.db (사용자 활동)
-- FSEvents (파일시스템 변경)
+- Launch Agents/Daemons (persistence)
+- TCC.db (permissions database)
+- KnowledgeC.db (user activity)
+- FSEvents (filesystem changes)
 
-MITRE ATT&CK 매핑:
+MITRE ATT&CK Mapping:
 - T1070.002 (Clear Linux/Mac Logs): unified_log
 - T1543.001 (Launch Agent): launch_agents
 - T1059.004 (Unix Shell): zsh_history
@@ -27,12 +28,21 @@ import glob
 import hashlib
 import plistlib
 import logging
+import fnmatch
 from pathlib import Path
 from datetime import datetime
-from typing import Generator, Dict, Any, Optional, List, Tuple
+from typing import Generator, Dict, Any, Optional, List, Tuple, Union
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# Check pytsk3 availability (for E01 direct collection)
+try:
+    import pytsk3
+    PYTSK3_AVAILABLE = True
+except ImportError:
+    PYTSK3_AVAILABLE = False
+    logger.debug("pytsk3 not available - E01 direct collection disabled")
 
 # Debug output control
 _DEBUG_OUTPUT = False
@@ -462,26 +472,125 @@ class macOSCollector:
     """
     macOS Forensic Artifact Collector
 
-    로컬 또는 마운트된 macOS 파일시스템에서 포렌식 아티팩트를 수집합니다.
+    Collects forensic artifacts from local, mounted filesystems, or E01 images.
+
+    Collection Modes:
+    1. Local/Mount mode: Direct collection from target_root path (default)
+    2. E01 direct collection mode: Direct filesystem collection from image using pyewf + pytsk3
     """
 
-    def __init__(self, output_dir: str, target_root: str = '/'):
+    def __init__(
+        self,
+        output_dir: str,
+        target_root: str = '/',
+        e01_path: Optional[str] = None,
+        partition_offset: Optional[int] = None
+    ):
         """
         Initialize macOS collector.
 
         Args:
             output_dir: Directory to store collected artifacts
             target_root: Root path for collection (default: '/' for local)
-                        Use mount point for image analysis
+                        Use mount point for mounted image analysis
+            e01_path: E01 image path (enables E01 direct collection mode when specified)
+            partition_offset: Partition offset within E01 (auto-detected if None)
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.target_root = Path(target_root)
-        if not self.target_root.exists():
-            raise FileNotFoundError(f"Target root not found: {target_root}")
+        # E01 direct collection mode
+        self._e01_mode = False
+        self._img_info = None
+        self._fs_info = None
+        self._partition_offset = partition_offset
 
-        _debug_print(f"[macOSCollector] Initialized with target_root: {target_root}")
+        if e01_path:
+            self._init_e01_mode(e01_path)
+            self.target_root = None  # Not used in E01 mode
+        else:
+            # Local/mount collection mode
+            self.target_root = Path(target_root)
+            if not self.target_root.exists():
+                raise FileNotFoundError(f"Target root not found: {target_root}")
+
+        _debug_print(f"[macOSCollector] Initialized: e01_mode={self._e01_mode}, target_root={target_root}")
+
+    def _init_e01_mode(self, e01_path: str):
+        """
+        Initialize E01 image direct collection mode
+
+        Args:
+            e01_path: E01 image file path
+        """
+        if not PYTSK3_AVAILABLE:
+            raise ImportError(
+                "pytsk3 is required for E01 direct collection. "
+                "Install with: pip install pytsk3"
+            )
+
+        try:
+            from .forensic_disk.ewf_img_info import (
+                open_e01_as_pytsk3,
+                detect_partitions_pytsk3,
+                detect_os_from_filesystem
+            )
+
+            # Open E01 image
+            self._img_info = open_e01_as_pytsk3(e01_path)
+
+            # Auto-detect partition
+            if self._partition_offset is None:
+                partitions = detect_partitions_pytsk3(self._img_info)
+
+                # Find macOS partition (HFS+/APFS)
+                macos_partition = None
+                for part in partitions:
+                    fs_type = part.get('filesystem', '')
+                    if detect_os_from_filesystem(fs_type) == 'macos':
+                        macos_partition = part
+                        break
+
+                if macos_partition:
+                    self._partition_offset = macos_partition['offset']
+                    logger.info(
+                        f"[macOSCollector] Auto-detected macOS partition: "
+                        f"{macos_partition['filesystem']} at offset {self._partition_offset}"
+                    )
+                else:
+                    # Try offset 0 if macOS partition not found
+                    self._partition_offset = 0
+                    logger.warning(
+                        "[macOSCollector] No macOS partition found, trying offset 0"
+                    )
+
+            # Open pytsk3 filesystem
+            self._fs_info = pytsk3.FS_Info(self._img_info, offset=self._partition_offset)
+            self._e01_mode = True
+
+            logger.info(f"[macOSCollector] E01 mode initialized: {e01_path}")
+
+        except Exception as e:
+            if self._img_info:
+                self._img_info.close()
+            raise RuntimeError(f"Failed to initialize E01 mode: {e}")
+
+    def close(self):
+        """Release resources"""
+        if self._img_info:
+            try:
+                self._img_info.close()
+            except Exception:
+                pass
+            self._img_info = None
+            self._fs_info = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
     def get_artifact_types(self) -> Dict[str, Dict[str, Any]]:
         """Return supported artifact types"""
@@ -509,16 +618,237 @@ class macOSCollector:
 
         _debug_print(f"[macOSCollector] Collecting {artifact_type} from {len(paths)} path patterns")
 
-        for pattern in paths:
-            # Combine with target root
-            full_pattern = str(self.target_root) + pattern
+        if self._e01_mode:
+            # E01 direct collection mode
+            yield from self._collect_from_e01(artifact_type, config, paths)
+        else:
+            # Local/mount collection mode
+            for pattern in paths:
+                # Combine with target root
+                full_pattern = str(self.target_root) + pattern
 
-            # Expand glob pattern
-            for file_path in glob.glob(full_pattern, recursive=True):
+                # Expand glob pattern
+                for file_path in glob.glob(full_pattern, recursive=True):
+                    try:
+                        yield from self._collect_file(file_path, artifact_type, config)
+                    except Exception as e:
+                        logger.warning(f"[macOSCollector] Failed to collect {file_path}: {e}")
+
+    def _collect_from_e01(
+        self,
+        artifact_type: str,
+        config: Dict[str, Any],
+        patterns: List[str]
+    ) -> Generator[Tuple[str, bytes, Dict[str, Any]], None, None]:
+        """
+        Collect artifacts from E01 image (using pytsk3)
+
+        Args:
+            artifact_type: Artifact type
+            config: Artifact configuration
+            patterns: List of path patterns to collect
+
+        Yields:
+            Tuple of (relative_path, content_bytes, metadata)
+        """
+        for pattern in patterns:
+            # Analyze pattern
+            pattern = pattern.lstrip('/')
+
+            # If pattern contains wildcards
+            if '*' in pattern:
+                # Separate fixed path and wildcard parts
+                parts = pattern.split('/')
+                fixed_parts = []
+                for part in parts:
+                    if '*' in part:
+                        break
+                    fixed_parts.append(part)
+
+                fixed_path = '/'.join(fixed_parts) if fixed_parts else ''
+                wildcard_pattern = '/'.join(parts[len(fixed_parts):])
+
+                # Recursively search files from fixed path
                 try:
-                    yield from self._collect_file(file_path, artifact_type, config)
+                    yield from self._collect_e01_glob(
+                        fixed_path, wildcard_pattern, artifact_type, config
+                    )
                 except Exception as e:
-                    logger.warning(f"[macOSCollector] Failed to collect {file_path}: {e}")
+                    logger.debug(f"[macOSCollector] E01 glob failed for {pattern}: {e}")
+            else:
+                # Fixed path
+                try:
+                    yield from self._collect_e01_file(pattern, artifact_type, config)
+                except Exception as e:
+                    logger.debug(f"[macOSCollector] E01 file not found: {pattern}")
+
+    def _collect_e01_glob(
+        self,
+        base_path: str,
+        pattern: str,
+        artifact_type: str,
+        config: Dict[str, Any]
+    ) -> Generator[Tuple[str, bytes, Dict[str, Any]], None, None]:
+        """
+        Collect files using glob pattern within E01
+
+        Args:
+            base_path: Starting path for search
+            pattern: Wildcard pattern
+            artifact_type: Artifact type
+            config: Configuration
+
+        Yields:
+            Collected file tuples
+        """
+        # Open base_path directory
+        try:
+            if base_path:
+                directory = self._fs_info.open_dir(path='/' + base_path)
+            else:
+                directory = self._fs_info.open_dir(path='/')
+        except Exception as e:
+            logger.debug(f"[macOSCollector] Cannot open directory /{base_path}: {e}")
+            return
+
+        # Recursively traverse directory
+        yield from self._walk_e01_directory(directory, base_path, pattern, artifact_type, config)
+
+    def _walk_e01_directory(
+        self,
+        directory,
+        current_path: str,
+        pattern: str,
+        artifact_type: str,
+        config: Dict[str, Any],
+        depth: int = 0,
+        max_depth: int = 10
+    ) -> Generator[Tuple[str, bytes, Dict[str, Any]], None, None]:
+        """
+        Recursively traverse E01 directory
+
+        Args:
+            directory: pytsk3 directory object
+            current_path: Current path
+            pattern: Pattern to match
+            artifact_type: Artifact type
+            config: Configuration
+            depth: Current depth
+            max_depth: Maximum traversal depth
+
+        Yields:
+            Collected file tuples
+        """
+        if depth > max_depth:
+            return
+
+        for entry in directory:
+            try:
+                name = entry.info.name.name.decode('utf-8', errors='replace')
+
+                # Skip . and ..
+                if name in ('.', '..'):
+                    continue
+
+                # Full path of current entry
+                if current_path:
+                    full_path = f"{current_path}/{name}"
+                else:
+                    full_path = name
+
+                # Recursively traverse if directory
+                if entry.info.meta and entry.info.meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+                    try:
+                        sub_dir = self._fs_info.open_dir(path='/' + full_path)
+                        yield from self._walk_e01_directory(
+                            sub_dir, full_path, pattern, artifact_type, config, depth + 1, max_depth
+                        )
+                    except Exception:
+                        pass
+                # Match pattern if file
+                elif entry.info.meta and entry.info.meta.type == pytsk3.TSK_FS_META_TYPE_REG:
+                    # Pattern matching with fnmatch
+                    if fnmatch.fnmatch(full_path, pattern) or fnmatch.fnmatch(name, pattern.split('/')[-1]):
+                        try:
+                            yield from self._collect_e01_file(full_path, artifact_type, config)
+                        except Exception as e:
+                            logger.debug(f"[macOSCollector] Failed to collect {full_path}: {e}")
+
+            except Exception as e:
+                continue
+
+    def _collect_e01_file(
+        self,
+        file_path: str,
+        artifact_type: str,
+        config: Dict[str, Any]
+    ) -> Generator[Tuple[str, bytes, Dict[str, Any]], None, None]:
+        """
+        Collect a single file from E01
+
+        Args:
+            file_path: File path (relative to root)
+            artifact_type: Artifact type
+            config: Configuration
+
+        Yields:
+            (relative_path, content, metadata) tuple
+        """
+        try:
+            # Open file
+            file_path_normalized = '/' + file_path.lstrip('/')
+            file_entry = self._fs_info.open(file_path_normalized)
+
+            # Check metadata
+            meta = file_entry.info.meta
+            if not meta:
+                return
+
+            # Check file size (skip files too large - 100MB)
+            file_size = meta.size
+            if file_size > 100 * 1024 * 1024:
+                logger.warning(f"[macOSCollector] File too large, skipping: {file_path} ({file_size} bytes)")
+                return
+
+            # Read file content
+            content = file_entry.read_random(0, file_size)
+
+            # Calculate hashes
+            hash_md5 = hashlib.md5(content).hexdigest()
+            hash_sha256 = hashlib.sha256(content).hexdigest()
+
+            # Convert timestamps
+            modified_time = datetime.fromtimestamp(meta.mtime).isoformat() if meta.mtime else None
+            accessed_time = datetime.fromtimestamp(meta.atime).isoformat() if meta.atime else None
+            created_time = datetime.fromtimestamp(meta.crtime).isoformat() if meta.crtime else None
+
+            # Build metadata
+            metadata = {
+                'artifact_type': artifact_type,
+                'original_path': file_path_normalized,
+                'file_size': file_size,
+                'modified_time': modified_time,
+                'accessed_time': accessed_time,
+                'created_time': created_time,
+                'hash_md5': hash_md5,
+                'hash_sha256': hash_sha256,
+                'forensic_value': config.get('forensic_value', 'medium'),
+                'mitre_attack': config.get('mitre_attack', ''),
+                'kill_chain_phase': config.get('kill_chain_phase', ''),
+                'collection_mode': 'e01_direct',
+            }
+
+            # Extract username
+            username = self._extract_username(file_path_normalized)
+            if username:
+                metadata['username'] = username
+
+            yield (file_path.lstrip('/'), content, metadata)
+
+            _debug_print(f"[macOSCollector] E01 collected: {file_path} ({file_size} bytes)")
+
+        except Exception as e:
+            logger.debug(f"[macOSCollector] E01 file read error {file_path}: {e}")
 
     def _collect_file(
         self,
@@ -577,14 +907,8 @@ class macOSCollector:
             if username:
                 metadata['username'] = username
 
-            # Parse plist if applicable
-            if config.get('plist_parsing') and file_path.endswith('.plist'):
-                plist_data = self._parse_plist(path)
-                if plist_data:
-                    metadata['plist_data'] = plist_data
-                    # Extract launch agent/daemon specific fields
-                    if 'launch' in artifact_type.lower():
-                        metadata.update(self._extract_launch_metadata(plist_data))
+            # [2026-01-31] plist parsing is performed on server (removed from collector for security)
+            # Collector only collects raw files, parsing is done on server
 
             # Relative path from target root
             try:
@@ -623,60 +947,8 @@ class macOSCollector:
                     pass
         return None
 
-    def _extract_launch_metadata(self, plist_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract relevant metadata from Launch Agent/Daemon plist.
-
-        Args:
-            plist_data: Parsed plist dictionary
-
-        Returns:
-            Dictionary with extracted metadata
-        """
-        metadata = {}
-
-        if isinstance(plist_data, dict):
-            # Label (unique identifier)
-            if 'Label' in plist_data:
-                metadata['label'] = plist_data['Label']
-
-            # Program to execute
-            if 'Program' in plist_data:
-                metadata['program'] = plist_data['Program']
-            elif 'ProgramArguments' in plist_data:
-                args = plist_data['ProgramArguments']
-                if isinstance(args, list) and args:
-                    metadata['program'] = args[0]
-                    if len(args) > 1:
-                        metadata['program_arguments'] = args[1:]
-
-            # Execution conditions
-            if 'RunAtLoad' in plist_data:
-                metadata['run_at_load'] = plist_data['RunAtLoad']
-            if 'KeepAlive' in plist_data:
-                metadata['keep_alive'] = plist_data['KeepAlive']
-            if 'StartInterval' in plist_data:
-                metadata['start_interval'] = plist_data['StartInterval']
-            if 'StartCalendarInterval' in plist_data:
-                metadata['start_calendar_interval'] = plist_data['StartCalendarInterval']
-
-            # User/Group
-            if 'UserName' in plist_data:
-                metadata['username'] = plist_data['UserName']
-            if 'GroupName' in plist_data:
-                metadata['groupname'] = plist_data['GroupName']
-
-            # Working directory and environment
-            if 'WorkingDirectory' in plist_data:
-                metadata['working_directory'] = plist_data['WorkingDirectory']
-            if 'EnvironmentVariables' in plist_data:
-                metadata['environment'] = plist_data['EnvironmentVariables']
-
-            # Risk indicators
-            if 'RootDirectory' in plist_data:
-                metadata['root_directory'] = plist_data['RootDirectory']
-
-        return metadata
+    # [2026-01-31] _extract_launch_metadata removed
+    # Forensic analysis logic is performed on server (macos_basic_parser.py)
 
     def _extract_username(self, path: str) -> Optional[str]:
         """
@@ -743,33 +1015,69 @@ class macOSCollector:
             Dictionary with system info
         """
         info = {
-            'target_root': str(self.target_root),
-            'is_local': str(self.target_root) == '/',
+            'target_root': str(self.target_root) if self.target_root else 'E01 Image',
+            'is_local': str(self.target_root) == '/' if self.target_root else False,
+            'is_e01_mode': self._e01_mode,
             'hostname': None,
             'macos_version': None,
             'build_version': None,
         }
 
-        # Read SystemVersion.plist
-        version_plist = self.target_root / 'System' / 'Library' / 'CoreServices' / 'SystemVersion.plist'
-        if version_plist.exists():
-            plist_data = self._parse_plist(version_plist)
-            if plist_data:
+        if self._e01_mode:
+            # Read system info in E01 mode
+            info.update(self._get_system_info_e01())
+        else:
+            # Local/mount mode
+            # Read SystemVersion.plist
+            version_plist = self.target_root / 'System' / 'Library' / 'CoreServices' / 'SystemVersion.plist'
+            if version_plist.exists():
+                plist_data = self._parse_plist(version_plist)
+                if plist_data:
+                    info['macos_version'] = plist_data.get('ProductVersion')
+                    info['build_version'] = plist_data.get('ProductBuildVersion')
+
+            # Read hostname
+            hostname_files = [
+                self.target_root / 'etc' / 'hostname',
+                self.target_root / 'private' / 'etc' / 'hostname',
+            ]
+            for hf in hostname_files:
+                if hf.exists():
+                    try:
+                        info['hostname'] = hf.read_text().strip()
+                        break
+                    except:
+                        pass
+
+        return info
+
+    def _get_system_info_e01(self) -> Dict[str, Any]:
+        """Read system information from E01 image"""
+        info = {}
+
+        try:
+            # Read SystemVersion.plist
+            try:
+                version_file = self._fs_info.open('/System/Library/CoreServices/SystemVersion.plist')
+                content = version_file.read_random(0, version_file.info.meta.size)
+                plist_data = plistlib.loads(content)
                 info['macos_version'] = plist_data.get('ProductVersion')
                 info['build_version'] = plist_data.get('ProductBuildVersion')
+            except:
+                pass
 
-        # Read hostname
-        hostname_files = [
-            self.target_root / 'etc' / 'hostname',
-            self.target_root / 'private' / 'etc' / 'hostname',
-        ]
-        for hf in hostname_files:
-            if hf.exists():
+            # Read hostname
+            for hostname_path in ['/etc/hostname', '/private/etc/hostname']:
                 try:
-                    info['hostname'] = hf.read_text().strip()
+                    hostname_file = self._fs_info.open(hostname_path)
+                    content = hostname_file.read_random(0, hostname_file.info.meta.size)
+                    info['hostname'] = content.decode('utf-8', errors='replace').strip()
                     break
                 except:
                     pass
+
+        except Exception as e:
+            logger.debug(f"[macOSCollector] Failed to get E01 system info: {e}")
 
         return info
 

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-BitLocker Utilities - BitLocker 볼륨 감지 및 유틸리티 함수
+BitLocker Utilities - BitLocker volume detection and utility functions
 
-수집 도구에서 BitLocker 암호화 볼륨을 감지하고 처리하기 위한 유틸리티.
+Utilities for detecting and handling BitLocker encrypted volumes in the collector tool.
 """
 
 import struct
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BitLockerVolumeDetectionResult:
-    """BitLocker 볼륨 감지 결과"""
+    """BitLocker volume detection result"""
     is_encrypted: bool = False
     partition_index: int = 0
     partition_offset: int = 0
@@ -27,7 +27,7 @@ class BitLockerVolumeDetectionResult:
 
 def detect_bitlocker_on_system_drive() -> BitLockerVolumeDetectionResult:
     """
-    시스템 드라이브(일반적으로 C:)에서 BitLocker 암호화 감지
+    Detect BitLocker encryption on the system drive (typically C:)
 
     Returns:
         BitLockerVolumeDetectionResult
@@ -40,12 +40,12 @@ def detect_bitlocker_on_system_drive() -> BitLockerVolumeDetectionResult:
         )
 
     try:
-        # WMI를 통한 BitLocker 상태 확인
+        # Check BitLocker status via WMI
         result = _check_bitlocker_via_wmi()
         if result:
             return result
 
-        # WMI 실패 시 직접 디스크 확인
+        # Fall back to direct disk check if WMI fails
         return _check_bitlocker_direct()
 
     except Exception as e:
@@ -57,7 +57,7 @@ def detect_bitlocker_on_system_drive() -> BitLockerVolumeDetectionResult:
 
 
 def _check_bitlocker_via_wmi() -> Optional[BitLockerVolumeDetectionResult]:
-    """WMI를 통한 BitLocker 상태 확인"""
+    """Check BitLocker status via WMI"""
     try:
         import wmi
         c = wmi.WMI(namespace="root\\cimv2\\Security\\MicrosoftVolumeEncryption")
@@ -85,7 +85,7 @@ def _check_bitlocker_via_wmi() -> Optional[BitLockerVolumeDetectionResult]:
 
 
 def _get_encryption_method_wmi(volume) -> str:
-    """WMI 볼륨에서 암호화 방식 조회"""
+    """Get encryption method from WMI volume"""
     try:
         method_code = volume.EncryptionMethod
         methods = {
@@ -105,20 +105,20 @@ def _get_encryption_method_wmi(volume) -> str:
 
 
 def _check_bitlocker_direct() -> BitLockerVolumeDetectionResult:
-    """물리 디스크를 직접 읽어서 BitLocker 감지"""
+    """Detect BitLocker by reading physical disk directly"""
     try:
         from .disk_backends import PhysicalDiskBackend
 
-        # PhysicalDrive0 (시스템 디스크) 확인
+        # Check PhysicalDrive0 (system disk)
         backend = PhysicalDiskBackend(0)
 
         try:
-            # MBR 읽기
+            # Read MBR
             mbr = backend.read(0, 512)
             if len(mbr) < 512:
                 return BitLockerVolumeDetectionResult(is_encrypted=False)
 
-            # MBR 시그니처 확인
+            # Verify MBR signature
             signature = struct.unpack('<H', mbr[510:512])[0]
             if signature != 0xAA55:
                 return BitLockerVolumeDetectionResult(
@@ -126,17 +126,17 @@ def _check_bitlocker_direct() -> BitLockerVolumeDetectionResult:
                     error="Invalid MBR signature"
                 )
 
-            # GPT 보호 MBR 확인 (파티션 타입 0xEE = GPT Protective)
-            # 첫 번째 파티션 엔트리의 타입 확인
-            first_partition_type = mbr[446 + 4]  # 첫 번째 파티션의 타입
+            # Check for GPT protective MBR (partition type 0xEE = GPT Protective)
+            # Check the type of the first partition entry
+            first_partition_type = mbr[446 + 4]  # Type of the first partition
             is_gpt = first_partition_type == 0xEE
 
             if is_gpt:
-                # GPT 디스크 처리
+                # Handle GPT disk
                 logger.debug("GPT disk detected, checking GPT partitions")
                 return _check_bitlocker_gpt(backend)
 
-            # MBR 파티션 확인
+            # Check MBR partitions
             logger.debug("MBR disk detected, checking MBR partitions")
             for i in range(4):
                 entry_offset = 446 + i * 16
@@ -151,7 +151,7 @@ def _check_bitlocker_direct() -> BitLockerVolumeDetectionResult:
                 partition_offset = lba_start * 512
                 partition_size = sector_count * 512
 
-                # VBR에서 BitLocker 시그니처 확인
+                # Check for BitLocker signature in VBR
                 vbr = backend.read(partition_offset, 512)
                 if _is_bitlocker_vbr(vbr):
                     logger.info(f"BitLocker detected on MBR partition {i}")
@@ -176,9 +176,9 @@ def _check_bitlocker_direct() -> BitLockerVolumeDetectionResult:
 
 
 def _check_bitlocker_gpt(backend) -> BitLockerVolumeDetectionResult:
-    """GPT 디스크에서 BitLocker 감지"""
+    """Detect BitLocker on GPT disk"""
     try:
-        # GPT 헤더 (LBA 1)
+        # GPT header (LBA 1)
         gpt_header = backend.read(512, 512)
 
         if gpt_header[:8] != b'EFI PART':
@@ -187,38 +187,38 @@ def _check_bitlocker_gpt(backend) -> BitLockerVolumeDetectionResult:
 
         logger.debug("Valid GPT header found")
 
-        # 파티션 엔트리 시작 LBA
+        # Partition entry start LBA
         entries_lba = struct.unpack('<Q', gpt_header[72:80])[0]
         num_entries = struct.unpack('<I', gpt_header[80:84])[0]
         entry_size = struct.unpack('<I', gpt_header[84:88])[0]
 
         logger.debug(f"GPT: {num_entries} partition entries, size={entry_size}")
 
-        # 파티션 엔트리 읽기
+        # Read partition entries
         entries_offset = entries_lba * 512
         entries_data = backend.read(entries_offset, num_entries * entry_size)
 
         partitions_found = 0
-        for i in range(min(num_entries, 128)):  # 최대 128개 확인
+        for i in range(min(num_entries, 128)):  # Check up to 128 entries
             entry_offset = i * entry_size
             entry = entries_data[entry_offset:entry_offset + entry_size]
 
-            # 파티션 타입 GUID (offset 0-16)
+            # Partition type GUID (offset 0-16)
             type_guid = entry[:16]
 
-            # 빈 엔트리 스킵
+            # Skip empty entries
             if type_guid == b'\x00' * 16:
                 continue
 
             partitions_found += 1
 
-            # 파티션 오프셋 및 크기
+            # Partition offset and size
             first_lba = struct.unpack('<Q', entry[32:40])[0]
             last_lba = struct.unpack('<Q', entry[40:48])[0]
             partition_offset = first_lba * 512
             partition_size = (last_lba - first_lba + 1) * 512
 
-            # VBR에서 BitLocker 시그니처 확인
+            # Check for BitLocker signature in VBR
             vbr = backend.read(partition_offset, 512)
             is_bitlocker = _is_bitlocker_vbr(vbr)
 
@@ -246,23 +246,23 @@ def _check_bitlocker_gpt(backend) -> BitLockerVolumeDetectionResult:
 
 
 def _is_bitlocker_vbr(vbr: bytes) -> bool:
-    """VBR이 BitLocker 암호화되었는지 확인"""
+    """Check if VBR is BitLocker encrypted"""
     if len(vbr) < 512:
         return False
 
-    # BitLocker 시그니처: "-FVE-FS-" at offset 3
+    # BitLocker signature: "-FVE-FS-" at offset 3
     return vbr[3:11] == b'-FVE-FS-'
 
 
 def detect_bitlocker_partitions(drive_number: int = 0) -> List[Dict[str, Any]]:
     """
-    지정된 물리 드라이브에서 모든 BitLocker 암호화 파티션 감지
+    Detect all BitLocker encrypted partitions on a specified physical drive
 
     Args:
-        drive_number: 물리 드라이브 번호
+        drive_number: Physical drive number
 
     Returns:
-        BitLocker 파티션 정보 리스트
+        List of BitLocker partition information
     """
     from .disk_backends import PhysicalDiskBackend
 
@@ -272,14 +272,14 @@ def detect_bitlocker_partitions(drive_number: int = 0) -> List[Dict[str, Any]]:
         backend = PhysicalDiskBackend(drive_number)
 
         try:
-            # MBR 읽기
+            # Read MBR
             mbr = backend.read(0, 512)
 
-            # MBR 시그니처 확인
+            # Verify MBR signature
             signature = struct.unpack('<H', mbr[510:512])[0]
 
             if signature == 0xAA55:
-                # MBR 파티션 테이블
+                # MBR partition table
                 for i in range(4):
                     entry_offset = 446 + i * 16
                     entry = mbr[entry_offset:entry_offset + 16]
@@ -304,7 +304,7 @@ def detect_bitlocker_partitions(drive_number: int = 0) -> List[Dict[str, Any]]:
                         'filesystem': 'BitLocker' if is_bitlocker else _detect_filesystem(vbr)
                     })
             else:
-                # GPT 디스크 처리 (간략화)
+                # Handle GPT disk (simplified)
                 logger.info("GPT disk detected - scanning partitions")
 
         finally:
@@ -317,7 +317,7 @@ def detect_bitlocker_partitions(drive_number: int = 0) -> List[Dict[str, Any]]:
 
 
 def _detect_filesystem(vbr: bytes) -> str:
-    """VBR에서 파일시스템 감지"""
+    """Detect filesystem from VBR"""
     if len(vbr) < 512:
         return "Unknown"
 
@@ -334,7 +334,7 @@ def _detect_filesystem(vbr: bytes) -> str:
 
 
 def is_pybde_installed() -> bool:
-    """pybde (libbde-python) 설치 여부 확인"""
+    """Check if pybde (libbde-python) is installed"""
     try:
         import pybde
         return True
@@ -344,12 +344,12 @@ def is_pybde_installed() -> bool:
 
 def format_recovery_password(raw_input: str) -> str:
     """
-    복구 키 입력값을 표준 형식으로 변환
+    Convert recovery key input to standard format
 
-    입력: "123456234567345678..." 또는 "123456-234567-345678-..."
-    출력: "123456-234567-345678-456789-567890-678901-789012-890123"
+    Input: "123456234567345678..." or "123456-234567-345678-..."
+    Output: "123456-234567-345678-456789-567890-678901-789012-890123"
     """
-    # 숫자만 추출
+    # Extract digits only
     digits = ''.join(c for c in raw_input if c.isdigit())
 
     if len(digits) != 48:
@@ -357,13 +357,13 @@ def format_recovery_password(raw_input: str) -> str:
             f"Recovery password must be 48 digits, got {len(digits)}"
         )
 
-    # 6자리씩 그룹화
+    # Group into 6-digit chunks
     groups = [digits[i:i+6] for i in range(0, 48, 6)]
     return '-'.join(groups)
 
 
 def validate_recovery_password(password: str) -> bool:
-    """복구 키 형식 검증"""
+    """Validate recovery key format"""
     try:
         format_recovery_password(password)
         return True
@@ -372,21 +372,21 @@ def validate_recovery_password(password: str) -> bool:
 
 
 # =============================================================================
-# manage-bde 기반 BitLocker 자동 해제/재암호화
+# manage-bde based BitLocker auto unlock/re-encryption
 # =============================================================================
 
 @dataclass
 class ManageBdeResult:
-    """manage-bde 실행 결과"""
+    """manage-bde execution result"""
     success: bool = False
     message: str = ""
-    percentage: float = 0.0  # 암호화/복호화 진행률
+    percentage: float = 0.0  # Encryption/decryption progress percentage
     protection_status: str = ""  # On, Off, Unknown
     error: Optional[str] = None
 
 
 def check_admin_privileges() -> bool:
-    """관리자 권한 확인"""
+    """Check for administrator privileges"""
     import sys
     if sys.platform != 'win32':
         return False
@@ -400,10 +400,10 @@ def check_admin_privileges() -> bool:
 
 def get_bitlocker_status(drive: str = "C:") -> ManageBdeResult:
     """
-    manage-bde를 사용하여 BitLocker 상태 확인
+    Check BitLocker status using manage-bde
 
     Args:
-        drive: 드라이브 문자 (예: "C:")
+        drive: Drive letter (e.g., "C:")
 
     Returns:
         ManageBdeResult
@@ -429,22 +429,22 @@ def get_bitlocker_status(drive: str = "C:") -> ManageBdeResult:
 
         output = result.stdout + result.stderr
 
-        # 보호 상태 파싱
+        # Parse protection status
         protection_status = "Unknown"
-        if "Protection On" in output or "보호 설정" in output:
+        if "Protection On" in output:
             protection_status = "On"
-        elif "Protection Off" in output or "보호 해제" in output:
+        elif "Protection Off" in output:
             protection_status = "Off"
 
-        # 암호화 비율 파싱
+        # Parse encryption percentage
         percentage = 0.0
         percentage_match = re.search(r'(\d+(?:\.\d+)?)\s*%', output)
         if percentage_match:
             percentage = float(percentage_match.group(1))
 
-        # 암호화 상태 확인
-        is_encrypted = "Fully Encrypted" in output or "완전히 암호화됨" in output
-        is_decrypted = "Fully Decrypted" in output or "완전히 해독됨" in output or percentage == 0.0
+        # Check encryption status
+        is_encrypted = "Fully Encrypted" in output
+        is_decrypted = "Fully Decrypted" in output or percentage == 0.0
 
         if is_encrypted:
             message = "fully_encrypted"
@@ -475,13 +475,13 @@ def disable_bitlocker(
     check_interval: int = 10
 ) -> ManageBdeResult:
     """
-    BitLocker 암호화 해제 (manage-bde -off)
+    Disable BitLocker encryption (manage-bde -off)
 
     Args:
-        drive: 드라이브 문자 (예: "C:")
-        progress_callback: 진행률 콜백 함수 (percentage: float, message: str)
-        wait_for_completion: 완료까지 대기 여부
-        check_interval: 상태 확인 간격 (초)
+        drive: Drive letter (e.g., "C:")
+        progress_callback: Progress callback function (percentage: float, message: str)
+        wait_for_completion: Whether to wait until completion
+        check_interval: Status check interval (seconds)
 
     Returns:
         ManageBdeResult
@@ -502,7 +502,7 @@ def disable_bitlocker(
             error="Administrator privileges required"
         )
 
-    # 현재 상태 확인
+    # Check current status
     status = get_bitlocker_status(drive)
     if not status.success:
         return status
@@ -517,10 +517,10 @@ def disable_bitlocker(
         )
 
     try:
-        # BitLocker 해제 시작
+        # Start BitLocker decryption
         logger.info(f"Starting BitLocker decryption on {drive}")
         if progress_callback:
-            progress_callback(0.0, f"BitLocker 해제 시작: {drive}")
+            progress_callback(0.0, f"Starting BitLocker decryption: {drive}")
 
         result = subprocess.run(
             ['manage-bde', '-off', drive],
@@ -544,7 +544,7 @@ def disable_bitlocker(
                 protection_status="Off"
             )
 
-        # 완료까지 대기
+        # Wait until completion
         while True:
             time.sleep(check_interval)
             status = get_bitlocker_status(drive)
@@ -556,12 +556,12 @@ def disable_bitlocker(
             logger.info(f"BitLocker decryption progress: {remaining:.1f}% remaining")
 
             if progress_callback:
-                progress_callback(remaining, f"복호화 진행 중: {remaining:.1f}% 남음")
+                progress_callback(remaining, f"Decryption in progress: {remaining:.1f}% remaining")
 
             if status.message == "fully_decrypted" or status.percentage == 0.0:
                 logger.info(f"BitLocker decryption completed on {drive}")
                 if progress_callback:
-                    progress_callback(100.0, "복호화 완료")
+                    progress_callback(100.0, "Decryption completed")
                 return ManageBdeResult(
                     success=True,
                     message="decryption_completed",
@@ -582,20 +582,20 @@ def enable_bitlocker(
     check_interval: int = 10
 ) -> ManageBdeResult:
     """
-    BitLocker 암호화 활성화 (manage-bde -on)
+    Enable BitLocker encryption (manage-bde -on)
 
     Args:
-        drive: 드라이브 문자 (예: "C:")
-        progress_callback: 진행률 콜백 함수 (percentage: float, message: str)
-        wait_for_completion: 완료까지 대기 여부 (기본: False - 백그라운드 암호화)
-        check_interval: 상태 확인 간격 (초)
+        drive: Drive letter (e.g., "C:")
+        progress_callback: Progress callback function (percentage: float, message: str)
+        wait_for_completion: Whether to wait until completion (default: False - background encryption)
+        check_interval: Status check interval (seconds)
 
     Returns:
         ManageBdeResult
 
     Note:
-        재암호화는 TPM이 있는 경우 자동으로 키를 사용합니다.
-        TPM이 없거나 복구 키가 필요한 경우 추가 설정이 필요할 수 있습니다.
+        Re-encryption will automatically use the key if TPM is present.
+        Additional configuration may be required if TPM is not available or a recovery key is needed.
     """
     import subprocess
     import time
@@ -613,7 +613,7 @@ def enable_bitlocker(
             error="Administrator privileges required"
         )
 
-    # 현재 상태 확인
+    # Check current status
     status = get_bitlocker_status(drive)
     if not status.success:
         return status
@@ -628,13 +628,13 @@ def enable_bitlocker(
         )
 
     try:
-        # BitLocker 암호화 시작 (TPM 사용)
+        # Start BitLocker encryption (using TPM)
         logger.info(f"Starting BitLocker encryption on {drive}")
         if progress_callback:
-            progress_callback(0.0, f"BitLocker 암호화 시작: {drive}")
+            progress_callback(0.0, f"Starting BitLocker encryption: {drive}")
 
-        # -UsedSpaceOnly: 사용된 공간만 암호화 (빠름)
-        # -SkipHardwareTest: 하드웨어 테스트 건너뛰기
+        # -UsedSpaceOnly: Encrypt only used space (faster)
+        # -SkipHardwareTest: Skip hardware test
         result = subprocess.run(
             ['manage-bde', '-on', drive, '-UsedSpaceOnly', '-SkipHardwareTest'],
             capture_output=True,
@@ -643,9 +643,9 @@ def enable_bitlocker(
             creationflags=subprocess.CREATE_NO_WINDOW
         )
 
-        # TPM 없이 실패할 경우 복구 키 기반 암호화 시도
+        # If failed without TPM, try recovery key based encryption
         if result.returncode != 0:
-            # 복구 비밀번호 생성 및 암호화 시도
+            # Generate recovery password and attempt encryption
             result = subprocess.run(
                 ['manage-bde', '-on', drive, '-RecoveryPassword', '-UsedSpaceOnly', '-SkipHardwareTest'],
                 capture_output=True,
@@ -670,7 +670,7 @@ def enable_bitlocker(
                 protection_status="On"
             )
 
-        # 완료까지 대기
+        # Wait until completion
         while True:
             time.sleep(check_interval)
             status = get_bitlocker_status(drive)
@@ -681,12 +681,12 @@ def enable_bitlocker(
             logger.info(f"BitLocker encryption progress: {status.percentage:.1f}%")
 
             if progress_callback:
-                progress_callback(status.percentage, f"암호화 진행 중: {status.percentage:.1f}%")
+                progress_callback(status.percentage, f"Encryption in progress: {status.percentage:.1f}%")
 
             if status.message == "fully_encrypted" or status.percentage >= 100.0:
                 logger.info(f"BitLocker encryption completed on {drive}")
                 if progress_callback:
-                    progress_callback(100.0, "암호화 완료")
+                    progress_callback(100.0, "Encryption completed")
                 return ManageBdeResult(
                     success=True,
                     message="encryption_completed",

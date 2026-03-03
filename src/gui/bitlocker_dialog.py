@@ -2,11 +2,12 @@
 """
 BitLocker Decryption Dialog
 
-BitLocker 암호화 볼륨 발견 시 사용자에게 복호화 키 입력을 요청하는 다이얼로그.
+Dialog that prompts the user to enter decryption key when a BitLocker encrypted volume is detected.
 """
 from dataclasses import dataclass
 from typing import Optional
 import os
+import re
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -21,43 +22,49 @@ from gui.styles import COLORS
 
 @dataclass
 class BitLockerDialogResult:
-    """BitLocker 다이얼로그 결과"""
+    """BitLocker dialog result"""
     success: bool = False
     key_type: str = ""          # 'recovery_password' | 'password' | 'bek_file' | 'auto_decrypt'
-    key_value: str = ""         # Recovery password 또는 password
-    bek_path: str = ""          # BEK 파일 경로
-    skip: bool = False          # 건너뛰기 (이전 방식 진행)
-    auto_decrypt: bool = False  # manage-bde 자동 해제 모드
+    key_value: str = ""         # Recovery password or password
+    bek_path: str = ""          # BEK file path
+    skip: bool = False          # Skip (proceed without decryption)
+    auto_decrypt: bool = False  # manage-bde auto-decrypt mode
 
 
 class BitLockerDialog(QDialog):
-    """BitLocker 복호화 키 입력 다이얼로그"""
+    """BitLocker decryption key input dialog"""
+
+    # Recovery key format: 8 groups of 6 digits separated by hyphens
+    _RECOVERY_KEY_PATTERN = r'^\d{6}-\d{6}-\d{6}-\d{6}-\d{6}-\d{6}-\d{6}-\d{6}$'
 
     def __init__(
         self,
         partition_info: dict = None,
         pybde_available: bool = True,
+        config: dict = None,
         parent=None
     ):
         """
         Args:
-            partition_info: BitLocker 파티션 정보
-                - partition_index: 파티션 인덱스
-                - partition_offset: 오프셋
-                - partition_size: 크기
-                - encryption_method: 암호화 방식
-            pybde_available: pybde 설치 여부
-            parent: 부모 위젯
+            partition_info: BitLocker partition information
+                - partition_index: Partition index
+                - partition_offset: Offset
+                - partition_size: Size
+                - encryption_method: Encryption method
+            pybde_available: Whether pybde is installed
+            config: Application config (for dev_mode flag)
+            parent: Parent widget
         """
         super().__init__(parent)
         self.partition_info = partition_info or {}
         self.pybde_available = pybde_available
+        self._dev_mode = config.get('dev_mode', False) if config else False
         self.result = BitLockerDialogResult()
         self.setup_ui()
 
     def setup_ui(self):
-        """UI 초기화"""
-        self.setWindowTitle("BitLocker 볼륨 감지됨")
+        """Initialize UI"""
+        self.setWindowTitle("BitLocker Volume Detected")
         self.setMinimumSize(520, 580)
         self.setModal(True)
         self.setStyleSheet(self._get_stylesheet())
@@ -66,27 +73,27 @@ class BitLockerDialog(QDialog):
         layout.setSpacing(8)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # 헤더
-        header = QLabel("🔒 BitLocker 암호화 볼륨 감지됨")
+        # Header
+        header = QLabel("BitLocker Encrypted Volume Detected")
         header.setObjectName("header")
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(header)
 
-        # 정보 배너
+        # Info banner
         info_frame = QFrame()
         info_frame.setObjectName("infoFrame")
         info_layout = QVBoxLayout(info_frame)
 
         info_text = (
-            "시스템에서 BitLocker로 암호화된 볼륨이 발견되었습니다.\n"
-            "복호화 키를 입력하면 암호화된 데이터에서 아티팩트를 수집할 수 있습니다."
+            "A BitLocker encrypted volume has been detected on the system.\n"
+            "Enter the decryption key to collect artifacts from the encrypted data."
         )
         info_label = QLabel(info_text)
         info_label.setObjectName("infoText")
         info_label.setWordWrap(True)
         info_layout.addWidget(info_label)
 
-        # 파티션 정보 표시
+        # Partition info display
         if self.partition_info:
             partition_text = self._format_partition_info()
             partition_label = QLabel(partition_text)
@@ -95,14 +102,14 @@ class BitLockerDialog(QDialog):
 
         layout.addWidget(info_frame)
 
-        # pybde 미설치 경고
+        # pybde not installed warning
         if not self.pybde_available:
             warning_frame = QFrame()
             warning_frame.setObjectName("warningFrame")
             warning_layout = QHBoxLayout(warning_frame)
             warning_label = QLabel(
-                "⚠️ pybde (libbde-python)가 설치되어 있지 않습니다.\n"
-                "BitLocker 복호화 기능을 사용하려면 설치가 필요합니다:\n"
+                "Warning: pybde (libbde-python) is not installed.\n"
+                "Installation is required to use BitLocker decryption:\n"
                 "pip install libbde-python"
             )
             warning_label.setObjectName("warningText")
@@ -110,63 +117,63 @@ class BitLockerDialog(QDialog):
             warning_layout.addWidget(warning_label)
             layout.addWidget(warning_frame)
 
-        # 키 타입 선택
-        key_group = QGroupBox("복호화 키 타입 선택")
+        # Key type selection
+        key_group = QGroupBox("Select Decryption Key Type")
         key_group.setObjectName("keyGroup")
         key_layout = QVBoxLayout(key_group)
 
         self.key_type_group = QButtonGroup(self)
 
-        # Recovery Password 옵션
-        self.radio_recovery = QRadioButton("복구 키 (Recovery Password)")
+        # Recovery Password option
+        self.radio_recovery = QRadioButton("Recovery Key (Recovery Password)")
         self.radio_recovery.setChecked(True)
         self.radio_recovery.setEnabled(self.pybde_available)
         self.key_type_group.addButton(self.radio_recovery)
         key_layout.addWidget(self.radio_recovery)
 
         recovery_desc = QLabel(
-            "   48자리 숫자 (예: 123456-234567-345678-456789-567890-678901-789012-890123)"
+            "   48-digit number (e.g., 123456-234567-345678-456789-567890-678901-789012-890123)"
         )
         recovery_desc.setObjectName("keyDesc")
         recovery_desc.setWordWrap(True)
         key_layout.addWidget(recovery_desc)
 
-        # Password 옵션
-        self.radio_password = QRadioButton("비밀번호 (Password)")
+        # Password option
+        self.radio_password = QRadioButton("Password")
         self.radio_password.setEnabled(self.pybde_available)
         self.key_type_group.addButton(self.radio_password)
         key_layout.addWidget(self.radio_password)
 
-        password_desc = QLabel("   BitLocker 설정 시 입력한 비밀번호")
+        password_desc = QLabel("   Password entered when BitLocker was configured")
         password_desc.setObjectName("keyDesc")
         key_layout.addWidget(password_desc)
 
-        # BEK File 옵션
-        self.radio_bek = QRadioButton("시작 키 파일 (BEK File)")
+        # BEK File option
+        self.radio_bek = QRadioButton("Startup Key File (BEK File)")
         self.radio_bek.setEnabled(self.pybde_available)
         self.key_type_group.addButton(self.radio_bek)
         key_layout.addWidget(self.radio_bek)
 
-        bek_desc = QLabel("   USB 드라이브 등에 저장된 .BEK 파일")
+        bek_desc = QLabel("   .BEK file stored on USB drive or similar")
         bek_desc.setObjectName("keyDesc")
         key_layout.addWidget(bek_desc)
 
-        # 구분선
+        # Separator
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setStyleSheet(f"background-color: {COLORS['border_subtle']};")
         key_layout.addWidget(separator)
 
-        # 자동 해제 옵션 (manage-bde)
-        self.radio_auto_decrypt = QRadioButton("🔓 자동 해제 후 수집 (manage-bde)")
-        self.radio_auto_decrypt.setEnabled(True)  # 항상 사용 가능 (Windows 기본 기능)
+        # Auto-decrypt option (manage-bde)
+        self.radio_auto_decrypt = QRadioButton("Auto-Decrypt and Collect (manage-bde)")
+        self.radio_auto_decrypt.setEnabled(True)  # Always available (Windows built-in)
         self.key_type_group.addButton(self.radio_auto_decrypt)
         key_layout.addWidget(self.radio_auto_decrypt)
 
         auto_desc = QLabel(
-            "   ⚠️ 시스템 BitLocker를 임시 해제 후 수집, 완료 후 재암호화\n"
-            "   • 관리자 권한 필요\n"
-            "   • 디스크 크기에 따라 수 분~수 시간 소요"
+            "   Warning: Temporarily disables system BitLocker, re-encrypts after collection\n"
+            "   - Administrator privileges required\n"
+            "   - May take several minutes to hours depending on disk size"
         )
         auto_desc.setObjectName("keyDesc")
         auto_desc.setWordWrap(True)
@@ -174,37 +181,49 @@ class BitLockerDialog(QDialog):
 
         layout.addWidget(key_group)
 
-        # 입력 필드 영역
+        # Input field area
         input_frame = QFrame()
         input_frame.setObjectName("inputFrame")
         input_layout = QVBoxLayout(input_frame)
 
-        # 키 입력 필드 (Recovery/Password 공용)
-        self.key_input_label = QLabel("복구 키:")
+        # Key input field (shared for Recovery/Password)
+        self.key_input_label = QLabel("Recovery Key:")
         input_layout.addWidget(self.key_input_label)
 
+        key_row = QHBoxLayout()
         self.key_input = QLineEdit()
         self.key_input.setPlaceholderText(
             "123456-234567-345678-456789-567890-678901-789012-890123"
         )
         self.key_input.setEnabled(self.pybde_available)
-        input_layout.addWidget(self.key_input)
+        # Dev: show key plaintext, Prod: mask recovery key
+        if not self._dev_mode:
+            self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        key_row.addWidget(self.key_input)
 
-        # BEK 파일 선택
+        self.show_key_btn = QPushButton("Show")
+        self.show_key_btn.setFixedWidth(60)
+        self.show_key_btn.setCheckable(True)
+        self.show_key_btn.toggled.connect(self._toggle_key_visibility)
+        key_row.addWidget(self.show_key_btn)
+
+        input_layout.addLayout(key_row)
+
+        # BEK file selection
         self.bek_layout = QHBoxLayout()
         self.bek_input = QLineEdit()
-        self.bek_input.setPlaceholderText(".BEK 파일 경로")
+        self.bek_input.setPlaceholderText(".BEK file path")
         self.bek_input.setEnabled(False)
         self.bek_layout.addWidget(self.bek_input)
 
-        self.bek_browse_btn = QPushButton("찾아보기...")
+        self.bek_browse_btn = QPushButton("Browse...")
         self.bek_browse_btn.setEnabled(False)
         self.bek_browse_btn.clicked.connect(self._browse_bek_file)
         self.bek_layout.addWidget(self.bek_browse_btn)
 
         input_layout.addLayout(self.bek_layout)
 
-        # 에러 메시지 영역
+        # Error message area
         self.error_label = QLabel("")
         self.error_label.setObjectName("errorLabel")
         self.error_label.setWordWrap(True)
@@ -213,21 +232,21 @@ class BitLockerDialog(QDialog):
 
         layout.addWidget(input_frame)
 
-        # 버튼
+        # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
-        self.skip_btn = QPushButton("건너뛰기 (암호화 상태로 수집)")
+        self.skip_btn = QPushButton("Skip (Collect Encrypted)")
         self.skip_btn.clicked.connect(self._on_skip)
         self.skip_btn.setMinimumWidth(180)
         button_layout.addWidget(self.skip_btn)
 
-        self.cancel_btn = QPushButton("취소")
+        self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
         self.cancel_btn.setMinimumWidth(80)
         button_layout.addWidget(self.cancel_btn)
 
-        self.unlock_btn = QPushButton("잠금 해제")
+        self.unlock_btn = QPushButton("Unlock")
         self.unlock_btn.setObjectName("unlockButton")
         self.unlock_btn.setEnabled(self.pybde_available)
         self.unlock_btn.clicked.connect(self._on_unlock)
@@ -236,74 +255,94 @@ class BitLockerDialog(QDialog):
 
         layout.addLayout(button_layout)
 
-        # 시그널 연결
+        # Connect signals
         self.radio_recovery.toggled.connect(self._on_key_type_changed)
         self.radio_password.toggled.connect(self._on_key_type_changed)
         self.radio_bek.toggled.connect(self._on_key_type_changed)
         self.radio_auto_decrypt.toggled.connect(self._on_key_type_changed)
 
     def _format_partition_info(self) -> str:
-        """파티션 정보 포맷팅"""
+        """Format partition info"""
         info = self.partition_info
         size_gb = info.get('partition_size', 0) / (1024 ** 3)
 
-        text = f"파티션 #{info.get('partition_index', 0)}"
+        text = f"Partition #{info.get('partition_index', 0)}"
         if size_gb > 0:
-            text += f" | 크기: {size_gb:.1f} GB"
+            text += f" | Size: {size_gb:.1f} GB"
         if info.get('encryption_method'):
-            text += f" | 암호화: {info['encryption_method']}"
+            text += f" | Encryption: {info['encryption_method']}"
 
         return text
 
+    def _toggle_key_visibility(self, checked: bool):
+        """Toggle key/password field visibility"""
+        if checked:
+            self.key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.show_key_btn.setText("Hide")
+        else:
+            self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.show_key_btn.setText("Show")
+
     def _on_key_type_changed(self):
-        """키 타입 변경 시 UI 업데이트"""
+        """Update UI when key type changes"""
+        # Reset show/hide toggle
+        self.show_key_btn.setChecked(False)
+
         if self.radio_recovery.isChecked():
-            self.key_input_label.setText("복구 키:")
+            self.key_input_label.setText("Recovery Key:")
             self.key_input.setPlaceholderText(
                 "123456-234567-345678-456789-567890-678901-789012-890123"
             )
             self.key_input.setEnabled(True)
-            self.key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            # Dev: show plaintext, Prod: mask
+            if self._dev_mode:
+                self.key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            else:
+                self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.show_key_btn.setEnabled(True)
             self.bek_input.setEnabled(False)
             self.bek_browse_btn.setEnabled(False)
 
         elif self.radio_password.isChecked():
-            self.key_input_label.setText("비밀번호:")
-            self.key_input.setPlaceholderText("BitLocker 비밀번호 입력")
+            self.key_input_label.setText("Password:")
+            self.key_input.setPlaceholderText("Enter BitLocker password")
             self.key_input.setEnabled(True)
             self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.show_key_btn.setEnabled(True)
             self.bek_input.setEnabled(False)
             self.bek_browse_btn.setEnabled(False)
 
         elif self.radio_bek.isChecked():
-            self.key_input_label.setText("BEK 파일:")
+            self.key_input_label.setText("BEK File:")
             self.key_input.setEnabled(False)
             self.key_input.clear()
+            self.show_key_btn.setEnabled(False)
             self.bek_input.setEnabled(True)
             self.bek_browse_btn.setEnabled(True)
 
         elif self.radio_auto_decrypt.isChecked():
-            self.key_input_label.setText("자동 해제:")
+            self.key_input_label.setText("Auto-Decrypt:")
             self.key_input.setEnabled(False)
             self.key_input.clear()
-            self.key_input.setPlaceholderText("키 입력 불필요")
+            self.show_key_btn.setEnabled(False)
+            self.key_input.setPlaceholderText("No key input required")
             self.bek_input.setEnabled(False)
             self.bek_browse_btn.setEnabled(False)
-            self.unlock_btn.setText("해제 시작")
-            self.unlock_btn.setEnabled(True)  # 자동 해제는 pybde 불필요
+            self.unlock_btn.setText("Start Decrypt")
+            self.unlock_btn.setEnabled(True)  # Auto-decrypt doesn't need pybde
 
-        # 자동 해제가 아닌 경우 버튼 텍스트/상태 복원
+        # Restore button text/state when not auto-decrypt
         if not self.radio_auto_decrypt.isChecked():
-            self.unlock_btn.setText("잠금 해제")
+            self.unlock_btn.setText("Unlock")
             self.unlock_btn.setEnabled(self.pybde_available)
 
         self.error_label.hide()
 
     def _browse_bek_file(self):
-        """BEK 파일 선택 다이얼로그"""
+        """BEK file selection dialog"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "BEK 파일 선택",
+            "Select BEK File",
             "",
             "BEK Files (*.bek *.BEK);;All Files (*)"
         )
@@ -311,58 +350,67 @@ class BitLockerDialog(QDialog):
             self.bek_input.setText(file_path)
 
     def _show_error(self, message: str):
-        """에러 메시지 표시"""
+        """Display error message"""
         self.error_label.setText(f"❌ {message}")
         self.error_label.show()
 
     def _validate_input(self) -> bool:
-        """입력값 검증"""
+        """Validate input"""
         if self.radio_recovery.isChecked():
             key = self.key_input.text().strip()
             if not key:
-                self._show_error("복구 키를 입력하세요.")
+                self._show_error("Please enter a recovery key.")
                 return False
 
-            # 숫자만 추출
+            # Extract digits only
             digits = ''.join(c for c in key if c.isdigit())
             if len(digits) != 48:
                 self._show_error(
-                    f"복구 키는 48자리 숫자여야 합니다. "
-                    f"(현재 {len(digits)}자리)"
+                    f"Recovery key must be 48 digits. "
+                    f"(Currently {len(digits)} digits)"
+                )
+                return False
+
+            # Validate format: 8 groups of 6 digits separated by hyphens
+            normalized = '-'.join(digits[i:i+6] for i in range(0, 48, 6))
+            if not re.match(self._RECOVERY_KEY_PATTERN, normalized):
+                self._show_error(
+                    "Invalid recovery key format.\n"
+                    "Expected: XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX"
                 )
                 return False
 
         elif self.radio_password.isChecked():
             if not self.key_input.text():
-                self._show_error("비밀번호를 입력하세요.")
+                self._show_error("Please enter a password.")
                 return False
 
         elif self.radio_bek.isChecked():
             bek_path = self.bek_input.text().strip()
             if not bek_path:
-                self._show_error("BEK 파일을 선택하세요.")
+                self._show_error("Please select a BEK file.")
                 return False
             if not os.path.exists(bek_path):
-                self._show_error("BEK 파일이 존재하지 않습니다.")
+                self._show_error("BEK file does not exist.")
                 return False
 
         elif self.radio_auto_decrypt.isChecked():
-            # 관리자 권한 확인
+            # Check administrator privileges
             try:
                 from utils.bitlocker import check_admin_privileges
                 if not check_admin_privileges():
                     self._show_error(
-                        "관리자 권한이 필요합니다.\n"
-                        "수집도구를 관리자 권한으로 다시 실행하세요."
+                        "Administrator privileges required.\n"
+                        "Please run the collector as administrator."
                     )
                     return False
             except ImportError:
-                pass  # 모듈 없으면 일단 진행
+                pass  # Proceed if module not available
 
         return True
 
     def _on_unlock(self):
-        """잠금 해제 버튼 클릭"""
+        """Unlock button clicked"""
         if not self._validate_input():
             return
 
@@ -371,7 +419,7 @@ class BitLockerDialog(QDialog):
 
         if self.radio_recovery.isChecked():
             self.result.key_type = "recovery_password"
-            # 복구 키 표준 형식으로 변환
+            # Convert recovery key to standard format
             key = self.key_input.text().strip()
             digits = ''.join(c for c in key if c.isdigit())
             groups = [digits[i:i+6] for i in range(0, 48, 6)]
@@ -386,15 +434,15 @@ class BitLockerDialog(QDialog):
             self.result.bek_path = self.bek_input.text().strip()
 
         elif self.radio_auto_decrypt.isChecked():
-            # 확인 다이얼로그
+            # Confirmation dialog
             reply = QMessageBox.warning(
                 self,
-                "BitLocker 자동 해제 확인",
-                "⚠️ 주의: 시스템의 BitLocker 암호화가 해제됩니다.\n\n"
-                "• 디스크 크기에 따라 수 분~수 시간이 소요됩니다.\n"
-                "• 수집 완료 후 자동으로 재암호화됩니다.\n"
-                "• 작업 중 시스템을 종료하지 마세요.\n\n"
-                "계속하시겠습니까?",
+                "BitLocker Auto-Decrypt Confirmation",
+                "Warning: The system's BitLocker encryption will be disabled.\n\n"
+                "- May take several minutes to hours depending on disk size.\n"
+                "- Will automatically re-encrypt after collection completes.\n"
+                "- Do not shut down the system during this operation.\n\n"
+                "Do you want to continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
@@ -408,14 +456,14 @@ class BitLockerDialog(QDialog):
         self.accept()
 
     def _on_skip(self):
-        """건너뛰기 버튼 클릭"""
-        # 확인 다이얼로그
+        """Skip button clicked"""
+        # Confirmation dialog
         reply = QMessageBox.question(
             self,
-            "BitLocker 건너뛰기",
-            "BitLocker 복호화를 건너뛰면 암호화된 상태로 데이터가 수집됩니다.\n"
-            "일부 아티팩트를 추출할 수 없을 수 있습니다.\n\n"
-            "계속하시겠습니까?",
+            "Skip BitLocker",
+            "Skipping BitLocker decryption will collect data in encrypted state.\n"
+            "Some artifacts may not be extractable.\n\n"
+            "Do you want to continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -426,11 +474,11 @@ class BitLockerDialog(QDialog):
             self.accept()
 
     def get_result(self) -> BitLockerDialogResult:
-        """결과 반환"""
+        """Return result"""
         return self.result
 
     def _get_stylesheet(self) -> str:
-        """스타일시트 - 플랫폼 통일 테마"""
+        """Stylesheet - platform unified theme"""
         return f"""
             QDialog {{
                 background-color: {COLORS['bg_primary']};
@@ -576,15 +624,17 @@ class BitLockerDialog(QDialog):
 def show_bitlocker_dialog(
     partition_info: dict = None,
     pybde_available: bool = True,
+    config: dict = None,
     parent=None
 ) -> BitLockerDialogResult:
     """
-    BitLocker 다이얼로그 표시 및 결과 반환
+    Display BitLocker dialog and return result.
 
     Args:
-        partition_info: 파티션 정보
-        pybde_available: pybde 설치 여부
-        parent: 부모 위젯
+        partition_info: Partition information
+        pybde_available: Whether pybde is installed
+        config: Application config (for dev_mode flag)
+        parent: Parent widget
 
     Returns:
         BitLockerDialogResult
@@ -592,6 +642,7 @@ def show_bitlocker_dialog(
     dialog = BitLockerDialog(
         partition_info=partition_info,
         pybde_available=pybde_available,
+        config=config,
         parent=parent
     )
     result_code = dialog.exec()
@@ -599,18 +650,18 @@ def show_bitlocker_dialog(
     if result_code == QDialog.DialogCode.Accepted:
         return dialog.get_result()
 
-    # 취소된 경우
+    # If cancelled
     return BitLockerDialogResult(success=False, skip=False)
 
 
 if __name__ == "__main__":
-    # 테스트용
+    # For testing
     from PyQt6.QtWidgets import QApplication
     import sys
 
     app = QApplication(sys.argv)
 
-    # 테스트 파티션 정보
+    # Test partition info
     test_info = {
         'partition_index': 0,
         'partition_offset': 1048576,
@@ -620,14 +671,15 @@ if __name__ == "__main__":
 
     result = show_bitlocker_dialog(
         partition_info=test_info,
-        pybde_available=True
+        pybde_available=True,
+        config={'dev_mode': True}
     )
 
-    # 테스트 결과 (디버그용 - 비활성화됨)
+    # Test result (debug - disabled)
     # if result.success:
-    #     print(f"잠금 해제 시도: {result.key_type}")
+    #     print(f"Unlock attempt: {result.key_type}")
     # elif result.skip:
-    #     print("건너뛰기 선택됨")
+    #     print("Skip selected")
     # else:
-    #     print("취소됨")
+    #     print("Cancelled")
     pass

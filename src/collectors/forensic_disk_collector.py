@@ -1,24 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Forensic Disk Collector - 계층화 폴백 수집기
+Forensic Disk Collector - Layered Fallback Collector
 
-ForensicDiskAccessor를 사용하여 잠긴 파일을 수집하고,
-실패 시 MFT → Legacy 순서로 폴백합니다.
+Collects locked files using ForensicDiskAccessor,
+with fallback in order: MFT -> Legacy on failure.
 
-수집 우선순위:
-1. ForensicDiskAccessor (raw sector access) - 잠긴 파일 직접 읽기
-2. MFTCollector (pytsk3) - MFT 기반 수집
-3. Legacy (shutil) - 일반 파일 복사
+Collection Priority:
+1. ForensicDiskAccessor (raw sector access) - Direct locked file reading
+2. MFTCollector (pytsk3) - MFT-based collection
+3. Legacy (shutil) - Standard file copy
 
 Features:
-- Registry hive 직접 읽기 (SYSTEM, SAM, SOFTWARE, SECURITY)
-- pagefile.sys 수집 (분석은 서버에서 수행)
-- hiberfil.sys 수집 (분석은 서버에서 수행)
-- ADS (Alternate Data Streams) 추출
-- 삭제된 파일 복구
+- Direct Registry hive reading (SYSTEM, SAM, SOFTWARE, SECURITY)
+- pagefile.sys collection (analysis performed on server)
+- hiberfil.sys collection (analysis performed on server)
+- ADS (Alternate Data Streams) extraction
+- Deleted file recovery
 
-Note: 이 수집기는 파일 수집만 수행합니다.
-      모든 분석 로직은 서버 측에서 처리됩니다.
+Note: This collector only performs file collection.
+      All analysis logic is handled server-side.
 """
 
 import os
@@ -76,9 +76,9 @@ LOCKED_FILE_PATHS = {
 
 class ForensicDiskCollector:
     """
-    계층화 폴백 포렌식 수집기
+    Layered Fallback Forensic Collector
 
-    ForensicDiskAccessor → MFTCollector → Legacy 순서로 수집을 시도합니다.
+    Attempts collection in order: ForensicDiskAccessor -> MFTCollector -> Legacy.
 
     Usage:
         with ForensicDiskCollector(output_dir, 'C') as collector:
@@ -93,12 +93,12 @@ class ForensicDiskCollector:
         use_forensic_disk: bool = True
     ):
         """
-        초기화
+        Initialize
 
         Args:
-            output_dir: 수집 결과 저장 경로
-            volume: 대상 볼륨 (기본: 'C')
-            use_forensic_disk: ForensicDiskAccessor 사용 여부
+            output_dir: Path to store collection results
+            volume: Target volume (default: 'C')
+            use_forensic_disk: Whether to use ForensicDiskAccessor
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -129,7 +129,7 @@ class ForensicDiskCollector:
             logger.info("Using fallback collection mode")
 
     def _get_physical_drive_number(self) -> Optional[int]:
-        """볼륨 문자에서 물리 드라이브 번호 가져오기"""
+        """Get physical drive number from volume letter"""
         try:
             import ctypes
             from ctypes import wintypes
@@ -155,7 +155,7 @@ class ForensicDiskCollector:
             )
 
             if handle == -1:
-                # 일반적으로 C: 드라이브는 PhysicalDrive0
+                # Typically C: drive is PhysicalDrive0
                 return 0
 
             try:
@@ -200,21 +200,21 @@ class ForensicDiskCollector:
             return 0  # Default
 
     def _find_partition_for_volume(self) -> Optional[int]:
-        """볼륨에 해당하는 파티션 인덱스 찾기"""
+        """Find partition index for volume"""
         if self.accessor is None:
             return None
 
         try:
             partitions = self.accessor.list_partitions()
 
-            # C: 드라이브는 일반적으로 첫 번째 NTFS 파티션
+            # C: drive is typically the first NTFS partition
             for i, part in enumerate(partitions):
                 if part.filesystem == 'NTFS':
-                    # 기본적으로 첫 번째 NTFS 파티션 선택
-                    # 더 정확한 매칭은 볼륨 시리얼 번호 비교 필요
+                    # Select first NTFS partition by default
+                    # More accurate matching requires volume serial number comparison
                     return i
 
-            # NTFS가 없으면 첫 번째 파티션
+            # If no NTFS, select first partition
             if partitions:
                 return 0
 
@@ -224,7 +224,7 @@ class ForensicDiskCollector:
         return 0
 
     def close(self):
-        """리소스 정리"""
+        """Cleanup resources"""
         if self.accessor:
             try:
                 self.accessor.close()
@@ -240,14 +240,14 @@ class ForensicDiskCollector:
 
     def read_locked_file(self, path: str, max_size: int = None) -> Optional[bytes]:
         """
-        잠긴 파일 읽기
+        Read locked file
 
         Args:
-            path: 파일 경로 (예: '/Windows/System32/config/SYSTEM')
-            max_size: 최대 읽기 크기
+            path: File path (e.g., '/Windows/System32/config/SYSTEM')
+            max_size: Maximum read size
 
         Returns:
-            파일 내용 (bytes) 또는 None
+            File content (bytes) or None
         """
         if self.accessor is None:
             return None
@@ -261,17 +261,19 @@ class ForensicDiskCollector:
     def collect(
         self,
         artifact_type: str,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        **kwargs
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        아티팩트 타입별 수집
+        Collect by artifact type
 
         Args:
             artifact_type: 'registry', 'pagefile', 'hiberfil', 'srudb', 'amcache'
-            progress_callback: 진행률 콜백
+            progress_callback: Progress callback
+            **kwargs: Additional arguments (e.g. include_deleted) - accepted for interface compatibility
 
         Yields:
-            (저장 경로, 메타데이터) 튜플
+            (storage_path, metadata) tuple
         """
         if artifact_type == 'registry':
             yield from self.collect_registry(progress_callback)
@@ -284,17 +286,17 @@ class ForensicDiskCollector:
         elif artifact_type == 'srudb':
             yield from self.collect_srudb(progress_callback)
         else:
-            logger.warning(f"Unknown artifact type: {artifact_type}")
+            logger.debug(f"Skipping unsupported artifact type: {artifact_type}")
 
     def collect_registry(
         self,
         progress_callback: Optional[callable] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        Registry hive 수집
+        Collect Registry hives
 
         Yields:
-            (저장 경로, 메타데이터) 튜플
+            (storage_path, metadata) tuple
         """
         registry_dir = self.output_dir / 'registry'
         registry_dir.mkdir(exist_ok=True)
@@ -311,7 +313,7 @@ class ForensicDiskCollector:
 
             try:
                 if self.accessor:
-                    # ForensicDiskAccessor로 직접 읽기
+                    # Direct read via ForensicDiskAccessor
                     data = self.accessor.read_file(path)
                     if data:
                         dst_path.write_bytes(data)
@@ -322,7 +324,7 @@ class ForensicDiskCollector:
             except Exception as e:
                 logger.warning(f"ForensicDiskAccessor failed for {path}: {e}")
 
-            # Fallback: 일반 파일 복사 시도
+            # Fallback: Try standard file copy
             win_path = f"{self.volume}:{path.replace('/', os.sep)}"
             if Path(win_path).exists():
                 try:
@@ -339,10 +341,10 @@ class ForensicDiskCollector:
         progress_callback: Optional[callable] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        pagefile.sys 수집
+        Collect pagefile.sys
 
         Yields:
-            (저장 경로, 메타데이터) 튜플
+            (storage_path, metadata) tuple
         """
         pagefile_dir = self.output_dir / 'pagefile'
         pagefile_dir.mkdir(exist_ok=True)
@@ -355,7 +357,7 @@ class ForensicDiskCollector:
 
         try:
             if self.accessor:
-                # 스트리밍으로 대용량 파일 수집
+                # Collect large file via streaming
                 with open(dst_path, 'wb') as f:
                     for chunk in self.accessor.stream_file(path, chunk_size=64*1024*1024):
                         f.write(chunk)
@@ -373,10 +375,10 @@ class ForensicDiskCollector:
         progress_callback: Optional[callable] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        hiberfil.sys 수집 (하이버네이션 파일)
+        Collect hiberfil.sys (hibernation file)
 
         Yields:
-            (저장 경로, 메타데이터) 튜플
+            (storage_path, metadata) tuple
         """
         hiberfil_dir = self.output_dir / 'hiberfil'
         hiberfil_dir.mkdir(exist_ok=True)
@@ -406,10 +408,10 @@ class ForensicDiskCollector:
         progress_callback: Optional[callable] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        Amcache.hve 수집
+        Collect Amcache.hve
 
         Yields:
-            (저장 경로, 메타데이터) 튜플
+            (storage_path, metadata) tuple
         """
         amcache_dir = self.output_dir / 'amcache'
         amcache_dir.mkdir(exist_ok=True)
@@ -449,10 +451,10 @@ class ForensicDiskCollector:
         progress_callback: Optional[callable] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        SRUDB.dat 수집 (System Resource Usage Monitor)
+        Collect SRUDB.dat (System Resource Usage Monitor)
 
         Yields:
-            (저장 경로, 메타데이터) 튜플
+            (storage_path, metadata) tuple
         """
         srudb_dir = self.output_dir / 'srudb'
         srudb_dir.mkdir(exist_ok=True)
@@ -493,27 +495,27 @@ class ForensicDiskCollector:
         stream_name: str = 'Zone.Identifier'
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
-        ADS (Alternate Data Stream) 수집
+        Collect ADS (Alternate Data Stream)
 
         Args:
-            file_path: 파일 경로
-            stream_name: ADS 스트림 이름 (기본: Zone.Identifier)
+            file_path: File path
+            stream_name: ADS stream name (default: Zone.Identifier)
 
         Returns:
-            (저장 경로, 메타데이터) 튜플 또는 None
+            (storage_path, metadata) tuple or None
         """
         if self.accessor is None:
             return None
 
         try:
-            # 파일의 MFT entry 찾기
+            # Find file's MFT entry
             normalized_path = file_path.replace('\\', '/')
             if not normalized_path.startswith('/'):
                 # C:\path\file → /path/file
                 if ':' in normalized_path:
                     normalized_path = '/' + normalized_path.split(':', 1)[1]
 
-            # ADS 읽기
+            # Read ADS
             inode = self.accessor._resolve_path_to_inode(normalized_path)
             if inode is None:
                 return None
@@ -547,7 +549,7 @@ class ForensicDiskCollector:
         artifact_type: str,
         data: bytes = None
     ) -> Dict[str, Any]:
-        """메타데이터 생성"""
+        """Create metadata"""
         metadata = {
             'original_path': original_path,
             'artifact_type': artifact_type,
@@ -560,7 +562,7 @@ class ForensicDiskCollector:
             metadata['size'] = stat.st_size
             metadata['modified_time'] = datetime.fromtimestamp(stat.st_mtime).isoformat()
 
-            # Hash 계산
+            # Calculate hash
             if data:
                 metadata['md5'] = hashlib.md5(data).hexdigest()
                 metadata['sha256'] = hashlib.sha256(data).hexdigest()
@@ -575,7 +577,7 @@ class ForensicDiskCollector:
 
 # Module-level availability check
 def is_forensic_disk_available() -> bool:
-    """ForensicDiskAccessor 사용 가능 여부"""
+    """Check if ForensicDiskAccessor is available"""
     return FORENSIC_DISK_AVAILABLE
 
 

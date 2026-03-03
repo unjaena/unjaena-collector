@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-File Content Extractor - Data Runs 기반 파일 내용 추출
+File Content Extractor - Data Runs based file content extraction
 
-MFT data runs 또는 FAT cluster chain을 사용하여
-raw disk에서 직접 파일 내용을 읽습니다.
+Uses MFT data runs or FAT cluster chain to read
+file content directly from raw disk.
 
-핵심 기능:
-- MFT entry → data runs → raw sectors → 파일 내용
-- ADS (Alternate Data Streams) 지원
-- 삭제된 파일 복구
-- 대용량 파일 스트리밍
+Key features:
+- MFT entry -> data runs -> raw sectors -> file content
+- ADS (Alternate Data Streams) support
+- Deleted file recovery
+- Large file streaming
 
-이 모듈은 Windows 파일시스템을 완전히 우회합니다.
-따라서 잠긴 파일(pagefile.sys, registry hives 등)도 읽을 수 있습니다.
+This module completely bypasses the Windows filesystem.
+Therefore, it can read locked files (pagefile.sys, registry hives, etc.).
 
 Usage:
     from core.engine.collectors.filesystem.disk_backends import PhysicalDiskBackend
@@ -21,13 +21,13 @@ Usage:
     with PhysicalDiskBackend(0) as disk:
         extractor = FileContentExtractor(disk, partition_offset=0x100000, fs_type='NTFS')
 
-        # MFT entry로 파일 읽기
+        # Read file by MFT entry
         data = extractor.read_file_by_inode(12345)
 
-        # ADS 읽기
+        # Read ADS
         zone_id = extractor.read_file_by_inode(12345, stream_name="Zone.Identifier")
 
-        # 대용량 파일 스트리밍
+        # Stream large file
         for chunk in extractor.stream_file_by_inode(12345):
             process(chunk)
 """
@@ -46,11 +46,11 @@ from datetime import datetime
 _DEBUG_LOG_FILE = None
 
 def _debug_log(message: str):
-    """콘솔과 파일 모두에 디버그 로그 출력"""
+    """Output debug log to both console and file"""
     global _DEBUG_LOG_FILE
     _debug_print(message, flush=True)
 
-    # 파일에도 기록
+    # Also write to file
     try:
         if _DEBUG_LOG_FILE is None:
             import tempfile
@@ -78,10 +78,10 @@ def _debug_print(msg):
 
 @dataclass
 class DataRun:
-    """NTFS Data Run (클러스터 범위)"""
+    """NTFS Data Run (cluster range)"""
     lcn: Optional[int]  # Logical Cluster Number (None = sparse)
-    length: int         # 클러스터 수
-    vcn_start: int = 0  # Virtual Cluster Number (파일 내 오프셋)
+    length: int         # Number of clusters
+    vcn_start: int = 0  # Virtual Cluster Number (offset within file)
 
     @property
     def is_sparse(self) -> bool:
@@ -90,7 +90,7 @@ class DataRun:
 
 @dataclass
 class FileMetadata:
-    """파일 메타데이터 (MFT entry에서 추출)"""
+    """File metadata (extracted from MFT entry)"""
     inode: int
     filename: str = ""
     full_path: str = ""
@@ -101,28 +101,28 @@ class FileMetadata:
     is_deleted: bool = False
     is_resident: bool = False
 
-    # Resident 파일의 경우 데이터가 MFT entry 내에 저장됨
+    # For resident files, data is stored within the MFT entry
     resident_data: bytes = field(default_factory=bytes)
 
-    # Non-resident 파일의 data runs
+    # Data runs for non-resident files
     data_runs: List[DataRun] = field(default_factory=list)
 
-    # ADS (Alternate Data Streams) 이름 목록
+    # ADS (Alternate Data Streams) name list
     ads_streams: List[str] = field(default_factory=list)
 
-    # 타임스탬프 (FILETIME)
+    # Timestamps (FILETIME)
     created_time: int = 0
     modified_time: int = 0
     accessed_time: int = 0
     mft_changed_time: int = 0
 
-    # 추가 속성
-    parent_ref: int = 0  # 부모 디렉토리 MFT 참조
-    flags: int = 0       # MFT entry 플래그
+    # Additional attributes
+    parent_ref: int = 0  # Parent directory MFT reference
+    flags: int = 0       # MFT entry flags
 
 
 class MFTAttributeType(IntEnum):
-    """NTFS MFT 속성 타입"""
+    """NTFS MFT attribute types"""
     STANDARD_INFORMATION = 0x10
     ATTRIBUTE_LIST = 0x20
     FILE_NAME = 0x30
@@ -146,21 +146,21 @@ class MFTAttributeType(IntEnum):
 
 class FileContentExtractor:
     """
-    Data Runs 기반 파일 내용 추출기
+    Data Runs based file content extractor
 
-    raw disk에서 MFT data runs를 따라 파일 내용을 직접 읽습니다.
-    Windows 파일시스템을 완전히 우회하므로 잠긴 파일도 읽을 수 있습니다.
+    Reads file content directly from raw disk following MFT data runs.
+    Completely bypasses the Windows filesystem so locked files can also be read.
 
-    지원 파일시스템:
+    Supported filesystems:
     - NTFS (data runs)
     - FAT32/exFAT (cluster chain)
-    - ext4 (extents) - 부분 지원
+    - ext4 (extents) - partial support
     """
 
-    # MFT Entry 크기 (보통 1024 바이트)
+    # MFT Entry size (typically 1024 bytes)
     MFT_RECORD_SIZE = 1024
 
-    # 기본 청크 크기 (64MB)
+    # Default chunk size (64MB)
     DEFAULT_CHUNK_SIZE = 64 * 1024 * 1024
 
     def __init__(
@@ -171,34 +171,34 @@ class FileContentExtractor:
     ):
         """
         Args:
-            disk: UnifiedDiskReader 백엔드
-            partition_offset: 파티션 시작 오프셋 (바이트)
-            fs_type: 파일시스템 타입 ('NTFS', 'FAT32', 'exFAT', 'ext4')
+            disk: UnifiedDiskReader backend
+            partition_offset: Partition start offset (bytes)
+            fs_type: Filesystem type ('NTFS', 'FAT32', 'exFAT', 'ext4')
         """
         self.disk = disk
         self.partition_offset = partition_offset
         self.fs_type = fs_type.upper()
 
-        # 파일시스템 파라미터 (VBR에서 읽음)
+        # Filesystem parameters (read from VBR)
         self.bytes_per_sector = 512
         self.sectors_per_cluster = 8
         self.cluster_size = 4096
 
-        # NTFS 전용
+        # NTFS specific
         self.mft_lcn = 0
         self.mft_record_size = 1024
         self._mft_runs: List[DataRun] = []
 
-        # FAT 전용
+        # FAT specific
         self.fat_offset = 0
         self.data_area_offset = 0
         self.root_cluster = 0
 
-        # 초기화
+        # Initialize
         self._init_filesystem()
 
     def _init_filesystem(self):
-        """파일시스템 파라미터 초기화 (VBR 읽기)"""
+        """Initialize filesystem parameters (read VBR)"""
         vbr = self.disk.read(self.partition_offset, 512)
 
         if self.fs_type == 'NTFS':
@@ -217,23 +217,23 @@ class FileContentExtractor:
             logger.warning(f"Unknown filesystem type: {self.fs_type}")
 
     def _init_ntfs(self, vbr: bytes):
-        """NTFS 파라미터 초기화"""
-        # OEM ID 확인
+        """Initialize NTFS parameters"""
+        # Check OEM ID
         if vbr[3:11] != b'NTFS    ':
-            # BitLocker 확인
+            # Check for BitLocker
             if vbr[3:11] == b'-FVE-FS-':
                 raise FilesystemError("BitLocker encrypted volume - cannot access raw data")
             raise FilesystemError(f"Not an NTFS partition (OEM: {vbr[3:11]})")
 
-        # BPB (BIOS Parameter Block) 파싱
+        # Parse BPB (BIOS Parameter Block)
         self.bytes_per_sector = struct.unpack('<H', vbr[11:13])[0]
         self.sectors_per_cluster = vbr[13]
         self.cluster_size = self.bytes_per_sector * self.sectors_per_cluster
 
-        # MFT 위치 (클러스터 번호)
+        # MFT location (cluster number)
         self.mft_lcn = struct.unpack('<Q', vbr[48:56])[0]
 
-        # MFT entry 크기
+        # MFT entry size
         mft_record_size_raw = struct.unpack('<b', vbr[64:65])[0]
         if mft_record_size_raw > 0:
             self.mft_record_size = mft_record_size_raw * self.cluster_size
@@ -243,11 +243,11 @@ class FileContentExtractor:
         logger.info(f"[NTFS] Cluster size: {self.cluster_size}, MFT LCN: {self.mft_lcn}, "
                    f"MFT record size: {self.mft_record_size}")
 
-        # MFT 자체의 data runs 로드 (MFT entry 0)
+        # Load MFT's own data runs (MFT entry 0)
         self._load_mft_runs()
 
     def _init_fat(self, vbr: bytes):
-        """FAT32 파라미터 초기화"""
+        """Initialize FAT32 parameters"""
         self.bytes_per_sector = struct.unpack('<H', vbr[11:13])[0]
         self.sectors_per_cluster = vbr[13]
         self.cluster_size = self.bytes_per_sector * self.sectors_per_cluster
@@ -263,7 +263,7 @@ class FileContentExtractor:
         logger.info(f"[FAT32] Cluster size: {self.cluster_size}, Root cluster: {self.root_cluster}")
 
     def _init_exfat(self, vbr: bytes):
-        """exFAT 파라미터 초기화"""
+        """Initialize exFAT parameters"""
         if vbr[3:11] != b'EXFAT   ':
             raise FilesystemError("Not an exFAT partition")
 
@@ -285,7 +285,7 @@ class FileContentExtractor:
         logger.info(f"[exFAT] Cluster size: {self.cluster_size}, Root cluster: {self.root_cluster}")
 
     def _init_ext(self, vbr: bytes):
-        """ext2/3/4 파라미터 초기화"""
+        """Initialize ext2/3/4 parameters"""
         # Superblock is at offset 1024 from partition start
         sb = self.disk.read(self.partition_offset + 1024, 256)
 
@@ -329,7 +329,7 @@ class FileContentExtractor:
                    f"Inode size: {self.ext_inode_size}")
 
     def _init_apfs(self, vbr: bytes):
-        """APFS 파라미터 초기화"""
+        """Initialize APFS parameters"""
         # APFS Container Superblock (offset 0 or 32)
         # Check for NXSB magic
         if len(vbr) >= 36 and vbr[32:36] == b'NXSB':
@@ -356,7 +356,7 @@ class FileContentExtractor:
         logger.info(f"[APFS] Block size: {self.cluster_size} (pytsk3 required for full access)")
 
     def _init_hfs(self, vbr: bytes):
-        """HFS/HFS+ 파라미터 초기화"""
+        """Initialize HFS/HFS+ parameters"""
         # HFS+ Volume Header is at offset 1024
         vh = self.disk.read(self.partition_offset + 1024, 512)
 
@@ -396,7 +396,7 @@ class FileContentExtractor:
     # ==========================================================================
 
     def _get_ext_block_group_descriptor(self, group_num: int) -> dict:
-        """ext 블록 그룹 디스크립터 읽기"""
+        """Read ext block group descriptor"""
         # Block group descriptor table starts at block 1 (or 2 for 1K block size)
         if self.cluster_size == 1024:
             gdt_block = 2
@@ -418,7 +418,7 @@ class FileContentExtractor:
         }
 
     def _read_ext_inode(self, inode_num: int) -> bytes:
-        """ext inode 읽기"""
+        """Read ext inode"""
         if inode_num < 1:
             raise FilesystemError(f"Invalid inode number: {inode_num}")
 
@@ -440,7 +440,7 @@ class FileContentExtractor:
         return self.disk.read(inode_offset, self.ext_inode_size)
 
     def _parse_ext_inode(self, inode_data: bytes) -> dict:
-        """ext inode 파싱"""
+        """Parse ext inode"""
         return {
             'mode': struct.unpack('<H', inode_data[0:2])[0],
             'uid': struct.unpack('<H', inode_data[2:4])[0],
@@ -458,7 +458,7 @@ class FileContentExtractor:
         }
 
     def _read_ext_file_blocks(self, inode_data: bytes, file_size: int) -> bytes:
-        """ext 파일 블록 읽기 (direct/indirect blocks)"""
+        """Read ext file blocks (direct/indirect blocks)"""
         inode = self._parse_ext_inode(inode_data)
 
         # Check for extents (ext4)
@@ -470,7 +470,7 @@ class FileContentExtractor:
             return self._read_ext_indirect_blocks(inode_data, file_size)
 
     def _read_ext4_extents(self, inode_data: bytes, file_size: int) -> bytes:
-        """ext4 extent tree에서 파일 데이터 읽기"""
+        """Read file data from ext4 extent tree"""
         data = bytearray()
         bytes_read = 0
 
@@ -527,7 +527,7 @@ class FileContentExtractor:
         return bytes(data[:file_size])
 
     def _read_ext_indirect_blocks(self, inode_data: bytes, file_size: int) -> bytes:
-        """ext2/3 indirect block 방식으로 파일 읽기"""
+        """Read file using ext2/3 indirect block method"""
         data = bytearray()
         bytes_read = 0
 
@@ -575,7 +575,7 @@ class FileContentExtractor:
 
     def _read_indirect_block(self, block_num: int, data: bytearray, bytes_read: int,
                              file_size: int, level: int) -> int:
-        """재귀적으로 indirect block 읽기"""
+        """Recursively read indirect blocks"""
         if bytes_read >= file_size or block_num == 0:
             return bytes_read
 
@@ -612,29 +612,29 @@ class FileContentExtractor:
     # ==========================================================================
 
     def _load_mft_runs(self):
-        """MFT 자체의 data runs 로드 (entry 0)"""
-        # MFT entry 0 읽기 (MFT 자신)
+        """Load MFT's own data runs (entry 0)"""
+        # Read MFT entry 0 (MFT itself)
         mft_offset = self.partition_offset + (self.mft_lcn * self.cluster_size)
         entry_0 = self.disk.read(mft_offset, self.mft_record_size)
 
         if entry_0[:4] != b'FILE':
             raise FilesystemError("Invalid MFT entry 0 signature")
 
-        # Fixup 적용
+        # Apply fixup
         entry_0 = self._apply_fixup(entry_0)
 
-        # $DATA 속성에서 data runs 파싱
+        # Parse data runs from $DATA attribute
         self._mft_runs = self._parse_data_attribute(entry_0)
 
         if not self._mft_runs:
-            # 폴백: 연속된 MFT 가정
+            # Fallback: assume contiguous MFT
             logger.warning("Could not parse MFT data runs, assuming contiguous MFT")
             self._mft_runs = [DataRun(lcn=self.mft_lcn, length=1000000, vcn_start=0)]
 
         logger.debug(f"MFT data runs: {len(self._mft_runs)}")
 
     def _apply_fixup(self, entry: bytes) -> bytes:
-        """MFT entry의 fixup array 적용"""
+        """Apply MFT entry's fixup array"""
         if len(entry) < 48:
             return entry
 
@@ -647,14 +647,14 @@ class FileContentExtractor:
 
         entry = bytearray(entry)
 
-        # USA 값 읽기
+        # Read USA value
         usa_value = entry[usa_offset:usa_offset + 2]
 
-        # 각 섹터 끝의 USA 적용
+        # Apply USA to end of each sector
         for i in range(1, usa_count):
             sector_end = (i * 512) - 2
             if sector_end + 2 <= len(entry) and usa_offset + (i * 2) + 2 <= len(entry):
-                # USA 검증 후 복원
+                # Validate and restore USA
                 original_bytes = entry[usa_offset + (i * 2):usa_offset + (i * 2) + 2]
                 entry[sector_end:sector_end + 2] = original_bytes
 
@@ -662,18 +662,18 @@ class FileContentExtractor:
 
     def read_mft_entry(self, entry_number: int) -> bytes:
         """
-        MFT entry 읽기 (단편화된 MFT 지원)
+        Read MFT entry (supports fragmented MFT)
 
         Args:
-            entry_number: MFT entry 번호
+            entry_number: MFT entry number
 
         Returns:
-            MFT entry 데이터 (fixup 적용됨)
+            MFT entry data (fixup applied)
         """
         entries_per_cluster = self.cluster_size // self.mft_record_size
         target_entry = entry_number
 
-        # Data runs를 따라 entry 위치 찾기
+        # Find entry position following data runs
         for run in self._mft_runs:
             if run.is_sparse:
                 continue
@@ -689,7 +689,7 @@ class FileContentExtractor:
 
                 entry_data = self.disk.read(disk_offset, self.mft_record_size)
 
-                # Fixup 적용
+                # Apply fixup
                 if entry_data[:4] == b'FILE':
                     entry_data = self._apply_fixup(entry_data)
 
@@ -705,14 +705,14 @@ class FileContentExtractor:
         stream_name: str = None
     ) -> List[DataRun]:
         """
-        MFT entry에서 $DATA 속성의 data runs 파싱
+        Parse data runs from $DATA attribute in MFT entry
 
         Args:
-            mft_entry: MFT entry 데이터
-            stream_name: ADS 이름 (None = 기본 $DATA)
+            mft_entry: MFT entry data
+            stream_name: ADS name (None = default $DATA)
 
         Returns:
-            DataRun 리스트
+            List of DataRun
         """
         if mft_entry[:4] != b'FILE':
             return []
@@ -731,9 +731,9 @@ class FileContentExtractor:
             if attr_length == 0 or attr_length > self.mft_record_size:
                 break
 
-            # $DATA 속성 (0x80)
+            # $DATA attribute (0x80)
             if attr_type == MFTAttributeType.DATA:
-                # 속성 이름 확인
+                # Check attribute name
                 name_length = mft_entry[pos+9]
                 attr_name = ""
 
@@ -741,17 +741,17 @@ class FileContentExtractor:
                     name_offset = struct.unpack('<H', mft_entry[pos+10:pos+12])[0]
                     attr_name = mft_entry[pos+name_offset:pos+name_offset+name_length*2].decode('utf-16-le', errors='ignore')
 
-                # 스트림 이름 매칭
+                # Stream name matching
                 if stream_name is not None:
                     if attr_name != stream_name:
                         pos += attr_length
                         continue
                 elif name_length > 0:
-                    # 기본 $DATA (이름 없음)를 찾는 경우 - named stream 건너뛰기
+                    # Looking for default $DATA (no name) - skip named streams
                     pos += attr_length
                     continue
 
-                # Non-resident 플래그
+                # Non-resident flag
                 non_resident = mft_entry[pos+8]
 
                 if non_resident:
@@ -764,7 +764,7 @@ class FileContentExtractor:
         return runs
 
     def _parse_data_runs_bytes(self, mft_entry: bytes, attr_pos: int) -> List[DataRun]:
-        """Data runs 바이트 파싱"""
+        """Parse data runs bytes"""
         runs = []
 
         data_runs_offset = struct.unpack('<H', mft_entry[attr_pos+0x20:attr_pos+0x22])[0]
@@ -787,13 +787,13 @@ class FileContentExtractor:
             if pos + 1 + length_bytes > len(mft_entry):
                 break
 
-            # Run length (클러스터 수)
+            # Run length (cluster count)
             run_length = int.from_bytes(
                 mft_entry[pos+1:pos+1+length_bytes],
                 byteorder='little'
             )
 
-            # Run offset (상대 LCN)
+            # Run offset (relative LCN)
             is_sparse = False
             if offset_bytes > 0:
                 if pos + 1 + length_bytes + offset_bytes > len(mft_entry):
@@ -831,33 +831,33 @@ class FileContentExtractor:
         max_size: int = None
     ) -> bytes:
         """
-        MFT entry 번호로 파일 내용 읽기
+        Read file content by MFT entry number
 
         Args:
-            inode: MFT entry 번호
-            stream_name: ADS 이름 (None = 기본 $DATA)
-            max_size: 최대 읽기 크기
+            inode: MFT entry number
+            stream_name: ADS name (None = default $DATA)
+            max_size: Maximum read size
 
         Returns:
-            파일 내용 (bytes)
+            File content (bytes)
         """
-        # MFT entry 읽기
+        # Read MFT entry
         entry = self.read_mft_entry(inode)
 
         if entry[:4] != b'FILE':
             raise FilesystemError(f"Invalid MFT entry at inode {inode}")
 
-        # 파일 메타데이터 추출
+        # Extract file metadata
         metadata = self._parse_mft_entry_metadata(entry, inode, stream_name)
 
-        # Resident 데이터
+        # Resident data
         if metadata.is_resident:
             data = metadata.resident_data
             if max_size:
                 data = data[:max_size]
             return data
 
-        # Non-resident: data runs 따라 읽기
+        # Non-resident: read following data runs
         return self._read_data_runs(metadata.data_runs, metadata.size, max_size)
 
     def stream_file_by_inode(
@@ -867,15 +867,15 @@ class FileContentExtractor:
         chunk_size: int = DEFAULT_CHUNK_SIZE
     ) -> Generator[bytes, None, None]:
         """
-        대용량 파일 스트리밍
+        Stream large file
 
         Args:
-            inode: MFT entry 번호
-            stream_name: ADS 이름
-            chunk_size: 청크 크기
+            inode: MFT entry number
+            stream_name: ADS name
+            chunk_size: Chunk size
 
         Yields:
-            파일 데이터 청크
+            File data chunks
         """
         entry = self.read_mft_entry(inode)
         metadata = self._parse_mft_entry_metadata(entry, inode, stream_name)
@@ -888,26 +888,26 @@ class FileContentExtractor:
 
     def get_file_metadata(self, inode: int) -> FileMetadata:
         """
-        파일 메타데이터 조회
+        Get file metadata
 
         Args:
-            inode: MFT entry 번호
+            inode: MFT entry number
 
         Returns:
-            FileMetadata 객체
+            FileMetadata object
         """
         entry = self.read_mft_entry(inode)
         return self._parse_mft_entry_metadata(entry, inode)
 
     def list_ads_streams(self, inode: int) -> List[str]:
         """
-        ADS 스트림 목록
+        List ADS streams
 
         Args:
-            inode: MFT entry 번호
+            inode: MFT entry number
 
         Returns:
-            ADS 이름 리스트 (기본 $DATA 제외)
+            List of ADS names (excluding default $DATA)
         """
         entry = self.read_mft_entry(inode)
         return self._extract_ads_list(entry)
@@ -922,28 +922,28 @@ class FileContentExtractor:
         inode: int,
         stream_name: str = None
     ) -> FileMetadata:
-        """MFT entry에서 메타데이터 추출"""
+        """Extract metadata from MFT entry"""
         if entry[:4] != b'FILE':
             raise FilesystemError(f"Invalid MFT signature at inode {inode}")
 
-        # 플래그
+        # Flags
         flags = struct.unpack('<H', entry[0x16:0x18])[0]
         is_directory = (flags & 0x02) != 0
         is_deleted = (flags & 0x01) == 0
 
-        # 파일명 추출
+        # Extract filename
         filename = self._extract_filename(entry)
 
-        # 타임스탬프 추출
+        # Extract timestamps
         timestamps = self._extract_timestamps(entry)
 
-        # 부모 디렉토리 참조
+        # Parent directory reference
         parent_ref = self._extract_parent_ref(entry)
 
-        # ADS 목록
+        # ADS list
         ads_streams = self._extract_ads_list(entry)
 
-        # $DATA 속성 파싱
+        # Parse $DATA attribute
         is_resident, resident_data, data_runs, file_size = self._extract_data_info(entry, stream_name)
 
         return FileMetadata(
@@ -965,7 +965,7 @@ class FileContentExtractor:
         )
 
     def _extract_filename(self, entry: bytes) -> str:
-        """$FILE_NAME 속성에서 파일명 추출"""
+        """Extract filename from $FILE_NAME attribute"""
         attr_offset = struct.unpack('<H', entry[0x14:0x16])[0]
         pos = attr_offset
 
@@ -981,20 +981,20 @@ class FileContentExtractor:
             if attr_length == 0 or attr_length > self.mft_record_size:
                 break
 
-            # $FILE_NAME 속성 (0x30)
+            # $FILE_NAME attribute (0x30)
             if attr_type == MFTAttributeType.FILE_NAME:
                 non_resident = entry[pos+8]
 
-                if not non_resident:  # FILE_NAME은 항상 resident
+                if not non_resident:  # FILE_NAME is always resident
                     content_offset = struct.unpack('<H', entry[pos+0x14:pos+0x16])[0]
                     content_pos = pos + content_offset
 
                     if content_pos + 66 <= len(entry):
-                        # 파일명 길이 (문자 수)
+                        # Filename length (character count)
                         name_length = entry[content_pos + 64]
                         namespace = entry[content_pos + 65]
 
-                        # Win32 또는 POSIX 네임스페이스 선호
+                        # Prefer Win32 or POSIX namespace
                         if namespace in (1, 3) or not filename:  # Win32, POSIX
                             name_bytes = entry[content_pos + 66:content_pos + 66 + name_length * 2]
                             try:
@@ -1009,7 +1009,7 @@ class FileContentExtractor:
         return filename
 
     def _extract_timestamps(self, entry: bytes) -> Dict[str, int]:
-        """$STANDARD_INFORMATION에서 타임스탬프 추출"""
+        """Extract timestamps from $STANDARD_INFORMATION"""
         timestamps = {}
 
         attr_offset = struct.unpack('<H', entry[0x14:0x16])[0]
@@ -1046,7 +1046,7 @@ class FileContentExtractor:
         return timestamps
 
     def _extract_parent_ref(self, entry: bytes) -> int:
-        """$FILE_NAME에서 부모 디렉토리 참조 추출"""
+        """Extract parent directory reference from $FILE_NAME"""
         attr_offset = struct.unpack('<H', entry[0x14:0x16])[0]
         pos = attr_offset
 
@@ -1069,18 +1069,25 @@ class FileContentExtractor:
 
                     if content_pos + 8 <= len(entry):
                         parent_ref = struct.unpack('<Q', entry[content_pos:content_pos+8])[0]
-                        return parent_ref & 0xFFFFFFFFFFFF  # 하위 48비트만
+                        return parent_ref & 0xFFFFFFFFFFFF  # Lower 48 bits only
 
             pos += attr_length
 
         return 0
 
-    def _extract_data_info(
-        self,
-        entry: bytes,
-        stream_name: str = None
-    ) -> Tuple[bool, bytes, List[DataRun], int]:
-        """$DATA 속성에서 데이터 정보 추출"""
+    def _parse_attribute_list(self, entry: bytes) -> List[Dict[str, Any]]:
+        """
+        Parse ATTRIBUTE_LIST attribute - extract extension MFT record references
+
+        Returns:
+            List of dicts with keys:
+            - attr_type: Attribute type (0x80 = $DATA)
+            - name: Attribute name (ADS stream name)
+            - mft_ref: Extension MFT record number
+            - starting_vcn: Starting VCN
+        """
+        result = []
+
         attr_offset = struct.unpack('<H', entry[0x14:0x16])[0]
         pos = attr_offset
 
@@ -1094,8 +1101,80 @@ class FileContentExtractor:
             if attr_length == 0 or attr_length > self.mft_record_size:
                 break
 
+            # ATTRIBUTE_LIST attribute (0x20)
+            if attr_type == MFTAttributeType.ATTRIBUTE_LIST:
+                non_resident = entry[pos+8]
+
+                if non_resident:
+                    # Non-resident ATTRIBUTE_LIST - need to follow data runs
+                    # Complex case, currently skipped
+                    logger.debug("Non-resident ATTRIBUTE_LIST - not supported yet")
+                else:
+                    # Resident ATTRIBUTE_LIST
+                    content_length = struct.unpack('<I', entry[pos+0x10:pos+0x14])[0]
+                    content_offset = struct.unpack('<H', entry[pos+0x14:pos+0x16])[0]
+                    list_data = entry[pos+content_offset:pos+content_offset+content_length]
+
+                    # Parse ATTRIBUTE_LIST entries
+                    list_pos = 0
+                    while list_pos < len(list_data) - 26:
+                        entry_type = struct.unpack('<I', list_data[list_pos:list_pos+4])[0]
+                        entry_length = struct.unpack('<H', list_data[list_pos+4:list_pos+6])[0]
+
+                        if entry_length == 0 or entry_length < 26:
+                            break
+
+                        name_length = list_data[list_pos+6]
+                        name_offset = list_data[list_pos+7]
+                        starting_vcn = struct.unpack('<Q', list_data[list_pos+8:list_pos+16])[0]
+                        mft_ref = struct.unpack('<Q', list_data[list_pos+16:list_pos+24])[0]
+                        mft_record_num = mft_ref & 0xFFFFFFFFFFFF  # Lower 48 bits
+
+                        # Extract attribute name
+                        attr_name = ""
+                        if name_length > 0:
+                            name_start = list_pos + name_offset
+                            name_end = name_start + name_length * 2
+                            if name_end <= len(list_data):
+                                attr_name = list_data[name_start:name_end].decode('utf-16-le', errors='ignore')
+
+                        result.append({
+                            'attr_type': entry_type,
+                            'name': attr_name,
+                            'mft_ref': mft_record_num,
+                            'starting_vcn': starting_vcn
+                        })
+
+                        list_pos += entry_length
+
+                return result
+
+            pos += attr_length
+
+        return result
+
+    def _extract_data_info(
+        self,
+        entry: bytes,
+        stream_name: str = None
+    ) -> Tuple[bool, bytes, List[DataRun], int]:
+        """Extract data info from $DATA attribute (ATTRIBUTE_LIST supported)"""
+        attr_offset = struct.unpack('<H', entry[0x14:0x16])[0]
+        pos = attr_offset
+
+        # First search for $DATA attribute in base MFT entry
+        while pos < len(entry) - 24:
+            attr_type = struct.unpack('<I', entry[pos:pos+4])[0]
+
+            if attr_type == MFTAttributeType.END_MARKER:
+                break
+
+            attr_length = struct.unpack('<I', entry[pos+4:pos+8])[0]
+            if attr_length == 0 or attr_length > self.mft_record_size:
+                break
+
             if attr_type == MFTAttributeType.DATA:
-                # 스트림 이름 확인
+                # Check stream name
                 name_length = entry[pos+9]
                 attr_name = ""
 
@@ -1103,7 +1182,7 @@ class FileContentExtractor:
                     name_offset = struct.unpack('<H', entry[pos+10:pos+12])[0]
                     attr_name = entry[pos+name_offset:pos+name_offset+name_length*2].decode('utf-16-le', errors='ignore')
 
-                # 이름 매칭
+                # Name matching
                 if stream_name is not None:
                     if attr_name != stream_name:
                         pos += attr_length
@@ -1131,10 +1210,96 @@ class FileContentExtractor:
 
             pos += attr_length
 
+        # If not found in base entry, check ATTRIBUTE_LIST
+        attr_list = self._parse_attribute_list(entry)
+
+        if attr_list and stream_name:
+            # Find extension record containing the target stream's $DATA attribute
+            target_refs = []
+            for attr_info in attr_list:
+                if attr_info['attr_type'] == MFTAttributeType.DATA:
+                    if attr_info['name'] == stream_name:
+                        target_refs.append(attr_info)
+
+            if target_refs:
+                # Sort by VCN order
+                target_refs.sort(key=lambda x: x['starting_vcn'])
+
+                # Collect data runs from all extension records
+                all_data_runs = []
+                total_size = 0
+
+                for ref_info in target_refs:
+                    try:
+                        ext_entry = self.read_mft_entry(ref_info['mft_ref'])
+                        if ext_entry[:4] != b'FILE':
+                            continue
+
+                        # Parse $DATA attribute from extension entry
+                        ext_result = self._extract_data_from_extension(ext_entry, stream_name)
+                        if ext_result:
+                            is_res, res_data, runs, size = ext_result
+                            if runs:
+                                all_data_runs.extend(runs)
+                            if size > total_size:
+                                total_size = size
+                    except Exception as e:
+                        continue
+
+                if all_data_runs:
+                    return False, b'', all_data_runs, total_size
+
         return True, b'', [], 0
 
+    def _extract_data_from_extension(
+        self,
+        ext_entry: bytes,
+        stream_name: str
+    ) -> Optional[Tuple[bool, bytes, List[DataRun], int]]:
+        """Extract specific stream's $DATA attribute from extension MFT entry"""
+        attr_offset = struct.unpack('<H', ext_entry[0x14:0x16])[0]
+        pos = attr_offset
+
+        while pos < len(ext_entry) - 24:
+            attr_type = struct.unpack('<I', ext_entry[pos:pos+4])[0]
+
+            if attr_type == MFTAttributeType.END_MARKER:
+                break
+
+            attr_length = struct.unpack('<I', ext_entry[pos+4:pos+8])[0]
+            if attr_length == 0 or attr_length > self.mft_record_size:
+                break
+
+            if attr_type == MFTAttributeType.DATA:
+                name_length = ext_entry[pos+9]
+                attr_name = ""
+
+                if name_length > 0:
+                    name_offset = struct.unpack('<H', ext_entry[pos+10:pos+12])[0]
+                    attr_name = ext_entry[pos+name_offset:pos+name_offset+name_length*2].decode('utf-16-le', errors='ignore')
+
+                if attr_name == stream_name:
+                    non_resident = ext_entry[pos+8]
+
+                    if non_resident:
+                        real_size = struct.unpack('<Q', ext_entry[pos+0x30:pos+0x38])[0]
+                        data_runs = self._parse_data_runs_bytes(ext_entry, pos)
+                        return False, b'', data_runs, real_size
+                    else:
+                        content_length = struct.unpack('<I', ext_entry[pos+0x10:pos+0x14])[0]
+                        content_offset = struct.unpack('<H', ext_entry[pos+0x14:pos+0x16])[0]
+                        content_pos = pos + content_offset
+
+                        if content_pos + content_length <= len(ext_entry):
+                            resident_data = ext_entry[content_pos:content_pos+content_length]
+                            return True, resident_data, [], content_length
+
+            pos += attr_length
+
+        return None
+
     def _extract_ads_list(self, entry: bytes) -> List[str]:
-        """ADS 스트림 이름 목록 추출"""
+        """Extract ADS stream name list"""
         ads_names = []
 
         attr_offset = struct.unpack('<H', entry[0x14:0x16])[0]
@@ -1172,7 +1337,7 @@ class FileContentExtractor:
         file_size: int,
         max_size: int = None
     ) -> bytes:
-        """Data runs를 따라 파일 데이터 읽기"""
+        """Read file data following data runs"""
         if max_size is not None:
             target_size = min(file_size, max_size)
         else:
@@ -1186,12 +1351,12 @@ class FileContentExtractor:
                 break
 
             if run.is_sparse:
-                # Sparse run - 0으로 채움
+                # Sparse run - fill with zeros
                 sparse_size = min(run.length * self.cluster_size, target_size - bytes_read)
                 data.extend(b'\x00' * sparse_size)
                 bytes_read += sparse_size
             else:
-                # 실제 클러스터 읽기
+                # Read actual clusters
                 run_offset = self.partition_offset + (run.lcn * self.cluster_size)
                 run_size = min(run.length * self.cluster_size, target_size - bytes_read)
 
@@ -1207,7 +1372,7 @@ class FileContentExtractor:
         file_size: int,
         chunk_size: int
     ) -> Generator[bytes, None, None]:
-        """Data runs를 따라 파일 데이터 스트리밍"""
+        """Stream file data following data runs"""
         import time
 
         bytes_read = 0
@@ -1215,7 +1380,7 @@ class FileContentExtractor:
         total_runs = len(data_runs)
         start_time = time.time()
 
-        # 디버깅: 파일 크기 제한 (손상된 MFT로 인한 무한 루프 방지)
+        # Debug: file size limit (prevent infinite loop from corrupted MFT)
         MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
         if file_size > MAX_FILE_SIZE:
             _debug_log(f"[SANITY CHECK] Abnormally large file_size: {file_size / 1024 / 1024 / 1024:.2f}GB - limiting to 10GB")
@@ -1231,8 +1396,8 @@ class FileContentExtractor:
                 # Sparse run
                 sparse_remaining = run.length * self.cluster_size
 
-                # 디버깅: sparse run 경고
-                if sparse_remaining > 1024 * 1024 * 1024:  # 1GB 이상
+                # Debug: sparse run warning
+                if sparse_remaining > 1024 * 1024 * 1024:  # 1GB or more
                     _debug_log(f"[SPARSE] Large sparse run: {sparse_remaining / 1024 / 1024:.1f}MB")
 
                 while sparse_remaining > 0 and bytes_read < file_size:
@@ -1241,12 +1406,12 @@ class FileContentExtractor:
                     sparse_remaining -= yield_size
                     bytes_read += yield_size
             else:
-                # 실제 클러스터
+                # Actual clusters
                 run_offset = self.partition_offset + (run.lcn * self.cluster_size)
                 run_size = run.length * self.cluster_size
                 run_read = 0
 
-                # 디버깅: 오프셋 검증
+                # Debug: offset validation
                 if run_offset < 0 or run.lcn < 0:
                     _debug_log(f"[INVALID] Negative offset: lcn={run.lcn}, offset={run_offset}")
                     continue
@@ -1254,12 +1419,12 @@ class FileContentExtractor:
                 while run_read < run_size and bytes_read < file_size:
                     read_size = min(chunk_size, run_size - run_read, file_size - bytes_read)
 
-                    # 디버깅: 읽기 전 시간 측정
+                    # Debug: measure time before read
                     read_start = time.time()
                     chunk = self.disk.read(run_offset + run_read, read_size)
                     read_elapsed = time.time() - read_start
 
-                    # 느린 읽기 경고 (1초 이상)
+                    # Slow read warning (1 second or more)
                     if read_elapsed > 1.0:
                         _debug_log(f"[SLOW READ] {read_elapsed:.2f}s for {read_size} bytes at offset {run_offset + run_read}")
 
@@ -1271,7 +1436,7 @@ class FileContentExtractor:
                     run_read += len(chunk)
                     bytes_read += len(chunk)
 
-                    # 타임아웃 체크 (단일 파일 최대 10분)
+                    # Timeout check (single file max 10 minutes)
                     if time.time() - start_time > 600:
                         _debug_log(f"[STREAM TIMEOUT] 10min limit reached at {bytes_read / 1024 / 1024:.1f}MB")
                         return
@@ -1281,7 +1446,7 @@ class FileContentExtractor:
     # ==========================================================================
 
     def get_fat_cluster_chain(self, start_cluster: int) -> List[int]:
-        """FAT cluster chain 읽기"""
+        """Read FAT cluster chain"""
         chain = []
         cluster = start_cluster
         visited = set()
@@ -1293,7 +1458,7 @@ class FileContentExtractor:
             visited.add(cluster)
             chain.append(cluster)
 
-            # FAT 테이블에서 다음 클러스터 읽기
+            # Read next cluster from FAT table
             fat_entry_offset = self.partition_offset + self.fat_offset + (cluster * 4)
             entry_data = self.disk.read(fat_entry_offset, 4)
             cluster = struct.unpack('<I', entry_data)[0] & 0x0FFFFFFF
@@ -1301,7 +1466,7 @@ class FileContentExtractor:
         return chain
 
     def read_fat_file(self, start_cluster: int, file_size: int) -> bytes:
-        """FAT 파일 읽기"""
+        """Read FAT file"""
         chain = self.get_fat_cluster_chain(start_cluster)
 
         data = bytearray()
@@ -1311,7 +1476,7 @@ class FileContentExtractor:
             if bytes_read >= file_size:
                 break
 
-            # 클러스터 오프셋 계산
+            # Calculate cluster offset
             cluster_offset = self.partition_offset + self.data_area_offset
             cluster_offset += (cluster - 2) * self.cluster_size
 

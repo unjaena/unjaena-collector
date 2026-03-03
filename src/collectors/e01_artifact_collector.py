@@ -2,14 +2,14 @@
 """
 E01 Artifact Collector
 
-E01 증거 이미지에서 아티팩트를 추출하는 수집기.
-BaseMFTCollector를 상속하여 MFT 기반 수집을 사용합니다.
+Collector for extracting artifacts from E01 evidence images.
+Inherits from BaseMFTCollector to use MFT-based collection.
 
-디지털 포렌식 원칙:
-- MFT 파싱 기반 수집 (디렉토리 탐색 금지)
-- 파일 수 제한 없음
-- 삭제 파일 포함
-- 시스템 폴더 포함
+Digital Forensics Principles:
+- MFT parsing-based collection (no directory traversal)
+- No file count limit
+- Includes deleted files
+- Includes system folders
 
 Usage:
     collector = E01ArtifactCollector("evidence.E01", output_dir="./extracted")
@@ -50,7 +50,7 @@ def _debug_print(msg):
 
 @dataclass
 class PartitionInfo:
-    """파티션 정보"""
+    """Partition information"""
     index: int
     offset: int
     size: int
@@ -61,15 +61,15 @@ class PartitionInfo:
 
 @dataclass
 class ExtractedArtifact:
-    """추출된 아티팩트 정보"""
-    local_path: str           # 로컬 저장 경로
-    original_path: str        # 원본 경로 (이미지 내)
-    artifact_type: str        # 아티팩트 유형
-    filename: str             # 파일명
-    size: int                 # 크기
-    sha256: str               # SHA256 해시
-    md5: str                  # MD5 해시
-    metadata: Dict[str, Any]  # 추가 메타데이터
+    """Extracted artifact information"""
+    local_path: str           # Local storage path
+    original_path: str        # Original path (within image)
+    artifact_type: str        # Artifact type
+    filename: str             # Filename
+    size: int                 # Size
+    sha256: str               # SHA256 hash
+    md5: str                  # MD5 hash
+    metadata: Dict[str, Any]  # Additional metadata
 
 
 # =============================================================================
@@ -235,7 +235,6 @@ ARTIFACT_PATHS = {
     'mobile_ios_sms': {'skip': True},
     'mobile_ios_call': {'skip': True},
     'mobile_ios_contacts': {'skip': True},
-    'mobile_ios_app': {'skip': True},
     'mobile_ios_safari': {'skip': True},
     'mobile_ios_location': {'skip': True},
     'mobile_ios_backup': {'skip': True},
@@ -248,29 +247,29 @@ ARTIFACT_PATHS = {
 
 class E01ArtifactCollector(BaseMFTCollector):
     """
-    E01 이미지 아티팩트 수집기
+    E01 Image Artifact Collector
 
-    BaseMFTCollector를 상속하여 MFT 기반 수집을 사용합니다.
+    Inherits from BaseMFTCollector to use MFT-based collection.
 
-    디지털 포렌식 원칙:
-    - MFT 파싱 기반 수집 (디렉토리 탐색 금지)
-    - 파일 수 제한 없음
-    - 삭제 파일 포함
-    - 시스템 폴더 포함
+    Digital Forensics Principles:
+    - MFT parsing-based collection (no directory traversal)
+    - No file count limit
+    - Includes deleted files
+    - Includes system folders
     """
 
     def __init__(self, e01_path: str, output_dir: str = None):
         """
         Args:
-            e01_path: E01 이미지 파일 경로 (첫 번째 세그먼트)
-            output_dir: 추출된 아티팩트 저장 디렉토리
-                       (None인 경우 시스템 임시 디렉토리 사용)
+            e01_path: E01 image file path (first segment)
+            output_dir: Directory to store extracted artifacts
+                       (Uses system temp directory if None)
         """
         self.e01_path = Path(e01_path)
         self._owns_temp_dir = False
 
         if output_dir is None:
-            # 임시 디렉토리 사용 (로컬 수집 시 E01 파일이 포함되지 않도록)
+            # Use temp directory (to avoid including E01 files during local collection)
             output_dir = tempfile.mkdtemp(prefix="e01_extract_")
             self._owns_temp_dir = True
 
@@ -283,7 +282,7 @@ class E01ArtifactCollector(BaseMFTCollector):
         self._initialize_accessor()
 
     def _initialize_accessor(self) -> bool:
-        """ForensicDiskAccessor 초기화"""
+        """Initialize ForensicDiskAccessor"""
         if not FORENSIC_DISK_AVAILABLE or ForensicDiskAccessor is None:
             logger.error("ForensicDiskAccessor not available")
             return False
@@ -298,7 +297,7 @@ class E01ArtifactCollector(BaseMFTCollector):
             return False
 
     def _get_source_description(self) -> str:
-        """소스 설명 반환"""
+        """Return source description"""
         return f"E01: {self.e01_path.name}"
 
     # =========================================================================
@@ -306,7 +305,7 @@ class E01ArtifactCollector(BaseMFTCollector):
     # =========================================================================
 
     def list_partitions(self) -> List[PartitionInfo]:
-        """파티션 목록 조회"""
+        """List partitions"""
         if not self._accessor:
             return []
 
@@ -331,7 +330,7 @@ class E01ArtifactCollector(BaseMFTCollector):
             return []
 
     def select_partition(self, index: int) -> bool:
-        """파티션 선택"""
+        """Select partition"""
         if not self._accessor:
             return False
 
@@ -340,10 +339,10 @@ class E01ArtifactCollector(BaseMFTCollector):
             self._selected_partition = index
             logger.info(f"Selected partition {index}")
 
-            # 사용자 폴더 탐색
+            # Discover user folders
             self._discover_user_folders()
 
-            # MFT 인덱스 초기화
+            # Initialize MFT index
             self._mft_indexed = False
             self._mft_cache = {'active_files': [], 'deleted_files': [], 'directories': []}
             self._extension_index = {}
@@ -355,16 +354,16 @@ class E01ArtifactCollector(BaseMFTCollector):
             return False
 
     def get_windows_partition(self) -> Optional[int]:
-        """Windows 파티션 자동 탐지"""
+        """Auto-detect Windows partition"""
         if not self._partitions:
             self.list_partitions()
 
         for p in self._partitions:
             if p.filesystem.upper() == 'NTFS' and p.size > 20 * 1024 * 1024 * 1024:
-                # 20GB 이상의 NTFS 파티션 선택
+                # Select NTFS partition larger than 20GB
                 return p.index
 
-        # 가장 큰 NTFS 파티션 선택
+        # Select largest NTFS partition
         ntfs_partitions = [p for p in self._partitions if p.filesystem.upper() == 'NTFS']
         if ntfs_partitions:
             largest = max(ntfs_partitions, key=lambda p: p.size)
@@ -373,7 +372,7 @@ class E01ArtifactCollector(BaseMFTCollector):
         return None
 
     def _discover_user_folders(self) -> None:
-        """Users 폴더 내 사용자 디렉토리 탐색"""
+        """Discover user directories within Users folder"""
         if not self._accessor:
             return
 
@@ -381,7 +380,7 @@ class E01ArtifactCollector(BaseMFTCollector):
         system_folders = {'public', 'default', 'default user', 'all users', 'desktop.ini'}
 
         try:
-            # Users 디렉토리 찾기
+            # Find Users directory
             users_inode = self._accessor.resolve_path('/Users')
             if users_inode is None:
                 users_inode = self._accessor.resolve_path('/users')
@@ -390,7 +389,7 @@ class E01ArtifactCollector(BaseMFTCollector):
                 logger.warning("Users directory not found")
                 return
 
-            # 사용자 폴더 목록
+            # List user folders
             entries = self._accessor.list_directory(users_inode)
             for entry in entries:
                 name = entry.filename if hasattr(entry, 'filename') else str(entry)
@@ -415,14 +414,14 @@ class E01ArtifactCollector(BaseMFTCollector):
         **kwargs
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
-        아티팩트 수집 (MFT 기반)
+        Collect artifacts (MFT-based)
 
         Args:
-            artifact_type: 수집할 아티팩트 유형
-            progress_callback: 진행률 콜백
+            artifact_type: Type of artifact to collect
+            progress_callback: Progress callback
 
         Yields:
-            (로컬 경로, 메타데이터) 튜플
+            (local_path, metadata) tuple
         """
         if self._selected_partition is None:
             logger.error("No partition selected. Call select_partition() first.")
@@ -441,7 +440,7 @@ class E01ArtifactCollector(BaseMFTCollector):
     # =========================================================================
 
     def get_image_info(self) -> Dict[str, Any]:
-        """E01 이미지 정보 반환"""
+        """Return E01 image information"""
         if not self._accessor:
             return {}
 
@@ -453,13 +452,13 @@ class E01ArtifactCollector(BaseMFTCollector):
         }
 
     def close(self):
-        """리소스 정리"""
+        """Cleanup resources"""
         super().close()
         self._selected_partition = None
         self._partitions = []
         self._user_folders = []
 
-        # 임시 디렉토리 정리 (우리가 생성한 경우만)
+        # Cleanup temp directory (only if we created it)
         if self._owns_temp_dir and self.output_dir.exists():
             try:
                 import shutil

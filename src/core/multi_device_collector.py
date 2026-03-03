@@ -2,13 +2,13 @@
 """
 Multi-Device Collector
 
-복수 디바이스에서 병렬로 아티팩트를 수집하는 코디네이터.
+Coordinator for collecting artifacts from multiple devices in parallel.
 
 Features:
-    - ThreadPoolExecutor 기반 병렬 수집
-    - 디바이스별 진행률 추적
-    - 에러 발생 시 계속 진행 (continue on error)
-    - Qt 시그널을 통한 UI 연동
+    - ThreadPoolExecutor-based parallel collection
+    - Per-device progress tracking
+    - Continue on error
+    - UI integration via Qt signals
 """
 
 import logging
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 class TaskStatus(Enum):
-    """수집 작업 상태"""
+    """Collection task status"""
     PENDING = auto()
     RUNNING = auto()
     COMPLETED = auto()
@@ -40,7 +40,7 @@ class TaskStatus(Enum):
 
 @dataclass
 class CollectionTask:
-    """디바이스별 수집 작업 정보"""
+    """Per-device collection task information"""
     device: UnifiedDeviceInfo
     artifacts: List[str]
     status: TaskStatus = TaskStatus.PENDING
@@ -54,7 +54,7 @@ class CollectionTask:
 
 @dataclass
 class CollectionResult:
-    """수집 결과"""
+    """Collection result"""
     device_id: str
     success: bool
     collected_count: int
@@ -70,12 +70,12 @@ class CollectionResult:
 
 class CollectionErrorHandler:
     """
-    수집 중 에러 처리
+    Error handler during collection
 
-    에러 유형에 따라 계속 진행 여부를 결정합니다.
+    Decides whether to continue based on error type.
     """
 
-    # 치명적 에러 (해당 디바이스 수집 중단)
+    # Critical errors (stop device collection)
     CRITICAL_ERRORS = (
         PermissionError,
         ConnectionRefusedError,
@@ -93,15 +93,15 @@ class CollectionErrorHandler:
         error: Exception
     ) -> bool:
         """
-        에러 처리
+        Handle error
 
         Args:
-            device_id: 디바이스 ID
-            artifact_type: 아티팩트 유형
-            error: 발생한 예외
+            device_id: Device ID
+            artifact_type: Artifact type
+            error: Exception that occurred
 
         Returns:
-            True: 계속 진행, False: 해당 디바이스 수집 중단
+            True: continue, False: stop device collection
         """
         error_msg = str(error)
 
@@ -115,19 +115,19 @@ class CollectionErrorHandler:
         if self.on_error:
             self.on_error(device_id, artifact_type, error_msg)
 
-        # 치명적 에러 확인
+        # Check for critical error
         if isinstance(error, self.CRITICAL_ERRORS):
             logger.error(f"[{device_id}] Critical error - stopping device collection")
             return False
 
-        return True  # 계속 진행
+        return True  # Continue
 
     def get_errors(self, device_id: str) -> List[str]:
-        """디바이스별 에러 목록"""
+        """Get per-device error list"""
         return self._device_errors.get(device_id, [])
 
     def get_all_errors(self) -> Dict[str, List[str]]:
-        """전체 에러 목록"""
+        """Get all errors"""
         return self._device_errors.copy()
 
 
@@ -137,18 +137,18 @@ class CollectionErrorHandler:
 
 class MultiDeviceCollector(QObject):
     """
-    복수 디바이스 병렬 수집기
+    Multi-device parallel collector
 
-    여러 디바이스에서 동시에 아티팩트를 수집합니다.
+    Collects artifacts from multiple devices simultaneously.
 
     Signals:
-        collection_started: 수집 시작
-        collection_completed: 수집 완료
-        device_started(device_id): 디바이스 수집 시작
-        device_progress(device_id, progress, artifact): 디바이스 진행률
-        device_completed(device_id, success, message): 디바이스 수집 완료
-        artifact_collected(device_id, file_path): 아티팩트 수집됨
-        error_occurred(device_id, artifact, error): 에러 발생
+        collection_started: Collection started
+        collection_completed: Collection completed
+        device_started(device_id): Device collection started
+        device_progress(device_id, progress, artifact): Device progress
+        device_completed(device_id, success, message): Device collection completed
+        artifact_collected(device_id, file_path): Artifact collected
+        error_occurred(device_id, artifact, error): Error occurred
 
     Usage:
         collector = MultiDeviceCollector(max_workers=3)
@@ -162,7 +162,7 @@ class MultiDeviceCollector(QObject):
         collector.start_collection(devices, artifacts)
     """
 
-    # 시그널
+    # Signals
     collection_started = pyqtSignal()
     collection_completed = pyqtSignal(list)  # List[CollectionResult]
     device_started = pyqtSignal(str)  # device_id
@@ -183,7 +183,7 @@ class MultiDeviceCollector(QObject):
         self._output_dir: Optional[str] = None
 
     def set_output_dir(self, output_dir: str):
-        """출력 디렉토리 설정"""
+        """Set output directory"""
         self._output_dir = output_dir
 
     def start_collection(
@@ -192,11 +192,11 @@ class MultiDeviceCollector(QObject):
         artifacts_per_device: Dict[str, List[str]]
     ):
         """
-        병렬 수집 시작
+        Start parallel collection
 
         Args:
-            devices: 수집할 디바이스 목록
-            artifacts_per_device: 디바이스별 수집할 아티팩트 유형 매핑
+            devices: List of devices to collect from
+            artifacts_per_device: Mapping of artifact types per device
         """
         if not devices:
             logger.warning("No devices to collect from")
@@ -209,7 +209,7 @@ class MultiDeviceCollector(QObject):
         self.collection_started.emit()
         logger.info(f"Starting collection from {len(devices)} devices (max workers: {self.max_workers})")
 
-        # 작업 생성
+        # Create tasks
         for device in devices:
             artifacts = artifacts_per_device.get(device.device_id, [])
             if not artifacts:
@@ -222,7 +222,7 @@ class MultiDeviceCollector(QObject):
             )
             self._tasks[device.device_id] = task
 
-        # ThreadPoolExecutor로 병렬 실행
+        # Execute in parallel with ThreadPoolExecutor
         self._executor = ThreadPoolExecutor(max_workers=self.max_workers)
         futures = {}
 
@@ -230,7 +230,7 @@ class MultiDeviceCollector(QObject):
             future = self._executor.submit(self._collect_from_device, task)
             futures[future] = device_id
 
-        # 결과 수집 (별도 스레드에서)
+        # Collect results (in separate thread)
         threading.Thread(
             target=self._wait_for_completion,
             args=(futures,),
@@ -238,7 +238,7 @@ class MultiDeviceCollector(QObject):
         ).start()
 
     def _wait_for_completion(self, futures: dict):
-        """모든 작업 완료 대기"""
+        """Wait for all tasks to complete"""
         import time
 
         for future in as_completed(futures):
@@ -267,20 +267,20 @@ class MultiDeviceCollector(QObject):
 
                 self.device_completed.emit(device_id, False, str(e))
 
-        # 모든 작업 완료
+        # All tasks completed
         self._executor.shutdown(wait=False)
         logger.info(f"Collection completed: {len(self._results)} devices processed")
         self.collection_completed.emit(self._results)
 
     def _collect_from_device(self, task: CollectionTask) -> CollectionResult:
         """
-        개별 디바이스에서 수집 (워커 스레드에서 실행)
+        Collect from individual device (executed in worker thread)
 
         Args:
-            task: 수집 작업 정보
+            task: Collection task information
 
         Returns:
-            수집 결과
+            Collection result
         """
         import time
 
@@ -325,7 +325,7 @@ class MultiDeviceCollector(QObject):
                 if not should_continue:
                     break
 
-        # 완료
+        # Complete
         end_time = time.time()
         task.end_time = end_time
         task.progress = 1.0
@@ -333,7 +333,7 @@ class MultiDeviceCollector(QObject):
         success = len(errors) == 0 or len(collected_files) > 0
         task.status = TaskStatus.COMPLETED if success else TaskStatus.FAILED
 
-        # 콜렉터 정리
+        # Cleanup collector
         if hasattr(collector, 'close'):
             collector.close()
 
@@ -358,18 +358,18 @@ class MultiDeviceCollector(QObject):
 
     def _get_collector_for_device(self, device: UnifiedDeviceInfo):
         """
-        디바이스 유형에 맞는 콜렉터 반환
+        Return appropriate collector for device type
 
         Args:
-            device: 디바이스 정보
+            device: Device information
 
         Returns:
-            적절한 콜렉터 인스턴스
+            Appropriate collector instance
         """
         output_dir = self._output_dir or './collected'
 
         if device.device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
-            # LocalMFTCollector 사용 (BitLocker 자동 감지 + 디렉토리 폴백)
+            # Use LocalMFTCollector (BitLocker auto-detection + directory fallback)
             from collectors.artifact_collector import LocalMFTCollector, BASE_MFT_AVAILABLE
             if BASE_MFT_AVAILABLE:
                 volume = device.metadata.get('volume', 'C')
@@ -377,7 +377,7 @@ class MultiDeviceCollector(QObject):
                 logger.info(f"Using LocalMFTCollector (mode: {collector.get_collection_mode()})")
                 return collector
             else:
-                # BaseMFTCollector 없으면 기존 ArtifactCollector 사용
+                # Use legacy ArtifactCollector if BaseMFTCollector not available
                 from collectors.artifact_collector import ArtifactCollector
                 logger.info("Using legacy ArtifactCollector (BaseMFTCollector not available)")
                 return ArtifactCollector(output_dir)
@@ -388,7 +388,7 @@ class MultiDeviceCollector(QObject):
             if not file_path:
                 raise ValueError("No file_path in device metadata")
             collector = E01ArtifactCollector(file_path, output_dir)
-            # 첫 번째 NTFS 파티션 자동 선택
+            # Auto-select first NTFS partition
             partitions = collector.list_partitions()
             for p in partitions:
                 if getattr(p, 'filesystem', '').upper() == 'NTFS':
@@ -412,15 +412,25 @@ class MultiDeviceCollector(QObject):
                 collector.select_backup(backup_path)
             return collector
 
+        elif device.device_type == DeviceType.IOS_DEVICE:
+            # [2026-01-30] iOS USB direct connection support
+            from collectors.ios_collector import iOSDeviceConnector, PYMOBILEDEVICE3_AVAILABLE
+            if not PYMOBILEDEVICE3_AVAILABLE:
+                raise RuntimeError("pymobiledevice3 is not installed. pip install pymobiledevice3")
+            udid = device.metadata.get('udid') or device.metadata.get('serial')
+            collector = iOSDeviceConnector(output_dir, udid=udid)
+            logger.info(f"Using iOSDeviceConnector for USB direct connection (udid: {udid})")
+            return collector
+
         else:
             raise ValueError(f"Unknown device type: {device.device_type}")
 
     def _on_error(self, device_id: str, artifact: str, error: str):
-        """에러 콜백"""
+        """Error callback"""
         self.error_occurred.emit(device_id, artifact, error)
 
     def cancel(self):
-        """수집 취소"""
+        """Cancel collection"""
         logger.info("Cancelling collection...")
         self._cancelled.set()
 
@@ -432,20 +442,20 @@ class MultiDeviceCollector(QObject):
             self._executor.shutdown(wait=False, cancel_futures=True)
 
     def get_task(self, device_id: str) -> Optional[CollectionTask]:
-        """디바이스별 작업 상태 조회"""
+        """Get per-device task status"""
         return self._tasks.get(device_id)
 
     def get_all_tasks(self) -> Dict[str, CollectionTask]:
-        """전체 작업 상태"""
+        """Get all task status"""
         return self._tasks.copy()
 
     def get_results(self) -> List[CollectionResult]:
-        """수집 결과"""
+        """Get collection results"""
         return self._results.copy()
 
     @property
     def is_running(self) -> bool:
-        """수집 진행 중 여부"""
+        """Check if collection is in progress"""
         return any(
             task.status == TaskStatus.RUNNING
             for task in self._tasks.values()
@@ -453,5 +463,5 @@ class MultiDeviceCollector(QObject):
 
     @property
     def total_collected(self) -> int:
-        """총 수집된 파일 수"""
+        """Total number of collected files"""
         return sum(len(task.collected_files) for task in self._tasks.values())

@@ -1,12 +1,12 @@
 """
 Legal Consent Dialog
 
-수집 시작 전 법적 동의를 받는 다이얼로그.
-동의 없이는 수집 진행 불가.
+Dialog for obtaining legal consent before starting collection.
+Collection cannot proceed without consent.
 
-2026-01 서버 API 연동:
-- GET /api/v1/collector/consent - 다국어 동의서 템플릿 조회
-- POST /api/v1/collector/consent/accept - 동의 기록 저장
+2026-01 Server API Integration:
+- GET /api/v1/collector/consent - Retrieve multilingual consent template
+- POST /api/v1/collector/consent/accept - Save consent record
 """
 from datetime import datetime, timezone
 from typing import Optional, List
@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 
 
 class ConsentDialog(QDialog):
-    """법적 동의 다이얼로그 (서버 API 연동)"""
+    """Legal consent dialog (with server API integration)"""
 
-    # 지원 언어 목록
+    # Supported languages list
     LANGUAGES = {
         "en": "English",
         "ko": "한국어",
@@ -49,11 +49,11 @@ class ConsentDialog(QDialog):
     ):
         """
         Args:
-            parent: 부모 위젯
-            server_url: API 서버 URL (예: http://localhost:8000)
-            session_id: 수집 세션 ID
-            case_id: 케이스 ID
-            language: 기본 언어 코드 (en, ko, ja, zh)
+            parent: Parent widget
+            server_url: API server URL (e.g., http://localhost:8000)
+            session_id: Collection session ID
+            case_id: Case ID
+            language: Default language code (en, ko, ja, zh)
         """
         super().__init__(parent)
         self.server_url = server_url
@@ -63,7 +63,7 @@ class ConsentDialog(QDialog):
         self.consent_given = False
         self.consent_record = None
 
-        # 서버에서 받은 템플릿 정보
+        # Template information received from server
         self.template_id = None
         self.template_version = None
         self.template_content = None
@@ -73,8 +73,8 @@ class ConsentDialog(QDialog):
         self.setup_ui()
 
     def setup_ui(self):
-        """UI 초기화 (서버 API 연동)"""
-        self.setWindowTitle("Digital Forensic Collection Consent")
+        """Initialize UI (with server API integration)"""
+        self.setWindowTitle("Digital Data Collection Consent")
         self.setMinimumSize(700, 620)
         self.setMaximumSize(800, 720)
         self.setModal(True)
@@ -84,16 +84,16 @@ class ConsentDialog(QDialog):
         layout.setSpacing(8)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # 헤더 + 언어 선택
+        # Header + language selection
         header_layout = QHBoxLayout()
 
-        self.header_label = QLabel("Digital Forensic Collection Consent")
+        self.header_label = QLabel("Digital Data Collection Consent")
         self.header_label.setObjectName("header")
         header_layout.addWidget(self.header_label)
 
         header_layout.addStretch()
 
-        # 언어 선택 드롭다운
+        # Language selection dropdown
         lang_label = QLabel("Language:")
         lang_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         header_layout.addWidget(lang_label)
@@ -102,7 +102,7 @@ class ConsentDialog(QDialog):
         self.lang_combo.setMinimumWidth(100)
         for code, name in self.LANGUAGES.items():
             self.lang_combo.addItem(name, code)
-        # 현재 언어 선택
+        # Select current language
         idx = self.lang_combo.findData(self.language)
         if idx >= 0:
             self.lang_combo.setCurrentIndex(idx)
@@ -111,19 +111,19 @@ class ConsentDialog(QDialog):
 
         layout.addLayout(header_layout)
 
-        # 경고 배너
+        # Warning banner
         self.warning_frame = QFrame()
         self.warning_frame.setObjectName("warningFrame")
         warning_layout = QHBoxLayout(self.warning_frame)
         self.warning_label = QLabel(
-            "Warning: This tool collects forensic data from your system.\n"
+            "Warning: This tool collects analysis data from your system.\n"
             "Please read and agree to the terms below before proceeding."
         )
         self.warning_label.setObjectName("warningText")
         warning_layout.addWidget(self.warning_label)
         layout.addWidget(self.warning_frame)
 
-        # 스크롤 영역 (동의서 내용)
+        # Scroll area (consent content)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -132,7 +132,7 @@ class ConsentDialog(QDialog):
         content_layout = QVBoxLayout(content_widget)
         content_layout.setSpacing(12)
 
-        # 동의서 내용 표시
+        # Display consent content
         self.consent_text = QTextEdit()
         self.consent_text.setReadOnly(True)
         self.consent_text.setMinimumHeight(280)
@@ -142,7 +142,7 @@ class ConsentDialog(QDialog):
         scroll.setWidget(content_widget)
         layout.addWidget(scroll)
 
-        # 체크박스 영역 (서버에서 받은 항목으로 동적 생성)
+        # Checkbox area (dynamically generated from server items)
         self.checkbox_frame = QFrame()
         self.checkbox_frame.setObjectName("checkboxFrame")
         self.checkbox_layout = QVBoxLayout(self.checkbox_frame)
@@ -151,7 +151,7 @@ class ConsentDialog(QDialog):
 
         layout.addWidget(self.checkbox_frame)
 
-        # 버튼
+        # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
@@ -169,17 +169,17 @@ class ConsentDialog(QDialog):
 
         layout.addLayout(button_layout)
 
-        # 서버에서 동의서 템플릿 로드
+        # Load consent template from server
         self._load_consent_template()
 
     def _on_language_changed(self, index: int):
-        """언어 변경 시 동의서 다시 로드"""
+        """Reload consent when language changes"""
         self.language = self.lang_combo.currentData()
         self._load_consent_template()
 
     def _load_consent_template(self):
-        """서버에서 동의서 템플릿 로드"""
-        # 기존 체크박스 제거
+        """Load consent template from server"""
+        # Remove existing checkboxes
         for cb in self.checkboxes:
             cb.deleteLater()
         self.checkboxes.clear()
@@ -193,11 +193,11 @@ class ConsentDialog(QDialog):
             except Exception as e:
                 logger.warning(f"Failed to fetch consent from server: {e}")
 
-        # 서버 연결 실패 시 기본 폴백 사용
+        # Use default fallback when server connection fails
         self._apply_fallback_template()
 
     def _fetch_consent_from_server(self) -> Optional[dict]:
-        """서버에서 동의서 템플릿 가져오기"""
+        """Fetch consent template from server"""
         try:
             url = f"{self.server_url}/api/v1/collector/consent"
             params = {"language": self.language, "category": "collection"}
@@ -214,22 +214,22 @@ class ConsentDialog(QDialog):
             return None
 
     def _apply_template(self, template: dict):
-        """서버 템플릿 적용"""
+        """Apply server template"""
         self.template_id = template.get("id")
         self.template_version = template.get("version")
         self.template_content = template.get("content", "")
         self.required_checkboxes = template.get("required_checkboxes", [])
 
-        # 헤더 업데이트
-        self.header_label.setText(template.get("title", "Digital Forensic Collection Consent"))
+        # Update header
+        self.header_label.setText(template.get("title", "Digital Data Collection Consent"))
         self.setWindowTitle(template.get("title", "Consent"))
 
-        # 동의서 내용 표시 (Markdown to HTML)
+        # Display consent content (Markdown to HTML)
         content = template.get("content", "")
         html_content = self._markdown_to_html(content)
         self.consent_text.setHtml(html_content)
 
-        # 동적 체크박스 생성
+        # Generate dynamic checkboxes
         for item in self.required_checkboxes:
             cb = QCheckBox(item)
             cb.setObjectName("consentCheck")
@@ -237,10 +237,10 @@ class ConsentDialog(QDialog):
             self.checkbox_layout.addWidget(cb)
             self.checkboxes.append(cb)
 
-        # 버튼 텍스트 (언어별)
+        # Button text (by language)
         btn_texts = {
-            "ko": ("취소", "동의 및 수집 시작"),
-            "ja": ("キャンセル", "同意して収集開始"),
+            "ko": ("취소", "동의 후 수집 시작"),
+            "ja": ("キャンセル", "同意して収集を開始"),
             "zh": ("取消", "同意并开始收集"),
             "en": ("Cancel", "Agree and Start Collection")
         }
@@ -248,32 +248,86 @@ class ConsentDialog(QDialog):
         self.cancel_btn.setText(cancel_text)
         self.agree_btn.setText(agree_text)
 
-        # 경고 텍스트 (언어별)
+        # Warning text (by language)
         warning_texts = {
-            "ko": "경고: 본 도구는 시스템에서 포렌식 데이터를 수집합니다.\n반드시 아래 내용을 숙지하고 동의 후 진행하시기 바랍니다.",
-            "ja": "警告: このツールはシステムからフォレンジックデータを収集します。\n以下の内容を確認し、同意してから進めてください。",
-            "zh": "警告：本工具将从您的系统收集取证数据。\n请仔细阅读以下内容并同意后再继续。",
-            "en": "Warning: This tool collects forensic data from your system.\nPlease read and agree to the terms below before proceeding."
+            "ko": "경고: 이 도구는 시스템에서 분석 데이터를 수집합니다.\n아래 내용을 읽고 동의한 후 진행하세요.",
+            "ja": "警告：このツールはシステムから分析データを収集します。\n以下の内容をお読みになり、同意の上お進みください。",
+            "zh": "警告：此工具将从您的系统中收集分析数据。\n请阅读以下内容并同意后再继续。",
+            "en": "Warning: This tool collects analysis data from your system.\nPlease read and agree to the terms below before proceeding."
         }
         self.warning_label.setText(warning_texts.get(self.language, warning_texts["en"]))
 
         self._update_button_state()
 
     def _apply_fallback_template(self):
-        """오프라인 폴백 템플릿 적용"""
+        """Apply offline fallback template"""
         self.template_id = None
-        self.template_version = "offline-1.0"
+        self.template_version = "offline-2.0"
         self.template_content = self._get_consent_html()
 
-        self.header_label.setText("Digital Forensic Collection Consent")
+        # Header text (by language)
+        header_texts = {
+            "ko": "디지털 데이터 수집 동의서",
+            "ja": "デジタルデータ収集同意書",
+            "zh": "数字数据收集同意书",
+            "en": "Digital Data Collection Consent"
+        }
+        self.header_label.setText(header_texts.get(self.language, header_texts["en"]))
+        self.setWindowTitle(header_texts.get(self.language, header_texts["en"]))
         self.consent_text.setHtml(self.template_content)
 
-        # 기본 체크박스
-        default_items = [
-            "I have read and understood the collection scope",
-            "I authorize the collection of specified artifacts",
-            "I confirm I have authority to provide this consent"
-        ]
+        # Button text (by language) - also needed in offline fallback
+        btn_texts = {
+            "ko": ("취소", "동의 후 수집 시작"),
+            "ja": ("キャンセル", "同意して収集を開始"),
+            "zh": ("取消", "同意并开始收集"),
+            "en": ("Cancel", "Agree and Start Collection")
+        }
+        cancel_text, agree_text = btn_texts.get(self.language, btn_texts["en"])
+        self.cancel_btn.setText(cancel_text)
+        self.agree_btn.setText(agree_text)
+
+        # Warning text (by language) - also needed in offline fallback
+        warning_texts = {
+            "ko": "경고: 이 도구는 시스템에서 분석 데이터를 수집합니다.\n아래 내용을 읽고 동의한 후 진행하세요.",
+            "ja": "警告：このツールはシステムから分析データを収集します。\n以下の内容をお読みになり、同意の上お進みください。",
+            "zh": "警告：此工具将从您的系统中收集分析数据。\n请阅读以下内容并同意后再继续。",
+            "en": "Warning: This tool collects analysis data from your system.\nPlease read and agree to the terms below before proceeding."
+        }
+        self.warning_label.setText(warning_texts.get(self.language, warning_texts["en"]))
+
+        # Default checkboxes - 5 items per section (B2: PIPA/PIPL/GDPR compliance)
+        default_items_map = {
+            "ko": [
+                "개인정보 수집·이용에 동의합니다 (Section 1)",
+                "해외 데이터 이전에 동의합니다 (Section 2)",
+                "AI 분석 및 자동화된 의사결정에 동의합니다 (Section 3)",
+                "데이터 주체 권리를 확인하였습니다 (Section 4)",
+                "법적 경고 및 면책사항을 확인하였으며, 적법한 권한을 보유하고 있음을 확인합니다 (Section 5)"
+            ],
+            "ja": [
+                "個人情報の収集・利用に同意します（Section 1）",
+                "海外データ移転に同意します（Section 2）",
+                "AI分析および自動化された意思決定に同意します（Section 3）",
+                "データ主体の権利を確認しました（Section 4）",
+                "法的警告および免責事項を確認し、適法な権限を保有していることを確認します（Section 5）"
+            ],
+            "zh": [
+                "同意个人信息的收集和使用（Section 1）",
+                "同意海外数据传输（Section 2）",
+                "同意AI分析及自动化决策（Section 3）",
+                "已确认数据主体权利（Section 4）",
+                "已确认法律警告及免责条款，并确认拥有合法权限（Section 5）"
+            ],
+            "en": [
+                "I consent to the collection and use of personal information (Section 1)",
+                "I consent to cross-border data transfer (Section 2)",
+                "I consent to AI analysis and automated decision-making (Section 3)",
+                "I have reviewed data subject rights (Section 4)",
+                "I confirm legal warnings and disclaimers, and that I have lawful authority (Section 5)"
+            ]
+        }
+        default_items = default_items_map.get(self.language, default_items_map["en"])
 
         for item in default_items:
             cb = QCheckBox(item)
@@ -286,13 +340,13 @@ class ConsentDialog(QDialog):
         self._update_button_state()
 
     def _markdown_to_html(self, markdown_text: str) -> str:
-        """Markdown to HTML 변환 (테이블, 구분선 지원)"""
+        """Markdown to HTML conversion (supports tables, horizontal rules)"""
         import re
 
-        # 캐리지 리턴 제거
+        # Remove carriage returns
         html = markdown_text.replace('\r\n', '\n').replace('\r', '\n')
 
-        # 테이블 변환
+        # Table conversion
         def convert_table(match):
             lines = match.group(0).strip().split('\n')
             if len(lines) < 2:
@@ -301,7 +355,7 @@ class ConsentDialog(QDialog):
             table_html = f'<table style="width:100%; border-collapse:collapse; margin:8px 0; font-size:12px;">'
 
             for i, line in enumerate(lines):
-                if '---' in line:  # 구분선 스킵
+                if '---' in line:  # Skip separator line
                     continue
                 cells = [c.strip() for c in line.split('|') if c.strip()]
                 if not cells:
@@ -320,10 +374,10 @@ class ConsentDialog(QDialog):
 
         html = re.sub(r'(\|.+\|\n)+', convert_table, html)
 
-        # 구분선 (---)
+        # Horizontal rule (---)
         html = re.sub(r'^---+$', f'<hr style="border:none; border-top:1px solid {COLORS["border_subtle"]}; margin:12px 0;">', html, flags=re.MULTILINE)
 
-        # 헤더 (숫자. 제목 형태로 표시)
+        # Header (displayed as number. title format)
         html = re.sub(
             r'^### (\d+)\. (.+)$',
             rf'<h4 style="color:{COLORS["brand_primary"]}; margin:12px 0 6px 0; font-size:13px; font-weight:600;">\1. \2</h4>',
@@ -335,23 +389,23 @@ class ConsentDialog(QDialog):
             html, flags=re.MULTILINE
         )
 
-        # Bold
+        # Bold text
         html = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', html)
 
-        # 리스트 아이템
+        # List items
         html = re.sub(r'^- (.+)$', r'<li style="margin:2px 0; padding-left:4px;">\1</li>', html, flags=re.MULTILINE)
 
-        # 연속된 li를 ul로 감싸기
+        # Wrap consecutive li elements in ul
         html = re.sub(r'((?:<li[^>]*>.*?</li>\n?)+)', r'<ul style="margin:4px 0 8px 16px; padding:0;">\1</ul>', html)
 
-        # 빈 줄 처리 (단락 구분)
+        # Handle empty lines (paragraph separation)
         html = re.sub(r'\n\n+', '</p><p style="margin:8px 0;">', html)
-        html = re.sub(r'\n', ' ', html)  # 단일 줄바꿈은 공백으로
+        html = re.sub(r'\n', ' ', html)  # Single line breaks become spaces
 
-        # 버전 정보 스타일
+        # Version information style
         html = re.sub(
             r'\*\*버전\*\*: (v[\d.]+) \| \*\*시행일\*\*: ([\d-]+)',
-            rf'<div style="margin-top:12px; padding:8px; background:{COLORS["bg_secondary"]}; border-radius:4px; font-size:11px; color:{COLORS["text_secondary"]};">버전: \1 | 시행일: \2</div>',
+            rf'<div style="margin-top:12px; padding:8px; background:{COLORS["bg_secondary"]}; border-radius:4px; font-size:11px; color:{COLORS["text_secondary"]};">Version: \1 | Effective: \2</div>',
             html
         )
         html = re.sub(
@@ -363,18 +417,18 @@ class ConsentDialog(QDialog):
         return f'''<div style="font-family: 'Malgun Gothic', 'Segoe UI', sans-serif; line-height:1.5; color:{COLORS["text_primary"]}; font-size:12px;"><p style="margin:0;">{html}</p></div>'''
 
     def _submit_consent_to_server(self) -> bool:
-        """서버에 동의 기록 제출"""
+        """Submit consent record to server"""
         if not self.server_url or not self.session_id:
             logger.warning("Server URL or session_id not set, skipping server submission")
-            return True  # 서버 없이도 계속 진행
+            return True  # Continue even without server
 
         try:
             url = f"{self.server_url}/api/v1/collector/consent/accept"
 
-            # 동의한 항목 목록
+            # List of agreed items
             agreed_items = [cb.text() for cb in self.checkboxes if cb.isChecked()]
 
-            # 시스템 정보
+            # System information
             try:
                 hostname = socket.gethostname()
             except Exception:
@@ -404,176 +458,277 @@ class ConsentDialog(QDialog):
 
         except requests.RequestException as e:
             logger.error(f"Failed to submit consent to server: {e}")
-            # 서버 제출 실패해도 로컬 기록은 유지
+            # Keep local record even if server submission fails
             return True
 
     def _get_consent_html(self) -> str:
-        """동의서 HTML 내용 (개인정보 보호법 준수)"""
-        return f"""
-        <div style="font-family: 'Malgun Gothic', 'Segoe UI', sans-serif; line-height: 1.8; color: {COLORS['text_primary']};">
+        """Consent HTML content (Privacy law compliant, multilingual)"""
+        return self._get_consent_html_by_lang(self.language)
 
-        <!-- ===== 1. 개인정보 수집·이용 동의 ===== -->
+    def _get_consent_html_by_lang(self, lang: str) -> str:
+        """Return consent HTML by language"""
+        if lang == "ko":
+            return self._get_consent_html_ko()
+        elif lang == "ja":
+            return self._get_consent_html_ja()
+        elif lang == "zh":
+            return self._get_consent_html_zh()
+        return self._get_consent_html_en()
+
+    def _consent_html_wrapper(self, body: str) -> str:
+        """Common HTML wrapper"""
+        return f'''<div style="font-family: 'Malgun Gothic', 'Segoe UI', sans-serif; line-height: 1.8; color: {COLORS['text_primary']};">{body}</div>'''
+
+    def _consent_table_style(self) -> str:
+        return f'width: 100%; border-collapse: collapse; margin: 12px 0;'
+
+    def _consent_th_style(self) -> str:
+        return f'border: 1px solid {COLORS["border_subtle"]}; padding: 10px; background: {COLORS["bg_secondary"]};'
+
+    def _consent_td_style(self) -> str:
+        return f'border: 1px solid {COLORS["border_subtle"]}; padding: 10px;'
+
+    def _consent_transfer_table(self, lang: str) -> str:
+        """Data transfer table placeholder — actual content provided by server consent API"""
+        notice = {
+            "en": "Data transfer details are provided in the full consent document from the server.",
+            "ko": "데이터 이전 세부 사항은 서버에서 제공하는 동의서 전문에 포함되어 있습니다.",
+            "ja": "データ移転の詳細は、サーバーから提供される同意書全文に記載されています。",
+            "zh": "数据传输详情包含在服务器提供的完整同意书中。",
+        }
+        msg = notice.get(lang, notice["en"])
+        return f'<p style="background: rgba(210,153,34,0.1); padding: 12px; border-radius: 8px; font-style: italic;">{msg}</p>'
+
+    def _get_consent_html_en(self) -> str:
+        """English consent HTML"""
+        td = self._consent_td_style()
+        th = self._consent_th_style()
+        return self._consent_html_wrapper(f"""
         <h3 style="color: {COLORS['brand_primary']}; border-bottom: 2px solid {COLORS['brand_primary']}; padding-bottom: 8px;">
-            1. 개인정보 수집·이용 동의
-        </h3>
-        <table style="width: 100%; border-collapse: collapse; margin: 12px 0;">
-            <tr style="background: {COLORS['bg_secondary']};">
-                <th style="border: 1px solid {COLORS['border_subtle']}; padding: 10px; width: 25%;">항목</th>
-                <th style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">내용</th>
-            </tr>
-            <tr>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px; font-weight: bold;">수집 목적</td>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    디지털 포렌식 분석, 보안 사고 조사, 법적 증거 확보, AI 기반 이상 징후 탐지
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px; font-weight: bold;">수집 항목</td>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    <b>[시스템]</b> Prefetch, Amcache, UserAssist, 이벤트 로그(Security, System, Application),
-                    레지스트리(SYSTEM, SOFTWARE, SAM, NTUSER.DAT), MFT, USN Journal, $LogFile<br>
-                    <b>[사용자 활동]</b> 브라우저 기록, USB 연결 이력, 휴지통, 바로가기, 점프목록<br>
-                    <b>[문서/이메일]</b> Office 문서(doc/docx/xls/xlsx/ppt/pptx), PDF, 한글(hwp/hwpx), 이메일(pst/ost/eml/msg)
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px; font-weight: bold;">보유 기간</td>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    케이스 종료 후 <b>30일</b> (보유 기간 만료 시 자동 파기)<br>
-                    ※ 보관 기간은 케이스 상세 페이지에서 크레딧을 사용하여 연장 가능
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px; font-weight: bold;">처리 방식</td>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    • SHA-256 해시를 통한 무결성 검증<br>
-                    • TLS 1.3 암호화 통신<br>
-                    • AES-256-GCM 암호화 저장<br>
-                    • Chain of Custody 기록
-                </td>
-            </tr>
+            1. Personal Information Collection and Use Consent</h3>
+        <table style="{self._consent_table_style()}">
+            <tr><th style="{th}; width:25%;">Item</th><th style="{th}">Description</th></tr>
+            <tr><td style="{td}"><b>Collection Purpose</b></td><td style="{td}">Digital intelligence analysis, security incident investigation, evidence acquisition, AI-based anomaly detection</td></tr>
+            <tr><td style="{td}"><b>Collection Items</b></td><td style="{td}"><b>[System]</b> Prefetch, Amcache, UserAssist, Event logs, Registry, MFT, USN Journal<br><b>[User Activity]</b> Browser history, USB history, Recycle Bin, Shortcuts, Jump lists<br><b>[Documents/Email]</b> Office documents, PDF, HWP, Email (pst/ost/eml/msg)</td></tr>
+            <tr><td style="{td}"><b>Retention Period</b></td><td style="{td}"><b>30 days</b> after case closure (automatically deleted)</td></tr>
+            <tr><td style="{td}"><b>Processing Method</b></td><td style="{td}">SHA-256 hash verification, TLS 1.3 encryption, AES-256-GCM storage, Chain of Custody</td></tr>
         </table>
 
-        <!-- ===== 2. 개인정보 국외이전 고지 ===== -->
         <h3 style="color: {COLORS['warning']}; border-bottom: 2px solid {COLORS['warning']}; padding-bottom: 8px;">
-            2. 개인정보 국외이전 고지
-        </h3>
-        <p style="background: rgba(210, 153, 34, 0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['warning']};">
-            <b>알림:</b> 수집된 데이터는 클라우드 서버에 저장되며, 서버 위치에 따라 국외로 이전될 수 있습니다.
-            개인정보 보호법 제28조의8에 따라 아래 사항을 고지합니다.
-        </p>
-        <table style="width: 100%; border-collapse: collapse; margin: 12px 0;">
-            <tr style="background: {COLORS['bg_secondary']};">
-                <th style="border: 1px solid {COLORS['border_subtle']}; padding: 10px; width: 30%;">항목</th>
-                <th style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">내용</th>
-            </tr>
-            <tr>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">이전받는 자</td>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    RunPod, Inc. (GPU 서버) / Cloudflare, Inc. (R2 스토리지, CDN)
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">이전 국가</td>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    아시아태평양 (서울, 일본) - 서버 가용성에 따라 변동 가능
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">이전 일시 및 방법</td>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    수집 즉시 TLS 암호화 통신으로 실시간 전송
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">이전 목적</td>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    암호화된 데이터 저장, AI 분석 처리, 분석 결과 제공
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">보유 및 이용 기간</td>
-                <td style="border: 1px solid {COLORS['border_subtle']}; padding: 10px;">
-                    케이스 종료 후 30일 (연장 가능)
-                </td>
-            </tr>
+            2. Cross-Border Data Transfer Notice</h3>
+        <p style="background: rgba(210,153,34,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['warning']};">
+            <b>Notice:</b> Collected data may be transferred overseas. If you do not consent, service may be limited.</p>
+        {self._consent_transfer_table("en")}
+
+        <h3 style="color: {COLORS['brand_accent']}; border-bottom: 2px solid {COLORS['brand_accent']}; padding-bottom: 8px;">
+            3. AI Analysis and Automated Decision-Making Notice</h3>
+        <p style="background: rgba(212,165,116,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['brand_accent']};">
+            <b>Notice pursuant to applicable AI and privacy regulations</b></p>
+        <ul>
+            <li><b>AI Usage:</b> Pattern recognition, anomaly detection, correlation analysis, automated report generation.</li>
+            <li><b>Automated Decisions:</b> AI identifies suspicious activity, malware indicators, etc. for <u>reference only</u>.</li>
+            <li><b>Limitations:</b> False positives/negatives may occur. AI hallucinations may generate non-existent information.</li>
+            <li style="color: {COLORS['error']};"><b>Legal Risk:</b> Legal action based on AI results may lead to disputes. Always consult experts.</li>
+            <li><b>Your Rights:</b> Right to refuse, right to explanation, right to human intervention regarding automated decisions.</li>
+        </ul>
+
+        <h3 style="color: {COLORS['success']}; border-bottom: 2px solid {COLORS['success']}; padding-bottom: 8px;">
+            4. Data Subject Rights</h3>
+        <ul>
+            <li><b>Right of Access:</b> Request access to collected personal information.</li>
+            <li><b>Right to Rectification:</b> Request correction of inaccurate information.</li>
+            <li><b>Right to Erasure:</b> Request deletion (except during legal retention).</li>
+            <li><b>Right to Restrict Processing:</b> Request suspension of processing.</li>
+            <li><b>Right to Withdraw Consent:</b> Withdraw consent at any time.</li>
+            <li><b>Right to Data Portability:</b> Request transfer of your data in a machine-readable format.</li>
+        </ul>
+        <p>Contact: support@forensics-ai.com | Privacy: privacy@forensics-ai.com</p>
+
+        <h3 style="color: {COLORS['error']}; border-bottom: 2px solid {COLORS['error']}; padding-bottom: 8px;">
+            5. Legal Warning and Disclaimer</h3>
+        <p style="background: rgba(248,81,73,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['error']};">
+            <b>Warning:</b> Unauthorized data collection may violate computer fraud and privacy laws.</p>
+        <ul>
+            <li><b>Your system:</b> This consent is sufficient.</li>
+            <li><b>Another person's system:</b> Written consent from the owner or legal authority (warrant) is required.</li>
+            <li><b>Corporate investigation:</b> Legal team review and labor law compliance required.</li>
+        </ul>
+        <p style="background: rgba(100,100,100,0.2); padding: 12px; border-radius: 8px; margin-top: 12px;">
+            <b>Disclaimer:</b> The company is not liable for damages from AI analysis errors. All liability for unauthorized collection rests with the user.</p>
+        """)
+
+    def _get_consent_html_ko(self) -> str:
+        """Korean consent HTML"""
+        td = self._consent_td_style()
+        th = self._consent_th_style()
+        return self._consent_html_wrapper(f"""
+        <h3 style="color: {COLORS['brand_primary']}; border-bottom: 2px solid {COLORS['brand_primary']}; padding-bottom: 8px;">
+            1. 개인정보 수집·이용 동의</h3>
+        <table style="{self._consent_table_style()}">
+            <tr><th style="{th}; width:25%;">항목</th><th style="{th}">내용</th></tr>
+            <tr><td style="{td}"><b>수집 목적</b></td><td style="{td}">디지털 인텔리전스 분석, 보안 사고 조사, 데이터 확보, AI 기반 이상 탐지</td></tr>
+            <tr><td style="{td}"><b>수집 항목</b></td><td style="{td}"><b>[시스템]</b> Prefetch, Amcache, UserAssist, 이벤트 로그, 레지스트리, MFT, USN Journal<br><b>[사용자 활동]</b> 브라우저 기록, USB 연결 기록, 휴지통, 바로가기, 점프 목록<br><b>[문서/이메일]</b> Office 문서, PDF, HWP, 이메일 (pst/ost/eml/msg)</td></tr>
+            <tr><td style="{td}"><b>보관 기간</b></td><td style="{td}"><b>30일</b> (케이스 종료 후 자동 삭제)</td></tr>
+            <tr><td style="{td}"><b>처리 방법</b></td><td style="{td}">SHA-256 해시 검증, TLS 1.3 암호화 통신, AES-256-GCM 암호화 저장, Chain of Custody</td></tr>
         </table>
 
-        <!-- ===== 3. AI 분석 및 자동화된 의사결정 고지 ===== -->
+        <h3 style="color: {COLORS['warning']}; border-bottom: 2px solid {COLORS['warning']}; padding-bottom: 8px;">
+            2. 해외 데이터 이전 고지</h3>
+        <p style="background: rgba(210,153,34,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['warning']};">
+            <b>고지:</b> 수집된 데이터는 해외 서버로 이전될 수 있습니다. 동의하지 않으실 경우 서비스 이용이 제한됩니다.</p>
+        {self._consent_transfer_table("ko")}
+
         <h3 style="color: {COLORS['brand_accent']}; border-bottom: 2px solid {COLORS['brand_accent']}; padding-bottom: 8px;">
-            3. AI 분석 및 자동화된 의사결정 고지
-        </h3>
-        <p style="background: rgba(212, 165, 116, 0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['brand_accent']};">
-            <b>AI 기본법 및 개인정보 보호법 제37조의2에 따른 고지</b>
-        </p>
+            3. AI 분석 및 자동화된 의사결정 고지</h3>
+        <p style="background: rgba(212,165,116,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['brand_accent']};">
+            <b>개인정보보호법 제37조의2에 따른 고지</b></p>
         <ul>
-            <li><b>AI 활용 사실:</b> 본 서비스는 인공지능(AI)을 활용하여 수집된 데이터를 자동으로 분석합니다.
-                분석에는 패턴 인식, 이상 징후 탐지, 연관성 분석, 자동 리포트 생성이 포함됩니다.</li>
-            <li><b>자동화된 의사결정:</b> AI가 "의심스러운 활동", "악성코드 징후" 등을 자동으로 판단하며,
-                이러한 판단은 <u>참고 목적</u>으로만 제공됩니다.</li>
-            <li><b>AI 분석의 한계:</b>
-                <ul>
-                    <li>AI는 학습 데이터에 기반한 패턴 인식 결과를 제공하며, 100% 정확성을 보장하지 않습니다.</li>
-                    <li>오탐(False Positive) 또는 미탐(False Negative)이 발생할 수 있습니다.</li>
-                    <li>AI 환각(Hallucination)으로 인해 존재하지 않는 정보가 생성될 수 있습니다.</li>
-                </ul>
-            </li>
-            <li style="color: {COLORS['error']};"><b>법적 분쟁 가능성:</b>
-                AI 분석 결과를 근거로 법적 조치(고소, 징계, 해고 등)를 취할 경우,
-                분석 결과의 정확성에 대한 법적 분쟁이 발생할 수 있으며,
-                <u>귀하가 법적 소송의 당사자가 될 수 있습니다.</u>
-                반드시 전문가(포렌식 전문가, 법률 전문가) 검토 후 사용하십시오.
-            </li>
-            <li><b>정보주체 권리:</b> 개인정보 보호법 제37조의2에 따라 자동화된 결정에 대해
-                거부권, 설명요구권, 인적 개입 요구권을 행사할 수 있습니다.</li>
+            <li><b>AI 사용:</b> 패턴 인식, 이상 탐지, 상관관계 분석, 자동 보고서 생성</li>
+            <li><b>자동화된 판단:</b> 의심 활동, 악성코드 지표 등을 AI가 자동 판단 (<u>참고용</u>)</li>
+            <li><b>한계:</b> 오탐(False Positive), 미탐(False Negative), 환각(Hallucination) 발생 가능</li>
+            <li style="color: {COLORS['error']};"><b>법적 위험:</b> AI 분석 결과 기반 법적 조치 시 분쟁 발생 가능. 반드시 전문가 자문 필요</li>
+            <li><b>권리:</b> 거부권, 설명 요구권, 인적 개입 요구권을 행사할 수 있습니다</li>
         </ul>
 
-        <!-- ===== 4. 정보주체 권리 안내 ===== -->
         <h3 style="color: {COLORS['success']}; border-bottom: 2px solid {COLORS['success']}; padding-bottom: 8px;">
-            4. 정보주체 권리 안내
-        </h3>
-        <p>귀하는 개인정보 보호법에 따라 다음의 권리를 행사할 수 있습니다:</p>
+            4. 데이터 주체 권리 안내</h3>
         <ul>
-            <li><b>열람권:</b> 수집된 개인정보의 열람을 요청할 수 있습니다.</li>
-            <li><b>정정권:</b> 부정확한 정보의 정정을 요청할 수 있습니다.</li>
-            <li><b>삭제권:</b> 개인정보의 삭제를 요청할 수 있습니다 (단, 법적 보존 의무 기간 내 제외).</li>
-            <li><b>처리정지권:</b> 개인정보 처리의 정지를 요청할 수 있습니다.</li>
-            <li><b>동의철회권:</b> 언제든지 동의를 철회할 수 있습니다 (이미 처리된 데이터 제외).</li>
+            <li><b>열람권:</b> 수집된 개인정보에 대한 열람을 요구할 수 있습니다</li>
+            <li><b>정정권:</b> 부정확한 정보의 정정을 요구할 수 있습니다</li>
+            <li><b>삭제권:</b> 개인정보 삭제를 요구할 수 있습니다 (법적 보관 기간 제외)</li>
+            <li><b>처리정지권:</b> 개인정보 처리 정지를 요구할 수 있습니다</li>
+            <li><b>동의철회권:</b> 언제든지 동의를 철회할 수 있습니다</li>
+            <li><b>전송요구권:</b> 수집된 개인정보를 기계 판독 가능한 형태로 전송받을 수 있습니다</li>
         </ul>
-        <p>권리 행사: 서비스 관리자 또는 support@forensics-ai.com으로 문의</p>
+        <p>권리 행사: support@forensics-ai.com | 개인정보 보호책임자: privacy@forensics-ai.com</p>
 
-        <!-- ===== 5. 법적 경고 및 면책 ===== -->
         <h3 style="color: {COLORS['error']}; border-bottom: 2px solid {COLORS['error']}; padding-bottom: 8px;">
-            5. 법적 경고 및 면책
-        </h3>
-        <p style="background: rgba(248, 81, 73, 0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['error']};">
-            <b>경고:</b> 타인의 시스템에서 권한 없이 데이터를 수집하는 행위는
-            「정보통신망 이용촉진 및 정보보호 등에 관한 법률」,
-            「형법」(컴퓨터 등 사용 사기), 「개인정보 보호법」 등에 의해
-            <u>5년 이하의 징역 또는 5천만원 이하의 벌금</u>에 처해질 수 있습니다.
-        </p>
+            5. 법적 경고 및 면책</h3>
+        <p style="background: rgba(248,81,73,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['error']};">
+            <b>경고:</b> 타인의 시스템에서 무단으로 데이터를 수집하는 행위는 관련 법률에 따라 처벌될 수 있습니다.</p>
         <ul>
-            <li>반드시 <b>시스템 소유자의 서면 동의</b> 또는 <b>법적 권한</b>(수사기관 영장 등)이 있는 경우에만 사용하십시오.</li>
-            <li>기업 내부 조사 시 <b>법무팀 사전 검토</b> 및 <b>노동법 준수</b>를 확인하십시오.</li>
+            <li><b>본인 시스템:</b> 본 동의서로 충분합니다</li>
+            <li><b>타인 시스템:</b> 시스템 소유자의 서면 동의 또는 법적 근거(영장 등)가 필요합니다</li>
+            <li><b>기업 내부 조사:</b> 법무팀 검토 및 노동법 준수가 필요합니다</li>
         </ul>
-        <p style="background: rgba(100, 100, 100, 0.2); padding: 12px; border-radius: 8px; margin-top: 12px;">
-            <b>면책 조항:</b><br>
-            • 회사는 AI 분석 결과의 오류, 누락, 오해석으로 인한 손해에 대해 책임을 지지 않습니다.<br>
-            • 무단 수집으로 인한 모든 법적 책임은 사용자에게 있습니다.<br>
-            • AI 분석 결과를 법적 증거로 사용 시 발생하는 분쟁에 대해 회사는 책임을 지지 않습니다.
-        </p>
+        <p style="background: rgba(100,100,100,0.2); padding: 12px; border-radius: 8px; margin-top: 12px;">
+            <b>면책:</b> AI 분석 결과의 오류로 인한 손해에 대해 회사는 책임지지 않습니다. 무단 수집에 대한 법적 책임은 사용자에게 있습니다.</p>
+        """)
 
-        </div>
-        """
+    def _get_consent_html_ja(self) -> str:
+        """Japanese consent HTML"""
+        td = self._consent_td_style()
+        th = self._consent_th_style()
+        return self._consent_html_wrapper(f"""
+        <h3 style="color: {COLORS['brand_primary']}; border-bottom: 2px solid {COLORS['brand_primary']}; padding-bottom: 8px;">
+            1. 個人情報の収集・利用に関する同意</h3>
+        <table style="{self._consent_table_style()}">
+            <tr><th style="{th}; width:25%;">項目</th><th style="{th}">内容</th></tr>
+            <tr><td style="{td}"><b>収集目的</b></td><td style="{td}">デジタルインテリジェンス分析、セキュリティインシデント調査、データ取得、AI異常検知</td></tr>
+            <tr><td style="{td}"><b>収集項目</b></td><td style="{td}"><b>[システム]</b> Prefetch、Amcache、UserAssist、イベントログ、レジストリ、MFT、USN Journal<br><b>[ユーザー活動]</b> ブラウザ履歴、USB接続履歴、ごみ箱、ショートカット、ジャンプリスト<br><b>[文書/メール]</b> Office文書、PDF、HWP、メール</td></tr>
+            <tr><td style="{td}"><b>保存期間</b></td><td style="{td}"><b>30日間</b>（ケース終了後自動削除）</td></tr>
+            <tr><td style="{td}"><b>処理方法</b></td><td style="{td}">SHA-256ハッシュ検証、TLS 1.3暗号化通信、AES-256-GCM暗号化保存</td></tr>
+        </table>
+
+        <h3 style="color: {COLORS['warning']}; border-bottom: 2px solid {COLORS['warning']}; padding-bottom: 8px;">
+            2. 海外データ移転に関する告知</h3>
+        <p style="background: rgba(210,153,34,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['warning']};">
+            <b>告知：</b>収集されたデータは海外サーバーに移転される場合があります。同意されない場合、サービス利用が制限されます。</p>
+        {self._consent_transfer_table("ja")}
+
+        <h3 style="color: {COLORS['brand_accent']}; border-bottom: 2px solid {COLORS['brand_accent']}; padding-bottom: 8px;">
+            3. AI分析および自動化された意思決定に関する告知</h3>
+        <ul>
+            <li><b>AI使用：</b>パターン認識、異常検知、相関分析、自動レポート生成</li>
+            <li><b>自動判定：</b>不審な活動、マルウェア指標等をAIが自動判定（<u>参考用</u>）</li>
+            <li><b>制限事項：</b>誤検知、検知漏れ、ハルシネーションが発生する可能性があります</li>
+            <li><b>権利：</b>拒否権、説明要求権、人的介入要求権を行使できます</li>
+        </ul>
+
+        <h3 style="color: {COLORS['success']}; border-bottom: 2px solid {COLORS['success']}; padding-bottom: 8px;">
+            4. データ主体の権利</h3>
+        <ul>
+            <li><b>アクセス権：</b>収集された個人情報へのアクセスを要求できます</li>
+            <li><b>訂正権：</b>不正確な情報の訂正を要求できます</li>
+            <li><b>消去権：</b>個人情報の削除を要求できます</li>
+            <li><b>処理制限権：</b>個人情報処理の停止を要求できます</li>
+            <li><b>同意撤回権：</b>いつでも同意を撤回できます</li>
+            <li><b>データポータビリティ権：</b>収集された個人情報を機械可読形式で受け取ることができます</li>
+        </ul>
+        <p>お問い合わせ：support@forensics-ai.com | 個人情報保護責任者：privacy@forensics-ai.com</p>
+
+        <h3 style="color: {COLORS['error']}; border-bottom: 2px solid {COLORS['error']}; padding-bottom: 8px;">
+            5. 法的警告および免責事項</h3>
+        <p style="background: rgba(248,81,73,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['error']};">
+            <b>警告：</b>他人のシステムから無断でデータを収集する行為は法律により処罰される場合があります。</p>
+        <ul>
+            <li><b>ご自身のシステム：</b>本同意書で十分です</li>
+            <li><b>他人のシステム：</b>システム所有者の書面による同意または法的根拠（令状等）が必要です</li>
+            <li><b>企業内部調査：</b>法務チームの検証および労働法の遵守が必要です</li>
+        </ul>
+        """)
+
+    def _get_consent_html_zh(self) -> str:
+        """Chinese consent HTML"""
+        td = self._consent_td_style()
+        th = self._consent_th_style()
+        return self._consent_html_wrapper(f"""
+        <h3 style="color: {COLORS['brand_primary']}; border-bottom: 2px solid {COLORS['brand_primary']}; padding-bottom: 8px;">
+            1. 个人信息收集和使用同意</h3>
+        <table style="{self._consent_table_style()}">
+            <tr><th style="{th}; width:25%;">项目</th><th style="{th}">说明</th></tr>
+            <tr><td style="{td}"><b>收集目的</b></td><td style="{td}">数字智能分析、安全事件调查、数据获取、基于AI的异常检测</td></tr>
+            <tr><td style="{td}"><b>收集项目</b></td><td style="{td}"><b>[系统]</b> Prefetch、Amcache、UserAssist、事件日志、注册表、MFT、USN Journal<br><b>[用户活动]</b> 浏览器历史、USB连接记录、回收站、快捷方式、跳转列表<br><b>[文档/邮件]</b> Office文档、PDF、HWP、邮件</td></tr>
+            <tr><td style="{td}"><b>保留期限</b></td><td style="{td}"><b>30天</b>（案件结束后自动删除）</td></tr>
+            <tr><td style="{td}"><b>处理方法</b></td><td style="{td}">SHA-256哈希验证、TLS 1.3加密通信、AES-256-GCM加密存储</td></tr>
+        </table>
+
+        <h3 style="color: {COLORS['warning']}; border-bottom: 2px solid {COLORS['warning']}; padding-bottom: 8px;">
+            2. 跨境数据传输告知</h3>
+        <p style="background: rgba(210,153,34,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['warning']};">
+            <b>告知：</b>收集的数据可能会传输到海外服务器。如不同意，服务使用可能受到限制。</p>
+        {self._consent_transfer_table("zh")}
+
+        <h3 style="color: {COLORS['brand_accent']}; border-bottom: 2px solid {COLORS['brand_accent']}; padding-bottom: 8px;">
+            3. AI分析及自动化决策告知</h3>
+        <ul>
+            <li><b>AI使用：</b>模式识别、异常检测、关联分析、自动报告生成</li>
+            <li><b>自动判断：</b>AI自动识别可疑活动、恶意软件指标等（<u>仅供参考</u>）</li>
+            <li><b>局限性：</b>可能出现误报、漏报和AI幻觉</li>
+            <li><b>您的权利：</b>拒绝权、解释请求权、人工干预请求权</li>
+        </ul>
+
+        <h3 style="color: {COLORS['success']}; border-bottom: 2px solid {COLORS['success']}; padding-bottom: 8px;">
+            4. 数据主体权利</h3>
+        <ul>
+            <li><b>访问权：</b>可请求访问收集的个人信息</li>
+            <li><b>更正权：</b>可请求更正不准确的信息</li>
+            <li><b>删除权：</b>可请求删除个人信息</li>
+            <li><b>限制处理权：</b>可请求暂停个人信息处理</li>
+            <li><b>撤回同意权：</b>可随时撤回同意</li>
+            <li><b>数据可携权：</b>可请求以机器可读格式获取收集的个人信息</li>
+        </ul>
+        <p>联系方式：support@forensics-ai.com | 个人信息保护负责人：privacy@forensics-ai.com</p>
+
+        <h3 style="color: {COLORS['error']}; border-bottom: 2px solid {COLORS['error']}; padding-bottom: 8px;">
+            5. 法律警告及免责声明</h3>
+        <p style="background: rgba(248,81,73,0.15); padding: 12px; border-radius: 8px; border-left: 4px solid {COLORS['error']};">
+            <b>警告：</b>未经授权从他人系统收集数据可能违反相关法律。</p>
+        <ul>
+            <li><b>本人系统：</b>本同意书即可</li>
+            <li><b>他人系统：</b>需要系统所有者的书面同意或法律依据（搜查令等）</li>
+            <li><b>企业内部调查：</b>需要法务团队审查及劳动法合规</li>
+        </ul>
+        """)
 
     def _update_button_state(self):
-        """체크박스 상태에 따라 버튼 활성화 (모든 체크박스 체크 필요)"""
+        """Enable button based on checkbox state (all checkboxes must be checked)"""
         all_checked = all(cb.isChecked() for cb in self.checkboxes) if self.checkboxes else False
         self.agree_btn.setEnabled(all_checked)
 
     def _on_agree(self):
-        """동의 버튼 클릭"""
-        # 서버에 동의 기록 제출
+        """Agree button clicked"""
+        # Submit consent record to server
         self._submit_consent_to_server()
 
         self.consent_given = True
@@ -581,13 +736,13 @@ class ConsentDialog(QDialog):
         self.accept()
 
     def _create_consent_record(self) -> dict:
-        """동의 기록 생성 (서버 API 연동 버전)"""
+        """Create consent record (server API integration version)"""
         import hmac
         import os
 
         timestamp = datetime.now(timezone.utc).isoformat()
 
-        # 시스템 정보
+        # System information
         try:
             hostname = socket.gethostname()
             ip_address = socket.gethostbyname(hostname)
@@ -595,11 +750,11 @@ class ConsentDialog(QDialog):
             hostname = "unknown"
             ip_address = "unknown"
 
-        # [보안] 개인정보 보호: IP 주소와 호스트명을 해시 처리
+        # [Security] Privacy protection: Hash IP address and hostname
         hostname_hash = hashlib.sha256(hostname.encode()).hexdigest()[:16]
         ip_hash = hashlib.sha256(ip_address.encode()).hexdigest()[:16]
 
-        # 동의한 항목 목록 (동적 체크박스에서)
+        # List of agreed items (from dynamic checkboxes)
         agreed_items = [cb.text() for cb in self.checkboxes if cb.isChecked()]
 
         record = {
@@ -614,22 +769,23 @@ class ConsentDialog(QDialog):
             "agreed_items": agreed_items,
             "legal_basis": {
                 "pipa_article_15": "Collection and Use Consent",
+                "pipa_article_17": "Third-party Provision Consent",
                 "pipa_article_28_8": "Overseas Transfer Consent",
-                "pipa_article_37_2": "Automated Decision-making Notice"
+                "pipa_article_37_2": "Automated Decision-making Notice",
+                "pipa_article_35_3": "Data Portability Right"
             }
         }
 
-        # 동의 기록 해시 (무결성)
+        # Consent record hash (integrity)
         items_str = "|".join(agreed_items)
         record_str = f"{timestamp}|{hostname_hash}|{ip_hash}|{items_str}"
         record["consent_hash"] = hashlib.sha256(record_str.encode()).hexdigest()
 
-        # HMAC 서명
+        # HMAC signature
         signing_key = os.getenv("CONSENT_SIGNING_KEY")
         if not signing_key:
-            signing_key = hashlib.sha256(
-                f"consent_sign_{self.session_id or 'default'}".encode()
-            ).hexdigest()[:32]
+            # Fallback: random key (signature for local integrity only)
+            signing_key = hashlib.sha256(os.urandom(32)).hexdigest()[:32]
 
         verify_payload = f"{timestamp}|{record['consent_version']}|{record['consent_hash']}"
         record["server_verify_signature"] = hmac.new(
@@ -647,11 +803,11 @@ class ConsentDialog(QDialog):
         return record
 
     def get_consent_record(self) -> Optional[dict]:
-        """동의 기록 반환"""
+        """Return consent record"""
         return self.consent_record if self.consent_given else None
 
     def _get_stylesheet(self) -> str:
-        """스타일시트 - 플랫폼 통일 테마"""
+        """Stylesheet - platform unified theme"""
         return f"""
             QDialog {{
                 background-color: {COLORS['bg_primary']};
@@ -747,17 +903,17 @@ def show_consent_dialog(
     language: str = "en"
 ) -> Optional[dict]:
     """
-    동의 다이얼로그 표시 및 결과 반환
+    Display consent dialog and return result
 
     Args:
-        parent: 부모 위젯
-        server_url: API 서버 URL (예: http://localhost:8000)
-        session_id: 수집 세션 ID
-        case_id: 케이스 ID
-        language: 기본 언어 코드 (en, ko, ja, zh)
+        parent: Parent widget
+        server_url: API server URL (e.g., http://localhost:8000)
+        session_id: Collection session ID
+        case_id: Case ID
+        language: Default language code (en, ko, ja, zh)
 
     Returns:
-        동의 기록 dict (동의한 경우) 또는 None (취소한 경우)
+        Consent record dict (if agreed) or None (if cancelled)
     """
     dialog = ConsentDialog(
         parent=parent,
@@ -774,13 +930,13 @@ def show_consent_dialog(
 
 
 if __name__ == "__main__":
-    # 테스트용
+    # For testing
     from PyQt6.QtWidgets import QApplication
     import sys
 
     app = QApplication(sys.argv)
 
-    # 서버 연동 테스트
+    # Server integration test
     record = show_consent_dialog(
         server_url="http://localhost:8000",
         session_id="test-session-123",

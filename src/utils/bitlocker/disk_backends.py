@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Disk Backends - UnifiedDiskReader 구현체들
+Disk Backends - UnifiedDiskReader implementations
 
-물리 디스크, E01 이미지, RAW 이미지에 대한 접근 제공
+Provides access to physical disks, E01 images, and RAW images
 """
 
 import os
@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 
 class PhysicalDiskBackend(UnifiedDiskReader):
     """
-    Windows 물리 디스크 백엔드
-    \\.\PhysicalDrive{N}을 통해 raw sector에 직접 접근
-    관리자 권한 필요
+    Windows physical disk backend
+    Direct access to raw sectors via \\.\PhysicalDrive{N}
+    Requires administrator privileges
     """
 
     def __init__(self, drive_number: int = 0):
@@ -44,7 +44,7 @@ class PhysicalDiskBackend(UnifiedDiskReader):
         self._open()
 
     def _open(self):
-        """물리 드라이브 열기"""
+        """Open physical drive"""
         try:
             import win32file
             import win32con
@@ -86,7 +86,7 @@ class PhysicalDiskBackend(UnifiedDiskReader):
                 raise DiskError(f"Failed to open {self.drive_path}: {e}")
 
     def _get_disk_geometry(self):
-        """디스크 지오메트리 조회"""
+        """Get disk geometry"""
         try:
             import win32file
             import winioctlcon
@@ -111,7 +111,7 @@ class PhysicalDiskBackend(UnifiedDiskReader):
             self._disk_size = 0
 
     def read(self, offset: int, size: int) -> bytes:
-        """Raw 바이트 읽기"""
+        """Read raw bytes"""
         if not self._is_open or not self._handle:
             raise DiskError("Disk not open")
 
@@ -156,7 +156,7 @@ class PhysicalDiskBackend(UnifiedDiskReader):
 
 
 class E01DiskBackend(UnifiedDiskReader):
-    """E01/EWF 포렌식 이미지 백엔드"""
+    """E01/EWF forensic image backend"""
 
     def __init__(self, e01_path: str):
         super().__init__()
@@ -244,7 +244,7 @@ class E01DiskBackend(UnifiedDiskReader):
 
 
 class RAWImageBackend(UnifiedDiskReader):
-    """RAW/DD 이미지 파일 백엔드"""
+    """RAW/DD image file backend"""
 
     def __init__(self, image_path: str, use_mmap: bool = False):
         super().__init__()
@@ -327,7 +327,7 @@ class RAWImageBackend(UnifiedDiskReader):
 
 
 def create_disk_backend(source: str) -> UnifiedDiskReader:
-    """디스크 백엔드 자동 생성"""
+    """Auto-create disk backend"""
     source = str(source)
 
     if source.isdigit():

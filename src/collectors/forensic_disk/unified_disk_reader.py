@@ -2,25 +2,25 @@
 """
 Unified Disk Reader - Abstract Base Class for Raw Disk Access
 
-모든 디스크 소스(물리 디스크, E01, RAW 이미지)의 통합 인터페이스.
-FTK Imager, Autopsy, EnCase와 동일한 raw sector 기반 접근 방식.
+Unified interface for all disk sources (physical disk, E01, RAW image).
+Same raw sector based access approach as FTK Imager, Autopsy, EnCase.
 
 Features:
-- 물리 디스크 직접 접근 (\\\\.\\PhysicalDrive{N})
-- E01 포렌식 이미지 (pyewf)
-- RAW/DD 이미지 파일
-- 섹터 정렬 자동 처리
+- Direct physical disk access (\\\\.\\PhysicalDrive{N})
+- E01 forensic images (pyewf)
+- RAW/DD image files
+- Automatic sector alignment handling
 
 Usage:
     from core.engine.collectors.filesystem.unified_disk_reader import UnifiedDiskReader
     from core.engine.collectors.filesystem.disk_backends import PhysicalDiskBackend
 
     with PhysicalDiskBackend(0) as disk:
-        # MBR 읽기
+        # Read MBR
         mbr = disk.read(0, 512)
 
-        # 특정 섹터 읽기
-        data = disk.read_sectors(2048, 8)  # 섹터 2048부터 8섹터
+        # Read specific sectors
+        data = disk.read_sectors(2048, 8)  # 8 sectors starting from sector 2048
 
 References:
 - https://docs.microsoft.com/en-us/windows/win32/fileio/disk-devices
@@ -37,17 +37,17 @@ logger = logging.getLogger(__name__)
 
 
 class DiskSourceType(Enum):
-    """디스크 소스 타입"""
+    """Disk source type"""
     PHYSICAL_DISK = "physical"    # \\.\PhysicalDrive{N}
-    E01_IMAGE = "e01"             # E01/EWF 포렌식 이미지
-    RAW_IMAGE = "raw"             # DD/RAW 이미지 파일
+    E01_IMAGE = "e01"             # E01/EWF forensic image
+    RAW_IMAGE = "raw"             # DD/RAW image file
     VHD_IMAGE = "vhd"             # Virtual Hard Disk
     VMDK_IMAGE = "vmdk"           # VMware Disk
 
 
 @dataclass
 class DiskInfo:
-    """디스크 메타데이터"""
+    """Disk metadata"""
     source_type: DiskSourceType
     total_size: int
     sector_size: int = 512
@@ -59,33 +59,33 @@ class DiskInfo:
 
 @dataclass
 class PartitionInfo:
-    """파티션 정보"""
+    """Partition information"""
     index: int
     partition_type: int           # MBR type (0x07=NTFS, 0x0B=FAT32, etc.)
     type_guid: str = ""           # GPT GUID
-    type_name: str = ""           # 파일시스템 이름
-    offset: int = 0               # 파티션 시작 오프셋 (바이트)
-    size: int = 0                 # 파티션 크기 (바이트)
-    lba_start: int = 0            # 시작 LBA 섹터
-    sector_count: int = 0         # 섹터 수
-    filesystem: str = ""          # 감지된 파일시스템 (NTFS, FAT32, etc.)
-    is_bootable: bool = False     # 부팅 가능 플래그
-    name: str = ""                # GPT 파티션 이름
+    type_name: str = ""           # Filesystem name
+    offset: int = 0               # Partition start offset (bytes)
+    size: int = 0                 # Partition size (bytes)
+    lba_start: int = 0            # Starting LBA sector
+    sector_count: int = 0         # Number of sectors
+    filesystem: str = ""          # Detected filesystem (NTFS, FAT32, etc.)
+    is_bootable: bool = False     # Bootable flag
+    name: str = ""                # GPT partition name
 
 
 class UnifiedDiskReader(ABC):
     """
-    통합 디스크 리더 추상 베이스 클래스
+    Unified Disk Reader Abstract Base Class
 
-    모든 디스크 소스(물리 디스크, E01, RAW 등)가 이 인터페이스를 구현합니다.
-    raw sector 기반 접근으로 Windows 파일시스템을 완전히 우회합니다.
+    All disk sources (physical disk, E01, RAW, etc.) implement this interface.
+    Raw sector based access completely bypasses the Windows filesystem.
 
     Usage:
-        # Context manager 사용 (권장)
+        # Using context manager (recommended)
         with PhysicalDiskBackend(0) as disk:
             data = disk.read(0, 512)
 
-        # 직접 사용
+        # Direct usage
         disk = PhysicalDiskBackend(0)
         try:
             data = disk.read(0, 512)
@@ -98,52 +98,52 @@ class UnifiedDiskReader(ABC):
         self._disk_size = 0
         self._is_open = False
 
-    # ========== Abstract Methods (구현 필수) ==========
+    # ========== Abstract Methods (must implement) ==========
 
     @abstractmethod
     def read(self, offset: int, size: int) -> bytes:
         """
-        Raw 바이트 읽기
+        Read raw bytes
 
         Args:
-            offset: 절대 바이트 오프셋 (디스크 시작부터)
-            size: 읽을 바이트 수
+            offset: Absolute byte offset (from disk start)
+            size: Number of bytes to read
 
         Returns:
-            Raw 바이트 데이터 (디스크 끝에서는 size보다 적을 수 있음)
+            Raw byte data (may be less than size at disk end)
 
         Raises:
-            IOError: 읽기 실패
+            IOError: Read failed
         """
         pass
 
     @abstractmethod
     def get_disk_info(self) -> DiskInfo:
-        """디스크 메타데이터 반환"""
+        """Return disk metadata"""
         pass
 
     @abstractmethod
     def get_size(self) -> int:
-        """디스크 전체 크기 (바이트)"""
+        """Get total disk size (bytes)"""
         pass
 
     @abstractmethod
     def close(self) -> None:
-        """리소스 해제"""
+        """Release resources"""
         pass
 
     # ========== Implemented Methods ==========
 
     def read_sectors(self, sector_offset: int, sector_count: int) -> bytes:
         """
-        섹터 단위 읽기
+        Read by sector units
 
         Args:
-            sector_offset: 시작 섹터 번호 (0-based)
-            sector_count: 읽을 섹터 수
+            sector_offset: Starting sector number (0-based)
+            sector_count: Number of sectors to read
 
         Returns:
-            Raw 섹터 데이터
+            Raw sector data
         """
         byte_offset = sector_offset * self._sector_size
         byte_size = sector_count * self._sector_size
@@ -151,41 +151,41 @@ class UnifiedDiskReader(ABC):
 
     def read_aligned(self, offset: int, size: int) -> bytes:
         """
-        섹터 정렬된 읽기
+        Sector-aligned read
 
-        물리 디스크에서는 섹터 경계로 정렬된 읽기가 필요합니다.
-        이 메서드는 자동으로 정렬을 처리합니다.
+        Physical disks require reads aligned to sector boundaries.
+        This method automatically handles alignment.
 
         Args:
-            offset: 바이트 오프셋 (정렬 불필요)
-            size: 읽을 바이트 수
+            offset: Byte offset (alignment not required)
+            size: Number of bytes to read
 
         Returns:
-            요청된 범위의 데이터 (정확한 크기)
+            Data of the requested range (exact size)
         """
-        # 정렬된 시작/끝 섹터 계산
+        # Calculate aligned start/end sectors
         start_sector = offset // self._sector_size
         end_byte = offset + size
         end_sector = (end_byte + self._sector_size - 1) // self._sector_size
 
-        # 정렬된 데이터 읽기
+        # Read aligned data
         aligned_data = self.read_sectors(start_sector, end_sector - start_sector)
 
-        # 요청된 범위 추출
+        # Extract requested range
         start_in_sector = offset % self._sector_size
         return aligned_data[start_in_sector:start_in_sector + size]
 
     def read_cluster(self, cluster_number: int, cluster_size: int, partition_offset: int = 0) -> bytes:
         """
-        클러스터 읽기 (파일시스템 레벨)
+        Read cluster (filesystem level)
 
         Args:
-            cluster_number: 클러스터 번호 (LCN)
-            cluster_size: 클러스터 크기 (바이트)
-            partition_offset: 파티션 시작 오프셋
+            cluster_number: Cluster number (LCN)
+            cluster_size: Cluster size (bytes)
+            partition_offset: Partition start offset
 
         Returns:
-            클러스터 데이터
+            Cluster data
         """
         offset = partition_offset + (cluster_number * cluster_size)
         return self.read(offset, cluster_size)
@@ -198,18 +198,18 @@ class UnifiedDiskReader(ABC):
         max_size: int = None
     ) -> bytes:
         """
-        Data runs로부터 파일 데이터 읽기
+        Read file data from data runs
 
-        NTFS data runs 또는 FAT cluster chain을 따라 파일 내용을 읽습니다.
+        Reads file contents following NTFS data runs or FAT cluster chain.
 
         Args:
-            data_runs: [(lcn, cluster_count), ...] 리스트
-            cluster_size: 클러스터 크기 (바이트)
-            partition_offset: 파티션 시작 오프셋
-            max_size: 최대 읽기 크기 (파일 크기 제한용)
+            data_runs: [(lcn, cluster_count), ...] list
+            cluster_size: Cluster size (bytes)
+            partition_offset: Partition start offset
+            max_size: Maximum read size (for file size limiting)
 
         Returns:
-            파일 데이터 (bytes)
+            File data (bytes)
         """
         data = bytearray()
         bytes_read = 0
@@ -219,14 +219,14 @@ class UnifiedDiskReader(ABC):
                 break
 
             if lcn is None:
-                # Sparse run - 0으로 채움
+                # Sparse run - fill with zeros
                 sparse_size = cluster_count * cluster_size
                 if max_size:
                     sparse_size = min(sparse_size, max_size - bytes_read)
                 data.extend(b'\x00' * sparse_size)
                 bytes_read += sparse_size
             else:
-                # 실제 클러스터 읽기
+                # Read actual clusters
                 run_offset = partition_offset + (lcn * cluster_size)
                 run_size = cluster_count * cluster_size
 
@@ -243,12 +243,12 @@ class UnifiedDiskReader(ABC):
 
     @property
     def sector_size(self) -> int:
-        """섹터 크기 (보통 512 바이트)"""
+        """Sector size (typically 512 bytes)"""
         return self._sector_size
 
     @property
     def is_open(self) -> bool:
-        """디스크가 열려있는지 여부"""
+        """Whether the disk is open"""
         return self._is_open
 
     # ========== Context Manager ==========
@@ -262,35 +262,35 @@ class UnifiedDiskReader(ABC):
 
 
 class DiskError(Exception):
-    """디스크 작업 관련 기본 예외"""
+    """Base exception for disk operations"""
     pass
 
 
 class DiskNotFoundError(DiskError):
-    """디스크를 찾을 수 없음"""
+    """Disk not found"""
     pass
 
 
 class DiskPermissionError(DiskError):
-    """디스크 접근 권한 없음 (관리자 권한 필요)"""
+    """Disk access permission denied (administrator privileges required)"""
     pass
 
 
 class DiskReadError(DiskError):
-    """디스크 읽기 오류"""
+    """Disk read error"""
     pass
 
 
 class PartitionError(DiskError):
-    """파티션 테이블 파싱 오류"""
+    """Partition table parsing error"""
     pass
 
 
 class FilesystemError(DiskError):
-    """파일시스템 감지/파싱 오류"""
+    """Filesystem detection/parsing error"""
     pass
 
 
 class BitLockerError(DiskError):
-    """BitLocker 암호화된 볼륨"""
+    """BitLocker encrypted volume"""
     pass

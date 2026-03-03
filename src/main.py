@@ -20,28 +20,32 @@ from utils.privilege import is_admin, run_as_admin
 
 
 # =============================================================================
-# P1 보안 강화: HTTPS/WSS 필수화
+# P1 Security Enhancement: HTTPS/WSS Required
 # =============================================================================
 
 def _get_config_paths() -> list:
     """
-    설정 파일 검색 경로 반환 (우선순위순)
+    Return configuration file search paths (in priority order)
 
-    1. 실행 파일과 같은 디렉토리 (PyInstaller 빌드 시)
-    2. collector 루트 디렉토리 (개발 환경)
-    3. src 디렉토리
+    1. Same directory as executable (for PyInstaller builds)
+    2. collector root directory (development environment)
+    3. src directory
     """
     paths = []
 
-    # PyInstaller 빌드된 경우 실행 파일 위치
+    # Location of executable when built with PyInstaller
     if getattr(sys, 'frozen', False):
         exe_dir = os.path.dirname(sys.executable)
         paths.append(os.path.join(exe_dir, 'config.json'))
+    else:
+        # Development environment: prefer config.development.json
+        src_dir = os.path.dirname(os.path.abspath(__file__))
+        collector_dir = os.path.dirname(src_dir)
+        paths.append(os.path.join(collector_dir, 'config.development.json'))
 
-    # 개발 환경: collector 루트 및 src 디렉토리
+    # Fallback: config.json
     src_dir = os.path.dirname(os.path.abspath(__file__))
     collector_dir = os.path.dirname(src_dir)
-
     paths.append(os.path.join(collector_dir, 'config.json'))
     paths.append(os.path.join(src_dir, 'config.json'))
 
@@ -50,59 +54,59 @@ def _get_config_paths() -> list:
 
 def _load_config_file() -> dict | None:
     """
-    설정 파일에서 구성 로드
+    Load configuration from config file
 
     Returns:
-        설정 딕셔너리 또는 None (파일 없음)
+        Configuration dictionary or None (if file not found)
     """
     for config_path in _get_config_paths():
         if os.path.exists(config_path):
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                    print(f"[설정] 설정 파일 로드: {config_path}")
+                    print(f"[Config] Loaded config file: {config_path}")
                     return config
             except (json.JSONDecodeError, IOError) as e:
-                print(f"[경고] 설정 파일 로드 실패: {config_path} - {e}")
+                print(f"[Warning] Failed to load config file: {config_path} - {e}")
                 continue
     return None
 
 
 def get_secure_config() -> dict:
     """
-    보안 설정이 적용된 구성 반환
+    Return configuration with security settings applied
 
-    우선순위:
-        1. 환경변수 (가장 높은 우선순위)
-        2. config.json 파일 (빌드 시 포함)
-        3. 기본값 (개발용 fallback)
+    Priority:
+        1. Environment variables (highest priority)
+        2. config.json file (included during build)
+        3. Default values (development fallback)
 
-    환경변수:
-        COLLECTOR_SERVER_URL: 서버 URL
+    Environment variables:
+        COLLECTOR_SERVER_URL: Server URL
         COLLECTOR_WS_URL: WebSocket URL
-        COLLECTOR_DEV_MODE: 개발 모드 (true/false)
-        COLLECTOR_ALLOW_INSECURE: 비보안 연결 허용 (true/false)
+        COLLECTOR_DEV_MODE: Development mode (true/false)
+        COLLECTOR_ALLOW_INSECURE: Allow insecure connections (true/false)
 
-    배포 빌드 시:
-        config.json 파일에 운영 서버 URL 포함하여 빌드
-        → 사용자가 별도 설정 없이 실행만 하면 자동 연결
+    For deployment builds:
+        Include production server URL in config.json during build
+        -> Users can run without additional configuration for auto-connection
 
-    개발 환경에서는:
-        환경변수로 COLLECTOR_DEV_MODE=true 설정
+    For development environment:
+        Set COLLECTOR_DEV_MODE=true via environment variable
     """
-    # Step 1: 설정 파일에서 기본값 로드
+    # Step 1: Load default values from config file
     file_config = _load_config_file() or {}
 
-    # Step 2: 환경변수로 오버라이드 (환경변수가 우선순위 높음)
-    # 환경변수가 설정되지 않은 경우 파일 설정 → 기본값 순으로 fallback
+    # Step 2: Override with environment variables (environment variables have higher priority)
+    # Falls back to file settings -> default values if environment variable is not set
     dev_mode_default = str(file_config.get('dev_mode', 'false')).lower()
     allow_insecure_default = str(file_config.get('allow_insecure', 'false')).lower()
 
     dev_mode = os.environ.get('COLLECTOR_DEV_MODE', dev_mode_default).lower() == 'true'
     allow_insecure = os.environ.get('COLLECTOR_ALLOW_INSECURE', allow_insecure_default).lower() == 'true'
 
-    # URL 설정: 환경변수 → 파일 → 기본값
-    # NOTE: Windows에서 'localhost'가 IPv6(::1)로 해석되어 Docker 연결 실패할 수 있음
+    # URL settings: environment variable -> file -> default
+    # NOTE: On Windows, 'localhost' may resolve to IPv6 (::1) causing Docker connection failures
     server_url = os.environ.get(
         'COLLECTOR_SERVER_URL',
         file_config.get('server_url', 'https://127.0.0.1:8000')
@@ -112,22 +116,34 @@ def get_secure_config() -> dict:
         file_config.get('ws_url', 'wss://127.0.0.1:8000')
     )
 
-    # [보안] HTTPS/WSS 강제 및 경고
+    # [Security] Enforce HTTPS/WSS and warnings
+    # Local address patterns (allowed for development environment)
+    local_patterns = ('127.0.0.1', 'localhost', '::1', '0.0.0.0')
+    is_local_server = any(p in server_url for p in local_patterns)
+
     if allow_insecure:
         print("=" * 60)
-        print("[보안 경고] allow_insecure=true 설정됨!")
-        print("[보안 경고] 데이터가 암호화되지 않은 채 전송됩니다.")
-        print("[보안 경고] 운영 환경에서는 절대 사용하지 마세요!")
+        print("[SECURITY WARNING] allow_insecure=true is set!")
+        print("[SECURITY WARNING] Data will be transmitted without encryption.")
+        print("[SECURITY WARNING] Never use this in production environment!")
         print("=" * 60)
     elif not dev_mode:
-        # 프로덕션 모드에서 HTTPS/WSS 강제
+        # Enforce HTTPS/WSS in production mode (except local addresses)
         if server_url.startswith('http://'):
-            print("[보안 경고] HTTP 연결이 감지되었습니다. HTTPS로 변환합니다.")
-            server_url = server_url.replace('http://', 'https://', 1)
+            if is_local_server:
+                print("[Security] Local development server (HTTP) detected - allowed")
+            else:
+                print("[SECURITY ERROR] HTTP is not allowed in production environment.")
+                print("[SECURITY ERROR] Use HTTPS URL or set COLLECTOR_DEV_MODE=true.")
+                raise ValueError(f"Production requires HTTPS. Got: {server_url}")
 
         if ws_url.startswith('ws://'):
-            print("[보안 경고] WS 연결이 감지되었습니다. WSS로 변환합니다.")
-            ws_url = ws_url.replace('ws://', 'wss://', 1)
+            if is_local_server:
+                print("[Security] Local development server (WS) detected - allowed")
+            else:
+                print("[SECURITY ERROR] WS is not allowed in production environment.")
+                print("[SECURITY ERROR] Use WSS URL or set COLLECTOR_DEV_MODE=true.")
+                raise ValueError(f"Production requires WSS. Got: {ws_url}")
 
     config = {
         'server_url': server_url,
@@ -136,38 +152,39 @@ def get_secure_config() -> dict:
         'app_name': file_config.get('app_name', 'Digital Forensics Collector'),
         'dev_mode': dev_mode,
         'allow_insecure': allow_insecure,
+        'is_release': getattr(sys, 'frozen', False),
     }
 
-    # 설정 요약 출력
-    mode_str = "개발" if dev_mode else "운영"
-    print(f"[설정] 모드: {mode_str}, 서버: {server_url}")
+    # Print configuration summary
+    mode_str = "Development" if dev_mode else "Production"
+    print(f"[Config] Mode: {mode_str}, Server: {server_url}")
 
     return config
 
 
-# Configuration (P1: 보안 설정 적용)
+# Configuration (P1: Apply security settings)
 CONFIG = get_secure_config()
 
 
 def check_admin_privilege():
     """Check if running as administrator"""
     if not is_admin():
-        # Show warning message in Korean
+        # Show warning message
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Icon.Warning)
-        msg_box.setWindowTitle("관리자 권한 필요")
-        msg_box.setText("이 수집 도구는 관리자 권한이 필요합니다.")
+        msg_box.setWindowTitle("Administrator Privileges Required")
+        msg_box.setText("This collection tool requires administrator privileges.")
         msg_box.setInformativeText(
-            "포렌식 아티팩트를 정확하게 수집하기 위해서는 관리자 권한으로 "
-            "실행해야 합니다.\n\n"
-            "관리자 권한으로 다시 실행하시겠습니까?"
+            "Administrator privileges are required to accurately collect "
+            "forensic artifacts.\n\n"
+            "Would you like to restart with administrator privileges?"
         )
         msg_box.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
-        msg_box.button(QMessageBox.StandardButton.Yes).setText("예, 다시 실행")
-        msg_box.button(QMessageBox.StandardButton.No).setText("아니오, 종료")
+        msg_box.button(QMessageBox.StandardButton.Yes).setText("Yes, restart")
+        msg_box.button(QMessageBox.StandardButton.No).setText("No, exit")
 
         reply = msg_box.exec()
 
@@ -179,10 +196,10 @@ def check_admin_privilege():
                 # Failed to request elevation
                 QMessageBox.critical(
                     None,
-                    "오류",
-                    "관리자 권한으로 실행할 수 없습니다.\n"
-                    "프로그램을 마우스 오른쪽 버튼으로 클릭하고 "
-                    "'관리자 권한으로 실행'을 선택하세요."
+                    "Error",
+                    "Cannot run with administrator privileges.\n"
+                    "Right-click on the program and select "
+                    "'Run as administrator'."
                 )
         sys.exit(0)
 

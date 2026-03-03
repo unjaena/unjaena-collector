@@ -1,17 +1,17 @@
 """
 Memory Forensics Collector Module
 
-메모리 포렌식 수집 및 분석 모듈.
-WinPmem을 이용한 메모리 덤프 수집과 Volatility3를 이용한 분석을 지원합니다.
+Memory forensics collection and analysis module.
+Supports memory dump collection using WinPmem and analysis using Volatility3.
 
-수집 가능 아티팩트:
-- memory_process: 프로세스 목록
-- memory_network: 네트워크 연결 정보
-- memory_module: 로드된 DLL/모듈
-- memory_handle: 핸들 정보
-- memory_registry: 메모리 내 레지스트리 하이브
-- memory_credential: 자격 증명 정보
-- memory_malware: 악성코드 탐지 (YARA 룰 기반)
+Collectable Artifacts:
+- memory_process: Process list
+- memory_network: Network connection information
+- memory_module: Loaded DLLs/modules
+- memory_handle: Handle information
+- memory_registry: Registry hives in memory
+- memory_credential: Credential information
+- memory_malware: Malware detection (YARA rule-based)
 
 Requirements:
     - volatility3>=2.5.0
@@ -127,10 +127,10 @@ def get_winpmem_path() -> Optional[Path]:
 
 class WinPmemDumper:
     """
-    WinPmem을 이용한 실시간 메모리 덤프 수집
+    Live memory dump collection using WinPmem
 
-    WinPmem은 Windows 물리 메모리를 raw 포맷으로 덤프합니다.
-    관리자 권한이 필요합니다.
+    WinPmem dumps Windows physical memory in raw format.
+    Administrator privileges required.
     """
 
     def __init__(self, winpmem_path: Optional[Path] = None):
@@ -180,8 +180,8 @@ class WinPmemDumper:
         output_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         format: str = 'raw',
-        timeout_seconds: int = 1800,  # 30분 기본 타임아웃
-        stall_timeout_seconds: int = 120  # 진행 없으면 2분 후 타임아웃
+        timeout_seconds: int = 1800,  # 30 minute default timeout
+        stall_timeout_seconds: int = 120  # 2 minute timeout if no progress
     ) -> Dict[str, Any]:
         """
         Acquire full physical memory dump.
@@ -190,8 +190,8 @@ class WinPmemDumper:
             output_path: Path to save the memory dump
             progress_callback: Callback function(current_bytes, total_bytes)
             format: Output format ('raw' or 'aff4')
-            timeout_seconds: Maximum total time for acquisition (default: 1800 = 30분)
-            stall_timeout_seconds: Timeout if no progress (default: 120 = 2분)
+            timeout_seconds: Maximum total time for acquisition (default: 1800 = 30 minutes)
+            stall_timeout_seconds: Timeout if no progress (default: 120 = 2 minutes)
 
         Returns:
             Dictionary with acquisition metadata
@@ -242,7 +242,7 @@ class WinPmemDumper:
                 current_time = time.time()
                 elapsed_total = current_time - start_time.timestamp()
 
-                # 전체 타임아웃 확인
+                # Check total timeout
                 if elapsed_total > timeout_seconds:
                     self._process.terminate()
                     raise TimeoutError(
@@ -254,13 +254,13 @@ class WinPmemDumper:
                     current_size = output_path.stat().st_size
 
                     if current_size != last_size:
-                        # 진행 중이면 타이머 리셋
+                        # Reset timer if progress is being made
                         last_progress_time = current_time
                         if progress_callback:
                             progress_callback(current_size, total_memory)
                         last_size = current_size
                     else:
-                        # 진행이 없으면 stall 타임아웃 확인
+                        # Check stall timeout if no progress
                         stall_time = current_time - last_progress_time
                         if stall_time > stall_timeout_seconds and last_size > 0:
                             self._process.terminate()
@@ -269,8 +269,8 @@ class WinPmemDumper:
                                 f"Progress: {last_size // (1024**2)}MB / {total_memory // (1024**2)}MB"
                             )
                 else:
-                    # 파일이 아직 생성되지 않음 - 시작 타임아웃 확인
-                    if current_time - start_time.timestamp() > 30:  # 30초 내에 시작해야 함
+                    # File not yet created - check startup timeout
+                    if current_time - start_time.timestamp() > 30:  # Must start within 30 seconds
                         self._process.terminate()
                         raise TimeoutError("WinPmem failed to start within 30 seconds")
 
@@ -343,9 +343,9 @@ class WinPmemDumper:
 
 class VolatilityAnalyzer:
     """
-    Volatility3를 이용한 메모리 분석
+    Memory analysis using Volatility3
 
-    메모리 덤프에서 포렌식 아티팩트를 추출합니다.
+    Extracts forensic artifacts from memory dumps.
     """
 
     def __init__(self, memory_dump_path: str):
@@ -394,7 +394,7 @@ class VolatilityAnalyzer:
         yield {
             'artifact_type': 'memory_process',
             'status': 'analysis_pending',
-            'message': 'Volatility3 분석을 위해 별도 실행이 필요합니다.',
+            'message': 'Separate execution required for Volatility3 analysis.',
             'command': f'vol -f {self.dump_path} windows.pslist',
         }
 
@@ -484,9 +484,9 @@ class VolatilityAnalyzer:
 
 class MemoryCollector:
     """
-    메모리 포렌식 수집 통합 클래스
+    Integrated memory forensics collection class
 
-    WinPmem 메모리 덤프와 Volatility3 분석을 통합합니다.
+    Integrates WinPmem memory dump and Volatility3 analysis.
     """
 
     def __init__(self, output_dir: str):
@@ -571,7 +571,7 @@ class MemoryCollector:
                 {
                     'artifact_type': artifact_type,
                     'status': 'volatility_not_available',
-                    'message': 'Volatility3가 설치되지 않았습니다.',
+                    'message': 'Volatility3 is not installed.',
                     'install_command': 'pip install volatility3',
                 }
             )
@@ -611,18 +611,18 @@ class MemoryCollector:
 
             if info.get('requires_admin') and not availability['admin']:
                 available = False
-                reasons.append('관리자 권한 필요')
+                reasons.append('Administrator privileges required')
 
             if info.get('requires_driver') and not availability['winpmem']:
                 available = False
-                reasons.append('WinPmem 드라이버 필요')
+                reasons.append('WinPmem driver required')
 
             if info.get('requires_dump') and not availability['volatility3']:
                 available = False
-                reasons.append('Volatility3 필요')
+                reasons.append('Volatility3 required')
 
             if info.get('yara_scan') and not availability['yara']:
-                reasons.append('YARA 미설치 (선택)')
+                reasons.append('YARA not installed (optional)')
 
             artifacts.append({
                 'type': type_id,

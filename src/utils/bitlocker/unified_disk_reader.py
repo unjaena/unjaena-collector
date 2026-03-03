@@ -2,7 +2,7 @@
 """
 Unified Disk Reader - Abstract Base Class for Raw Disk Access
 
-모든 디스크 소스(물리 디스크, E01, RAW 이미지)의 통합 인터페이스.
+Unified interface for all disk sources (physical disks, E01, RAW images).
 """
 
 from abc import ABC, abstractmethod
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class DiskSourceType(Enum):
-    """디스크 소스 타입"""
+    """Disk source type"""
     PHYSICAL_DISK = "physical"
     E01_IMAGE = "e01"
     RAW_IMAGE = "raw"
@@ -25,7 +25,7 @@ class DiskSourceType(Enum):
 
 @dataclass
 class DiskInfo:
-    """디스크 메타데이터"""
+    """Disk metadata"""
     source_type: DiskSourceType
     total_size: int
     sector_size: int = 512
@@ -37,7 +37,7 @@ class DiskInfo:
 
 @dataclass
 class PartitionInfo:
-    """파티션 정보"""
+    """Partition information"""
     index: int
     partition_type: int
     type_guid: str = ""
@@ -53,7 +53,7 @@ class PartitionInfo:
 
 class UnifiedDiskReader(ABC):
     """
-    통합 디스크 리더 추상 베이스 클래스
+    Unified disk reader abstract base class
     """
 
     def __init__(self):
@@ -63,32 +63,32 @@ class UnifiedDiskReader(ABC):
 
     @abstractmethod
     def read(self, offset: int, size: int) -> bytes:
-        """Raw 바이트 읽기"""
+        """Read raw bytes"""
         pass
 
     @abstractmethod
     def get_disk_info(self) -> DiskInfo:
-        """디스크 메타데이터 반환"""
+        """Return disk metadata"""
         pass
 
     @abstractmethod
     def get_size(self) -> int:
-        """디스크 전체 크기 (바이트)"""
+        """Disk total size (bytes)"""
         pass
 
     @abstractmethod
     def close(self) -> None:
-        """리소스 해제"""
+        """Release resources"""
         pass
 
     def read_sectors(self, sector_offset: int, sector_count: int) -> bytes:
-        """섹터 단위 읽기"""
+        """Read by sector unit"""
         byte_offset = sector_offset * self._sector_size
         byte_size = sector_count * self._sector_size
         return self.read(byte_offset, byte_size)
 
     def read_aligned(self, offset: int, size: int) -> bytes:
-        """섹터 정렬된 읽기"""
+        """Read with sector alignment"""
         start_sector = offset // self._sector_size
         end_byte = offset + size
         end_sector = (end_byte + self._sector_size - 1) // self._sector_size
@@ -112,44 +112,44 @@ class UnifiedDiskReader(ABC):
         return False
 
 
-# 예외 클래스들
+# Exception classes
 class DiskError(Exception):
-    """디스크 작업 관련 기본 예외"""
+    """Base exception for disk operations"""
     pass
 
 
 class DiskNotFoundError(DiskError):
-    """디스크를 찾을 수 없음"""
+    """Disk not found"""
     pass
 
 
 class DiskPermissionError(DiskError):
-    """디스크 접근 권한 없음"""
+    """No permission to access disk"""
     pass
 
 
 class DiskReadError(DiskError):
-    """디스크 읽기 오류"""
+    """Disk read error"""
     pass
 
 
 class PartitionError(DiskError):
-    """파티션 테이블 파싱 오류"""
+    """Partition table parsing error"""
     pass
 
 
 class FilesystemError(DiskError):
-    """파일시스템 감지/파싱 오류"""
+    """Filesystem detection/parsing error"""
     pass
 
 
 class BitLockerError(DiskError):
-    """BitLocker 암호화된 볼륨"""
+    """BitLocker encrypted volume"""
     pass
 
 
 class BitLockerKeyRequired(BitLockerError):
-    """BitLocker 키가 필요함"""
+    """BitLocker key required"""
     def __init__(
         self,
         message: str = "BitLocker key required",
@@ -164,10 +164,10 @@ class BitLockerKeyRequired(BitLockerError):
 
 
 class BitLockerInvalidKey(BitLockerError):
-    """잘못된 BitLocker 키"""
+    """Invalid BitLocker key"""
     pass
 
 
 class BitLockerUnsupportedProtector(BitLockerError):
-    """지원되지 않는 Key Protector"""
+    """Unsupported Key Protector"""
     pass

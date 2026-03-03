@@ -1,22 +1,22 @@
 """
-hiberfil.sys 분석기
+hiberfil.sys Analyzer
 
-Windows Hibernation 파일(hiberfil.sys) 분석을 위한 모듈
-- Hibernation 파일 타입 감지 (HIBR/WAKE)
-- 헤더 파싱
-- 압축 해제 (XPRESS/LZ77)
-- 메모리 페이지 추출
-- 문자열 및 아티팩트 검색
+Module for analyzing Windows Hibernation files (hiberfil.sys)
+- Hibernation file type detection (HIBR/WAKE)
+- Header parsing
+- Decompression (XPRESS/LZ77)
+- Memory page extraction
+- String and artifact searching
 
-참조:
-- Windows Hibernation 파일 구조
-- XPRESS 압축 알고리즘 (MS-XCA)
+References:
+- Windows Hibernation file structure
+- XPRESS compression algorithm (MS-XCA)
 - Volatility3 hibernation layer
 
-Raw Disk Access 지원:
-- ForensicDiskAccessor를 통한 raw sector 기반 hiberfil 읽기
-- Windows 파일 잠금 완전 우회
-- E01 이미지에서도 동일하게 동작
+Raw Disk Access Support:
+- Raw sector-based hiberfil reading via ForensicDiskAccessor
+- Complete bypass of Windows file locks
+- Works identically with E01 images
 """
 
 import struct
@@ -35,31 +35,31 @@ def _debug_print(msg):
 
 
 class HiberfilAnalyzer:
-    """hiberfil.sys 분석기"""
+    """hiberfil.sys Analyzer"""
 
-    # Hibernation 파일 시그니처
+    # Hibernation file signatures
     HIBR_SIGNATURE = b'hibr'       # Full Hibernation
-    RSTR_SIGNATURE = b'rstr'       # Resume (복원 중)
+    RSTR_SIGNATURE = b'rstr'       # Resume (restoring)
     WAKE_SIGNATURE = b'wake'       # Fast Startup (Windows 8+)
 
-    # Windows 버전별 헤더 크기
+    # Header sizes by Windows version
     HEADER_SIZE_XP = 4096
     HEADER_SIZE_VISTA = 4096
     HEADER_SIZE_WIN7 = 4096
     HEADER_SIZE_WIN8 = 4096
     HEADER_SIZE_WIN10 = 4096
 
-    # XPRESS 압축 관련
-    XPRESS_MAGIC = b'\x81\x81'     # XPRESS 압축 블록 시그니처
+    # XPRESS compression related
+    XPRESS_MAGIC = b'\x81\x81'     # XPRESS compressed block signature
     PAGE_SIZE = 4096
 
-    # PO_MEMORY_IMAGE 구조 오프셋 (Windows 버전에 따라 다름)
-    # Windows 10 기준
+    # PO_MEMORY_IMAGE structure offsets (varies by Windows version)
+    # Based on Windows 10
     HIBERNATION_HEADER_OFFSETS = {
         'signature': 0,           # 4 bytes
         'version': 4,             # 4 bytes
         'checksum': 8,            # 4 bytes
-        'length': 12,             # 4 bytes (압축되지 않은 크기)
+        'length': 12,             # 4 bytes (uncompressed size)
         'num_pages': 16,          # 8 bytes
         'highest_page': 24,       # 8 bytes
         'system_time': 48,        # 8 bytes (FILETIME)
@@ -68,14 +68,14 @@ class HiberfilAnalyzer:
     def __init__(self, hiberfil_path: str = None, hiberfil_data: bytes = None):
         """
         Args:
-            hiberfil_path: hiberfil.sys 파일 경로
-            hiberfil_data: hiberfil 바이너리 데이터 (직접 제공 시)
+            hiberfil_path: Path to hiberfil.sys file
+            hiberfil_data: hiberfil binary data (when provided directly)
         """
         self.hiberfil_path = hiberfil_path
         self.hiberfil_data = hiberfil_data
         self.file_size = 0
 
-        # 헤더 정보
+        # Header information
         self.signature = None
         self.version = 0
         self.num_pages = 0
@@ -91,7 +91,7 @@ class HiberfilAnalyzer:
             self.file_size = len(hiberfil_data)
 
     def _read(self, offset: int, size: int) -> bytes:
-        """데이터 읽기"""
+        """Read data"""
         if self.hiberfil_data:
             return self.hiberfil_data[offset:offset + size]
 
@@ -101,13 +101,13 @@ class HiberfilAnalyzer:
 
     def detect_type(self) -> str:
         """
-        Hibernation 파일 타입 감지
+        Detect hibernation file type
 
         Returns:
-            'HIBR': 전체 Hibernation
+            'HIBR': Full Hibernation
             'WAKE': Fast Startup (Windows 8+)
-            'RSTR': Resume 중 (복원 중)
-            'UNKNOWN': 알 수 없음
+            'RSTR': Resume in progress (restoring)
+            'UNKNOWN': Unknown
         """
         header = self._read(0, 8)
 
@@ -124,46 +124,46 @@ class HiberfilAnalyzer:
 
     def parse_header(self) -> Dict:
         """
-        Hibernation 헤더 파싱
+        Parse hibernation header
 
         Returns:
-            헤더 정보 딕셔너리
+            Header information dictionary
         """
         header = self._read(0, self.PAGE_SIZE)
 
         self.signature = header[:4]
         hiberfil_type = self.detect_type()
 
-        # 버전
+        # Version
         self.version = struct.unpack('<I', header[4:8])[0]
 
-        # 체크섬
+        # Checksum
         checksum = struct.unpack('<I', header[8:12])[0]
 
-        # 압축되지 않은 길이
+        # Uncompressed length
         length = struct.unpack('<I', header[12:16])[0]
 
-        # 페이지 수 (Windows 버전에 따라 오프셋이 다름)
-        # 일반적으로 오프셋 16 또는 24
+        # Page count (offset varies by Windows version)
+        # Typically at offset 16 or 24
         try:
             num_pages = struct.unpack('<Q', header[16:24])[0]
             self.num_pages = num_pages
         except:
             num_pages = 0
 
-        # 최고 페이지 번호
+        # Highest page number
         try:
             highest_page = struct.unpack('<Q', header[24:32])[0]
         except:
             highest_page = 0
 
-        # 시스템 시간 (FILETIME)
+        # System time (FILETIME)
         try:
             system_time = struct.unpack('<Q', header[48:56])[0]
             if system_time > 0:
                 # FILETIME to datetime
-                # FILETIME은 1601년 1월 1일부터 100나노초 단위
-                epoch_diff = 116444736000000000  # 1601과 1970 사이의 100ns 단위 차이
+                # FILETIME is in 100-nanosecond units since January 1, 1601
+                epoch_diff = 116444736000000000  # Difference between 1601 and 1970 in 100ns units
                 timestamp = (system_time - epoch_diff) / 10000000
                 system_datetime = datetime.fromtimestamp(timestamp)
             else:
@@ -186,18 +186,18 @@ class HiberfilAnalyzer:
 
     def decompress_xpress(self, compressed_data: bytes) -> Optional[bytes]:
         """
-        XPRESS 압축 해제 (LZ77 기반)
+        XPRESS decompression (LZ77-based)
 
-        Windows Vista+ Hibernation 파일은 XPRESS 압축 사용
-        압축 해제 구현이 복잡하여 외부 라이브러리 또는 직접 구현 필요
+        Windows Vista+ Hibernation files use XPRESS compression
+        Decompression implementation is complex, requiring external library or custom implementation
 
         Args:
-            compressed_data: 압축된 데이터
+            compressed_data: Compressed data
 
         Returns:
-            압축 해제된 데이터 또는 None
+            Decompressed data or None
         """
-        # 방법 1: 향상된 HiberfilDecompressor 시도 (Pure Python, 크로스 플랫폼)
+        # Method 1: Try enhanced HiberfilDecompressor (Pure Python, cross-platform)
         try:
             from .hiberfil_decompressor import HiberfilDecompressor
             decompressor = HiberfilDecompressor()
@@ -209,7 +209,7 @@ class HiberfilAnalyzer:
         except Exception as e:
             logger.debug(f"HiberfilDecompressor failed: {e}")
 
-        # 방법 2: lznt1 라이브러리 시도
+        # Method 2: Try lznt1 library
         try:
             import lznt1
             return lznt1.decompress(compressed_data)
@@ -218,7 +218,7 @@ class HiberfilAnalyzer:
         except Exception as e:
             logger.debug(f"lznt1 failed: {e}")
 
-        # 방법 3: dissect.xpress 시도
+        # Method 3: Try dissect.xpress
         try:
             from dissect import xpress
             return xpress.decompress(compressed_data)
@@ -227,7 +227,7 @@ class HiberfilAnalyzer:
         except Exception as e:
             logger.debug(f"dissect.xpress failed: {e}")
 
-        # 방법 4: Windows API 시도 (Windows에서만)
+        # Method 4: Try Windows API (Windows only)
         try:
             import ctypes
             from ctypes import wintypes
@@ -245,7 +245,7 @@ class HiberfilAnalyzer:
 
             COMPRESSION_FORMAT_XPRESS = 0x0003
 
-            # 예상 압축 해제 크기 (최대 4배)
+            # Expected decompressed size (up to 4x)
             max_size = len(compressed_data) * 4
             decompressed = ctypes.create_string_buffer(max_size)
             final_size = wintypes.ULONG()
@@ -264,26 +264,26 @@ class HiberfilAnalyzer:
         except:
             pass
 
-        logger.warning("XPRESS 압축 해제 실패 - 모든 방법 시도됨")
-        logger.warning("권장 설치: pip install dissect.xpress 또는 pip install lznt1")
+        logger.warning("XPRESS decompression failed - all methods attempted")
+        logger.warning("Recommended install: pip install dissect.xpress or pip install lznt1")
         return None
 
     def extract_memory_pages(self, max_pages: int = 0) -> Generator[Tuple[int, bytes], None, None]:
         """
-        메모리 페이지 추출
+        Extract memory pages
 
-        주의: 완전한 구현을 위해서는 Windows 버전별 구조 파싱 필요
-        Volatility3의 hibernation layer 참조 권장
+        Note: Complete implementation requires Windows version-specific structure parsing
+        Reference to Volatility3's hibernation layer is recommended
 
         Args:
-            max_pages: 최대 추출 페이지 수 (0 = 전체)
+            max_pages: Maximum number of pages to extract (0 = all)
 
         Yields:
-            (page_number, page_data) 튜플
+            (page_number, page_data) tuple
         """
-        _debug_print(f"[Hiberfil] 메모리 페이지 추출 (타입: {self.hiberfil_type})...")
+        _debug_print(f"[Hiberfil] Extracting memory pages (type: {self.hiberfil_type})...")
 
-        # 헤더 이후부터 시작
+        # Start after header
         offset = self.PAGE_SIZE
         page_count = 0
 
@@ -291,19 +291,19 @@ class HiberfilAnalyzer:
             if max_pages > 0 and page_count >= max_pages:
                 break
 
-            # 페이지 데이터 읽기
+            # Read page data
             page_data = self._read(offset, self.PAGE_SIZE)
             if len(page_data) < self.PAGE_SIZE:
                 break
 
-            # XPRESS 압축 여부 확인
+            # Check for XPRESS compression
             if page_data[:2] == self.XPRESS_MAGIC:
-                # 압축 해제 시도
+                # Attempt decompression
                 decompressed = self.decompress_xpress(page_data)
                 if decompressed:
                     yield (page_count, decompressed)
                 else:
-                    # 압축 해제 실패 시 원본 제공
+                    # Provide original data if decompression fails
                     yield (page_count, page_data)
             else:
                 yield (page_count, page_data)
@@ -312,9 +312,9 @@ class HiberfilAnalyzer:
             offset += self.PAGE_SIZE
 
             if page_count % 10000 == 0:
-                _debug_print(f"[Hiberfil] {page_count:,} 페이지 처리...")
+                _debug_print(f"[Hiberfil] {page_count:,} pages processed...")
 
-        _debug_print(f"[Hiberfil] 총 {page_count:,} 페이지 추출")
+        _debug_print(f"[Hiberfil] Total {page_count:,} pages extracted")
 
     def find_strings(
         self,
@@ -322,16 +322,16 @@ class HiberfilAnalyzer:
         max_pages: int = 10000
     ) -> Generator[Dict, None, None]:
         """
-        hiberfil에서 문자열 검색
+        Search for strings in hiberfil
 
         Args:
-            min_length: 최소 문자열 길이
-            max_pages: 검색할 최대 페이지 수
+            min_length: Minimum string length
+            max_pages: Maximum number of pages to search
 
         Yields:
-            문자열 정보 딕셔너리
+            String information dictionary
         """
-        _debug_print(f"[Hiberfil] 문자열 검색 (최대 {max_pages} 페이지)...")
+        _debug_print(f"[Hiberfil] Searching for strings (max {max_pages} pages)...")
 
         ascii_pattern = re.compile(
             rb'[\x20-\x7E]{' + str(min_length).encode() + rb',}'
@@ -350,19 +350,19 @@ class HiberfilAnalyzer:
                 }
                 total_strings += 1
 
-        _debug_print(f"[Hiberfil] {total_strings:,}개 문자열 발견")
+        _debug_print(f"[Hiberfil] {total_strings:,} strings found")
 
     def find_urls(self, max_pages: int = 10000) -> List[Dict]:
         """
-        hiberfil에서 URL 검색
+        Search for URLs in hiberfil
 
         Args:
-            max_pages: 검색할 최대 페이지 수
+            max_pages: Maximum number of pages to search
 
         Returns:
-            URL 정보 리스트
+            List of URL information
         """
-        _debug_print(f"[Hiberfil] URL 검색 중...")
+        _debug_print(f"[Hiberfil] Searching for URLs...")
 
         url_pattern = re.compile(
             rb'https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&\'()*+,;=%]+',
@@ -383,25 +383,25 @@ class HiberfilAnalyzer:
                         'offset_in_page': match.start(),
                     })
 
-        _debug_print(f"[Hiberfil] {len(urls):,}개 URL 발견")
+        _debug_print(f"[Hiberfil] {len(urls):,} URLs found")
         return urls
 
     def find_processes(self, max_pages: int = 10000) -> List[Dict]:
         """
-        hiberfil에서 프로세스 정보 검색
+        Search for process information in hiberfil
 
-        EPROCESS 구조체 시그니처 검색
-        주의: Windows 버전별로 구조가 다름
+        Searches for EPROCESS structure signatures
+        Note: Structure varies by Windows version
 
         Args:
-            max_pages: 검색할 최대 페이지 수
+            max_pages: Maximum number of pages to search
 
         Returns:
-            프로세스 정보 리스트 (기본적인 패턴 매칭)
+            List of process information (basic pattern matching)
         """
-        _debug_print(f"[Hiberfil] 프로세스 정보 검색 중...")
+        _debug_print(f"[Hiberfil] Searching for process information...")
 
-        # .exe 파일명 패턴
+        # .exe filename pattern
         exe_pattern = re.compile(
             rb'[a-zA-Z0-9_\-]+\.exe',
             re.IGNORECASE
@@ -421,26 +421,26 @@ class HiberfilAnalyzer:
                         'offset_in_page': match.start(),
                     })
 
-        _debug_print(f"[Hiberfil] {len(processes):,}개 실행 파일명 발견")
+        _debug_print(f"[Hiberfil] {len(processes):,} executable filenames found")
         return processes
 
     def analyze_all(self, max_pages: int = 10000) -> Dict:
         """
-        전체 분석 수행
+        Perform full analysis
 
         Args:
-            max_pages: 분석할 최대 페이지 수
+            max_pages: Maximum number of pages to analyze
 
         Returns:
-            분석 결과 딕셔너리
+            Analysis results dictionary
         """
-        _debug_print(f"[Hiberfil] 전체 분석 시작 (크기: {self.file_size / 1024 / 1024:.1f} MB)...")
+        _debug_print(f"[Hiberfil] Starting full analysis (size: {self.file_size / 1024 / 1024:.1f} MB)...")
 
-        # 헤더 파싱
+        # Parse header
         header_info = self.parse_header()
 
         if not header_info['is_valid']:
-            _debug_print(f"[Hiberfil] 유효하지 않은 hiberfil: {header_info['signature']}")
+            _debug_print(f"[Hiberfil] Invalid hiberfil: {header_info['signature']}")
             return {'error': 'Invalid hibernation file', 'header': header_info}
 
         results = {
@@ -452,14 +452,14 @@ class HiberfilAnalyzer:
             'analysis_time': datetime.now().isoformat(),
         }
 
-        # 요약
+        # Summary
         results['summary'] = {
             'type': header_info['type'],
             'total_urls': len(results['urls']),
             'total_processes': len(results['processes']),
         }
 
-        _debug_print(f"[Hiberfil] 분석 완료:")
+        _debug_print(f"[Hiberfil] Analysis complete:")
         for key, value in results['summary'].items():
             _debug_print(f"  - {key}: {value}")
 
@@ -467,15 +467,15 @@ class HiberfilAnalyzer:
 
 
 class SwapfileAnalyzer:
-    """swapfile.sys 분석기 (Windows 10+ UWP 앱용)"""
+    """swapfile.sys Analyzer (for Windows 10+ UWP apps)"""
 
     PAGE_SIZE = 4096
 
     def __init__(self, swapfile_path: str = None, swapfile_data: bytes = None):
         """
         Args:
-            swapfile_path: swapfile.sys 파일 경로
-            swapfile_data: swapfile 바이너리 데이터
+            swapfile_path: Path to swapfile.sys file
+            swapfile_data: swapfile binary data
         """
         self.swapfile_path = swapfile_path
         self.swapfile_data = swapfile_data
@@ -491,17 +491,17 @@ class SwapfileAnalyzer:
 
     def analyze(self) -> Dict:
         """
-        swapfile 기본 분석
+        Basic swapfile analysis
 
-        swapfile.sys는 pagefile.sys와 유사한 구조
-        UWP 앱의 메모리 페이지 저장
+        swapfile.sys has a similar structure to pagefile.sys
+        Stores memory pages for UWP apps
 
         Returns:
-            분석 결과
+            Analysis results
         """
-        _debug_print(f"[Swapfile] 분석 시작 (크기: {self.file_size / 1024 / 1024:.1f} MB)...")
+        _debug_print(f"[Swapfile] Starting analysis (size: {self.file_size / 1024 / 1024:.1f} MB)...")
 
-        # pagefile 분석기와 유사하게 처리
+        # Process similarly to pagefile analyzer
         from .pagefile_analyzer import PagefileAnalyzer
 
         if self.swapfile_path:
@@ -509,7 +509,7 @@ class SwapfileAnalyzer:
         else:
             analyzer = PagefileAnalyzer(pagefile_data=self.swapfile_data)
 
-        # 기본 분석 수행
+        # Perform basic analysis
         results = {
             'file_path': self.swapfile_path,
             'file_size': self.file_size,
@@ -524,26 +524,26 @@ class SwapfileAnalyzer:
             'total_emails': len(results['emails']),
         }
 
-        _debug_print(f"[Swapfile] 분석 완료")
+        _debug_print(f"[Swapfile] Analysis complete")
         return results
 
 
 def analyze_hiberfil_from_image(img_info, hiberfil_offset: int, hiberfil_size: int) -> Dict:
     """
-    디스크 이미지에서 hiberfil 분석
+    Analyze hiberfil from disk image
 
     Args:
-        img_info: 이미지 핸들
-        hiberfil_offset: hiberfil 시작 오프셋
-        hiberfil_size: hiberfil 크기
+        img_info: Image handle
+        hiberfil_offset: hiberfil start offset
+        hiberfil_size: hiberfil size
 
     Returns:
-        분석 결과
+        Analysis results
     """
-    _debug_print(f"[Hiberfil] 이미지에서 hiberfil 읽기 (offset={hiberfil_offset})...")
+    _debug_print(f"[Hiberfil] Reading hiberfil from image (offset={hiberfil_offset})...")
 
-    # 크기 제한 (메모리 보호)
-    max_size = min(hiberfil_size, 1024 * 1024 * 1024)  # 최대 1GB
+    # Size limit (memory protection)
+    max_size = min(hiberfil_size, 1024 * 1024 * 1024)  # Max 1GB
 
     hiberfil_data = img_info.read(hiberfil_offset, max_size)
 
@@ -561,18 +561,18 @@ def create_hiberfil_analyzer_raw_disk(
     max_size_mb: int = 1024
 ) -> Optional[HiberfilAnalyzer]:
     """
-    Raw Disk Access로 HiberfilAnalyzer 생성
+    Create HiberfilAnalyzer via Raw Disk Access
 
-    Windows 파일 잠금을 완전히 우회하여 hiberfil.sys를 읽습니다.
-    관리자 권한이 필요합니다.
+    Completely bypasses Windows file locks to read hiberfil.sys.
+    Administrator privileges required.
 
     Args:
-        drive_number: 물리 디스크 번호 (기본: 0)
-        partition_index: 파티션 인덱스 (None이면 첫 번째 NTFS 파티션)
-        max_size_mb: 최대 읽기 크기 (MB 단위, 기본 1024MB)
+        drive_number: Physical disk number (default: 0)
+        partition_index: Partition index (None for first NTFS partition)
+        max_size_mb: Maximum read size in MB (default: 1024MB)
 
     Returns:
-        HiberfilAnalyzer 인스턴스 또는 None
+        HiberfilAnalyzer instance or None
 
     Usage:
         analyzer = create_hiberfil_analyzer_raw_disk()
@@ -585,7 +585,7 @@ def create_hiberfil_analyzer_raw_disk(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    _debug_print(f"[Hiberfil] Raw Disk Access로 hiberfil.sys 읽기 시작...")
+    _debug_print(f"[Hiberfil] Starting hiberfil.sys read via Raw Disk Access...")
 
     try:
         with ForensicDiskAccessor.from_physical_disk(drive_number) as disk:
@@ -595,14 +595,14 @@ def create_hiberfil_analyzer_raw_disk(
                 logger.error("No partitions found")
                 return None
 
-            # 파티션 선택
+            # Select partition
             if partition_index is not None:
                 if partition_index >= len(partitions):
                     logger.error(f"Invalid partition index: {partition_index}")
                     return None
                 disk.select_partition(partition_index)
             else:
-                # 첫 번째 NTFS 파티션 자동 선택
+                # Auto-select first NTFS partition
                 ntfs_idx = None
                 for i, p in enumerate(partitions):
                     if p.filesystem == 'NTFS':
@@ -614,13 +614,13 @@ def create_hiberfil_analyzer_raw_disk(
                     return None
 
                 disk.select_partition(ntfs_idx)
-                _debug_print(f"[Hiberfil] 파티션 {ntfs_idx} 선택 (NTFS)")
+                _debug_print(f"[Hiberfil] Selected partition {ntfs_idx} (NTFS)")
 
-            # hiberfil.sys 스트리밍 읽기 (크기 제한)
+            # Stream read hiberfil.sys (with size limit)
             hiberfil_path = '/hiberfil.sys'
             max_size = max_size_mb * 1024 * 1024
 
-            _debug_print(f"[Hiberfil] hiberfil.sys 데이터 스트리밍 중 (최대 {max_size_mb} MB)...")
+            _debug_print(f"[Hiberfil] Streaming hiberfil.sys data (max {max_size_mb} MB)...")
 
             chunks = []
             total_size = 0
@@ -628,14 +628,14 @@ def create_hiberfil_analyzer_raw_disk(
             for chunk in disk.stream_file(hiberfil_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                _debug_print(f"[Hiberfil] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Hiberfil] Read progress: {total_size / 1024 / 1024:.1f} MB")
 
                 if total_size >= max_size:
-                    _debug_print(f"[Hiberfil] 최대 크기 도달 ({max_size_mb} MB)")
+                    _debug_print(f"[Hiberfil] Max size reached ({max_size_mb} MB)")
                     break
 
             hiberfil_data = b''.join(chunks)
-            _debug_print(f"[Hiberfil] 총 {len(hiberfil_data) / 1024 / 1024:.1f} MB 읽기 완료 [raw disk]")
+            _debug_print(f"[Hiberfil] Total {len(hiberfil_data) / 1024 / 1024:.1f} MB read complete [raw disk]")
 
             return HiberfilAnalyzer(hiberfil_data=hiberfil_data)
 
@@ -651,15 +651,15 @@ def create_hiberfil_analyzer_e01(
     max_size_mb: int = 1024
 ) -> Optional[HiberfilAnalyzer]:
     """
-    E01 이미지에서 HiberfilAnalyzer 생성
+    Create HiberfilAnalyzer from E01 image
 
     Args:
-        e01_path: E01 파일 경로
-        partition_index: 파티션 인덱스 (None이면 첫 번째 NTFS 파티션)
-        max_size_mb: 최대 읽기 크기 (MB 단위)
+        e01_path: E01 file path
+        partition_index: Partition index (None for first NTFS partition)
+        max_size_mb: Maximum read size in MB
 
     Returns:
-        HiberfilAnalyzer 인스턴스 또는 None
+        HiberfilAnalyzer instance or None
 
     Usage:
         analyzer = create_hiberfil_analyzer_e01("evidence.E01")
@@ -672,8 +672,8 @@ def create_hiberfil_analyzer_e01(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    _debug_print(f"[Hiberfil] E01 이미지에서 hiberfil.sys 읽기 시작...")
-    _debug_print(f"[Hiberfil] E01 경로: {e01_path}")
+    _debug_print(f"[Hiberfil] Starting hiberfil.sys read from E01 image...")
+    _debug_print(f"[Hiberfil] E01 path: {e01_path}")
 
     try:
         with ForensicDiskAccessor.from_e01(e01_path) as disk:
@@ -683,7 +683,7 @@ def create_hiberfil_analyzer_e01(
                 logger.error("No partitions found in E01 image")
                 return None
 
-            # 파티션 선택
+            # Select partition
             if partition_index is not None:
                 if partition_index >= len(partitions):
                     logger.error(f"Invalid partition index: {partition_index}")
@@ -701,12 +701,12 @@ def create_hiberfil_analyzer_e01(
                     return None
 
                 disk.select_partition(ntfs_idx)
-                _debug_print(f"[Hiberfil] 파티션 {ntfs_idx} 선택 (NTFS)")
+                _debug_print(f"[Hiberfil] Selected partition {ntfs_idx} (NTFS)")
 
             hiberfil_path = '/hiberfil.sys'
             max_size = max_size_mb * 1024 * 1024
 
-            _debug_print(f"[Hiberfil] hiberfil.sys 데이터 스트리밍 중 (최대 {max_size_mb} MB)...")
+            _debug_print(f"[Hiberfil] Streaming hiberfil.sys data (max {max_size_mb} MB)...")
 
             chunks = []
             total_size = 0
@@ -714,14 +714,14 @@ def create_hiberfil_analyzer_e01(
             for chunk in disk.stream_file(hiberfil_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                _debug_print(f"[Hiberfil] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Hiberfil] Read progress: {total_size / 1024 / 1024:.1f} MB")
 
                 if total_size >= max_size:
-                    _debug_print(f"[Hiberfil] 최대 크기 도달 ({max_size_mb} MB)")
+                    _debug_print(f"[Hiberfil] Max size reached ({max_size_mb} MB)")
                     break
 
             hiberfil_data = b''.join(chunks)
-            _debug_print(f"[Hiberfil] 총 {len(hiberfil_data) / 1024 / 1024:.1f} MB 읽기 완료 [E01]")
+            _debug_print(f"[Hiberfil] Total {len(hiberfil_data) / 1024 / 1024:.1f} MB read complete [E01]")
 
             return HiberfilAnalyzer(hiberfil_data=hiberfil_data)
 
@@ -736,16 +736,16 @@ def create_swapfile_analyzer_raw_disk(
     partition_index: int = None
 ) -> Optional[SwapfileAnalyzer]:
     """
-    Raw Disk Access로 SwapfileAnalyzer 생성
+    Create SwapfileAnalyzer via Raw Disk Access
 
-    Windows 10+ UWP 앱용 swapfile.sys를 읽습니다.
+    Reads swapfile.sys for Windows 10+ UWP apps.
 
     Args:
-        drive_number: 물리 디스크 번호
-        partition_index: 파티션 인덱스
+        drive_number: Physical disk number
+        partition_index: Partition index
 
     Returns:
-        SwapfileAnalyzer 인스턴스 또는 None
+        SwapfileAnalyzer instance or None
     """
     try:
         from core.engine.collectors.filesystem.forensic_disk_accessor import ForensicDiskAccessor
@@ -753,7 +753,7 @@ def create_swapfile_analyzer_raw_disk(
         logger.error("ForensicDiskAccessor not available")
         return None
 
-    _debug_print(f"[Swapfile] Raw Disk Access로 swapfile.sys 읽기 시작...")
+    _debug_print(f"[Swapfile] Starting swapfile.sys read via Raw Disk Access...")
 
     try:
         with ForensicDiskAccessor.from_physical_disk(drive_number) as disk:
@@ -774,7 +774,7 @@ def create_swapfile_analyzer_raw_disk(
 
             swapfile_path = '/swapfile.sys'
 
-            _debug_print(f"[Swapfile] swapfile.sys 데이터 읽기 중...")
+            _debug_print(f"[Swapfile] Reading swapfile.sys data...")
 
             chunks = []
             total_size = 0
@@ -782,10 +782,10 @@ def create_swapfile_analyzer_raw_disk(
             for chunk in disk.stream_file(swapfile_path, chunk_size=64 * 1024 * 1024):
                 chunks.append(chunk)
                 total_size += len(chunk)
-                _debug_print(f"[Swapfile] 읽기 진행: {total_size / 1024 / 1024:.1f} MB")
+                _debug_print(f"[Swapfile] Read progress: {total_size / 1024 / 1024:.1f} MB")
 
             swapfile_data = b''.join(chunks)
-            _debug_print(f"[Swapfile] 총 {len(swapfile_data) / 1024 / 1024:.1f} MB 읽기 완료 [raw disk]")
+            _debug_print(f"[Swapfile] Total {len(swapfile_data) / 1024 / 1024:.1f} MB read complete [raw disk]")
 
             return SwapfileAnalyzer(swapfile_data=swapfile_data)
 
@@ -800,11 +800,11 @@ if __name__ == "__main__":
     print("=" * 60)
 
     print("Usage:")
-    print("  # Hibernation 파일 분석")
+    print("  # Hibernation file analysis")
     print("  analyzer = HiberfilAnalyzer('C:\\hiberfil.sys')")
     print("  header = analyzer.parse_header()")
     print("  results = analyzer.analyze_all()")
     print()
-    print("  # Swapfile 분석")
+    print("  # Swapfile analysis")
     print("  analyzer = SwapfileAnalyzer('C:\\swapfile.sys')")
     print("  results = analyzer.analyze()")

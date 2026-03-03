@@ -2,7 +2,7 @@
 Main GUI Application
 
 PyQt6-based graphical interface for the forensic collector.
-통합 디바이스 관리 및 병렬 수집 지원.
+Supports unified device management and parallel collection.
 """
 import asyncio
 import requests
@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QProgressBar, QListWidget, QListWidgetItem,
     QLineEdit, QCheckBox, QGroupBox, QMessageBox, QFrame, QTextEdit,
     QStatusBar, QSplitter, QStackedWidget, QScrollArea, QTabWidget,
-    QComboBox, QApplication
+    QApplication
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QElapsedTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
@@ -29,7 +29,7 @@ from collectors.artifact_collector import (
 )
 from collectors.e01_artifact_collector import E01ArtifactCollector
 
-# 플랫폼 통일 테마 및 새 컴포넌트
+# Platform unified theme and new components
 from gui.styles import get_platform_stylesheet, COLORS
 from core.device_manager import UnifiedDeviceManager, DeviceType, DeviceStatus
 from core.device_enumerators import create_default_enumerators
@@ -37,8 +37,9 @@ from gui.device_panel import DeviceListPanel
 from gui.e01_dialog import E01SelectionDialog
 from core.multi_device_collector import MultiDeviceCollector, TaskStatus
 from gui.multi_progress_panel import MultiProgressPanel
+from utils.error_messages import translate_error
 
-# BitLocker 지원
+# BitLocker support
 try:
     from utils.bitlocker import (
         detect_bitlocker_on_system_drive,
@@ -51,15 +52,15 @@ try:
 except ImportError:
     BITLOCKER_AVAILABLE = False
 
-# 서버 아티팩트 이름 -> Collector 아티팩트 이름 매핑
-# 서버는 ArtifactType enum 이름을 사용하고, Collector는 짧은 이름을 사용
+# Server artifact name -> Collector artifact name mapping
+# Server uses ArtifactType enum names, Collector uses short names
 SERVER_TO_COLLECTOR_MAPPING = {
-    # MFT 관련
+    # MFT related
     'filesystem_entry': 'mft',
     'usnjrnl_entry': 'usn_journal',
     'logfile_entry': 'logfile',
 
-    # 브라우저 - 통합 (Chrome, Edge, Firefox)
+    # Browser - unified (Chrome, Edge, Firefox)
     'history': 'browser',
     'searchkeyword': 'browser',
     'download': 'browser',
@@ -70,14 +71,14 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'firefox': 'browser',
     'browser': 'browser',
 
-    # 파일시스템
+    # Filesystem
     'recycle_bin': 'recycle_bin',
     'partition': 'mft',
 
-    # 실행 흔적
+    # Execution traces
     'prefetch': 'prefetch',
     'amcache': 'amcache',
-    'shimcache': 'registry',  # ShimCache는 레지스트리 기반
+    'shimcache': 'registry',  # ShimCache is registry-based
     'userassist': 'userassist',
     'bam_dam': 'registry',
     'jumplist': 'recent',
@@ -85,7 +86,7 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'shortcut': 'recent',
     'runmru': 'registry',
 
-    # 이벤트/로그
+    # Events/Logs
     'eventlog': 'eventlog',
     'login': 'eventlog',
 
@@ -93,7 +94,7 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'usb': 'usb',
     'mountpoint': 'usb',
 
-    # 레지스트리
+    # Registry
     'registry': 'registry',
     'opensavemru': 'registry',
     'typedpaths': 'registry',
@@ -102,35 +103,35 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'lastvisitedmru': 'registry',
     'streamsmru': 'registry',
 
-    # 탐색기
+    # Explorer
     'shellbags': 'registry',
     'recent': 'recent',
     'thumbcache': 'recent',
 
-    # 시스템
+    # System
     'system_info': 'registry',
     'user_profile': 'registry',
     'windows_info': 'registry',
     'srum': 'srum',
 
-    # 계정
+    # Account
     'account_info': 'registry',
     'sam': 'registry',
     'ntuser': 'registry',
 
-    # 기타
+    # Others
     'autorun': 'registry',
     'service': 'registry',
     'scheduled_task': 'scheduled_task',
 
-    # === Phase 2/3 신규 아티팩트 ===
+    # === Phase 2/3 new artifacts ===
     'powershell_history': 'powershell_history',
     'wer': 'wer',
     'rdp_cache': 'rdp_cache',
     'wlan_event': 'wlan_event',
     'profile_list': 'profile_list',
 
-    # === Android 포렌식 ===
+    # === Android Forensics ===
     'mobile_android_sms': 'mobile_android_sms',
     'mobile_android_call': 'mobile_android_call',
     'mobile_android_contacts': 'mobile_android_contacts',
@@ -138,22 +139,172 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'mobile_android_wifi': 'mobile_android_wifi',
     'mobile_android_location': 'mobile_android_location',
     'mobile_android_media': 'mobile_android_media',
+    'mobile_android_screen_scrape': 'mobile_android_screen_scrape',
 
-    # === iOS 포렌식 ===
+    # === iOS Forensics - Basic (6) ===
     'mobile_ios_sms': 'mobile_ios_sms',
     'mobile_ios_call': 'mobile_ios_call',
     'mobile_ios_contacts': 'mobile_ios_contacts',
-    'mobile_ios_app': 'mobile_ios_app',
     'mobile_ios_safari': 'mobile_ios_safari',
     'mobile_ios_location': 'mobile_ios_location',
     'mobile_ios_backup': 'mobile_ios_backup',
 
-    # === 추후 지원 예정 ===
-    # 'email': 'email',
-    # 'document': 'document',
-    # 'compress': 'compress',
-    # 'image': 'media',
-    # 'video': 'media',
+    # === iOS - Messenger Apps (10) ===
+    'mobile_ios_kakaotalk': 'mobile_ios_kakaotalk',
+    'mobile_ios_whatsapp': 'mobile_ios_whatsapp',
+    'mobile_ios_wechat': 'mobile_ios_wechat',
+    'mobile_ios_telegram': 'mobile_ios_telegram',
+    'mobile_ios_fb_messenger': 'mobile_ios_fb_messenger',
+    'mobile_ios_line': 'mobile_ios_line',
+    'mobile_ios_discord': 'mobile_ios_discord',
+    'mobile_ios_viber': 'mobile_ios_viber',
+    'mobile_ios_signal': 'mobile_ios_signal',
+    'mobile_ios_skype': 'mobile_ios_skype',
+
+    # === iOS - SNS Apps (9) ===
+    'mobile_ios_instagram': 'mobile_ios_instagram',
+    'mobile_ios_facebook': 'mobile_ios_facebook',
+    'mobile_ios_tiktok': 'mobile_ios_tiktok',
+    'mobile_ios_twitter': 'mobile_ios_twitter',
+    'mobile_ios_reddit': 'mobile_ios_reddit',
+    'mobile_ios_snapchat': 'mobile_ios_snapchat',
+    'mobile_ios_pinterest': 'mobile_ios_pinterest',
+    'mobile_ios_linkedin': 'mobile_ios_linkedin',
+    'mobile_ios_threads': 'mobile_ios_threads',
+
+    # === iOS - Browser Tracking (4) ===
+    'mobile_ios_safari_tracking': 'mobile_ios_safari_tracking',
+    'mobile_ios_chrome_tracking': 'mobile_ios_chrome_tracking',
+    'mobile_ios_naver_search': 'mobile_ios_naver_search',
+    'mobile_ios_navermap_history': 'mobile_ios_navermap_history',
+
+    # === iOS - System P0 (5) ===
+    'mobile_ios_notes': 'mobile_ios_notes',
+    'mobile_ios_photos': 'mobile_ios_photos',
+    'mobile_ios_calendar': 'mobile_ios_calendar',
+    'mobile_ios_reminders': 'mobile_ios_reminders',
+    'mobile_ios_knowledgec': 'mobile_ios_knowledgec',
+
+    # === iOS - System P1 (5) ===
+    'mobile_ios_health': 'mobile_ios_health',
+    'mobile_ios_screentime': 'mobile_ios_screentime',
+    'mobile_ios_voicememos': 'mobile_ios_voicememos',
+    'mobile_ios_maps': 'mobile_ios_maps',
+    'mobile_ios_safari_bookmarks': 'mobile_ios_safari_bookmarks',
+
+    # === iOS - System P2 (6) ===
+    'mobile_ios_wifi': 'mobile_ios_wifi',
+    'mobile_ios_bluetooth': 'mobile_ios_bluetooth',
+    'mobile_ios_findmy': 'mobile_ios_findmy',
+    'mobile_ios_wallet': 'mobile_ios_wallet',
+    'mobile_ios_spotlight': 'mobile_ios_spotlight',
+    'mobile_ios_siri': 'mobile_ios_siri',
+
+    # === iOS - Messenger Auxiliary (7) ===
+    # mobile_ios_kakaotalk_attachments: removed (random filenames, no forensic value)
+    'mobile_ios_kakaotalk_profile': 'mobile_ios_kakaotalk_profile',
+    'mobile_ios_whatsapp_attachments': 'mobile_ios_whatsapp_attachments',
+    'mobile_ios_fb_messenger_attachments': 'mobile_ios_fb_messenger_attachments',
+    'mobile_ios_telegram_attachments': 'mobile_ios_telegram_attachments',
+    'mobile_ios_line_attachments': 'mobile_ios_line_attachments',
+    'mobile_ios_snapchat_memories': 'mobile_ios_snapchat_memories',
+
+    # === [2026-01] Media/Document artifacts enabled ===
+    'email': 'email',
+    'document': 'document',
+    'image': 'image',
+    'video': 'video',
+    'compress': 'document',  # Compressed files classified as documents
+
+    # === [2026-01] P0 new artifacts - high forensic value ===
+    'activities_cache': 'activities_cache',
+    'pca_launch': 'pca_launch',
+    'etl_log': 'etl_log',
+    'wmi_subscription': 'wmi_subscription',
+    'defender_detection': 'defender_detection',
+    'zone_identifier': 'zone_identifier',
+    'bits_jobs': 'bits_jobs',
+
+    # === Security/Malware ===
+    'antiforensic': 'registry',  # Anti-forensics related
+    'malware': 'registry',
+
+    # === Network ===
+    'network_profile': 'registry',
+    'network_connection': 'eventlog',
+
+    # === PC Messenger Forensics ===
+    'pc_kakaotalk_message': 'windows_kakaotalk',
+    'pc_kakaotalk_contact': 'windows_kakaotalk',
+    'pc_kakaotalk_chatroom': 'windows_kakaotalk',
+    'pc_line_message': 'windows_line',
+    'pc_line_contact': 'windows_line',
+    'pc_line_profile': 'windows_line',
+    'pc_line_group_chat': 'windows_line',
+    'pc_line_chat_session': 'windows_line',
+    'pc_line_e2ee_key': 'windows_line',
+    'pc_telegram_key': 'windows_telegram',
+    'pc_telegram_settings': 'windows_telegram',
+    'pc_telegram_account': 'windows_telegram',
+    'pc_telegram_cache': 'windows_telegram',
+    'pc_whatsapp_message': 'windows_whatsapp',
+    'pc_whatsapp_contact': 'windows_whatsapp',
+    'pc_whatsapp_chatroom': 'windows_whatsapp',
+    'pc_whatsapp_settings': 'windows_whatsapp',
+    'pc_wechat_message': 'windows_wechat',
+    'pc_wechat_contact': 'windows_wechat',
+    'pc_wechat_chatroom': 'windows_wechat',
+
+    # === Phase 1 PC Programs (Remote Access, Email, Cloud) ===
+    'pc_discord_message': 'windows_discord',
+    'pc_discord_dm': 'windows_discord',
+    'pc_discord_call': 'windows_discord',
+    'pc_discord_server': 'windows_discord',
+    'pc_discord_channel': 'windows_discord',
+    'pc_discord_user': 'windows_discord',
+    'pc_discord_attachment': 'windows_discord',
+    'pc_discord_session': 'windows_discord',
+    'pc_teamviewer_connection': 'windows_teamviewer',
+    'pc_teamviewer_session': 'windows_teamviewer',
+    'pc_anydesk_connection': 'windows_anydesk',
+    'pc_anydesk_session': 'windows_anydesk',
+    'pc_google_drive_file': 'windows_google_drive',
+    'pc_google_drive_sync': 'windows_google_drive',
+    'pc_google_drive_account': 'windows_google_drive',
+    'pc_thunderbird_email': 'windows_thunderbird',
+    'pc_thunderbird_contact': 'windows_thunderbird',
+    'pc_thunderbird_calendar': 'windows_thunderbird',
+
+    # === Memory Forensics ===
+    'memory_dump': 'memory_dump',
+    'memory_process': 'memory_process',
+    'memory_network': 'memory_network',
+    'memory_module': 'memory_module',
+    'memory_malware': 'memory_malware',
+    'memory_registry': 'memory_registry',
+    'memory_handle': 'memory_handle',
+    'memory_credential': 'memory_credential',
+
+    # === Linux Forensics ===
+    'linux_auth_log': 'linux_auth_log',
+    'linux_bash_history': 'linux_bash_history',
+    'linux_crontab': 'linux_crontab',
+    'linux_ssh_authorized_keys': 'linux_ssh_authorized_keys',
+    'linux_syslog': 'linux_syslog',
+    'linux_passwd_shadow': 'linux_passwd_shadow',
+    'linux_network_config': 'linux_network_config',
+    'linux_installed_packages': 'linux_installed_packages',
+
+    # === macOS Forensics ===
+    'macos_unified_log': 'macos_unified_log',
+    'macos_launch_agent': 'macos_launch_agent',
+    'macos_launch_daemon': 'macos_launch_daemon',
+    'macos_login_item': 'macos_login_item',
+    'macos_keychain': 'macos_keychain',
+    'macos_plist': 'macos_plist',
+    'macos_bash_history': 'macos_bash_history',
+    'macos_fsevent': 'macos_fsevent',
+    'macos_spotlight': 'macos_spotlight',
 }
 
 
@@ -171,12 +322,12 @@ class CollectorWindow(QMainWindow):
         self.ws_url = None
         self.allowed_artifacts = []
 
-        # 통합 디바이스 관리자
+        # Unified device manager
         self.device_manager = UnifiedDeviceManager()
         self.device_manager.device_added.connect(self._on_device_added)
         self.device_manager.device_removed.connect(self._on_device_removed)
 
-        # 디바이스 열거자 등록 (Windows, Android, iOS, E01/RAW)
+        # Register device enumerators (Windows, Android, iOS, E01/RAW)
         enumerators = create_default_enumerators()
         for name, enumerator in enumerators.items():
             self.device_manager.register_enumerator(name, enumerator)
@@ -184,14 +335,14 @@ class CollectorWindow(QMainWindow):
         self.setup_ui()
         self.check_server_connection()
 
-        # 디바이스 모니터링 시작
+        # Start device monitoring
         self.device_manager.start_monitoring(poll_interval_ms=3000)
 
     def setup_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle(f"{self.config['app_name']} v{self.config['version']}")
         self.setMinimumSize(900, 650)
-        # 플랫폼 통일 테마 적용
+        # Apply platform unified theme
         self.setStyleSheet(get_platform_stylesheet())
 
         # Central widget
@@ -252,7 +403,7 @@ class CollectorWindow(QMainWindow):
 
     def _create_left_panel(self) -> QWidget:
         """Create left panel with controls (scrollable)"""
-        # 스크롤 가능한 패널 생성
+        # Create scrollable panel
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -265,7 +416,7 @@ class CollectorWindow(QMainWindow):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
 
-        # Step 0: Device Selection (새로 추가)
+        # Step 0: Device Selection
         device_group = QGroupBox("0. Select Devices")
         device_layout = QVBoxLayout(device_group)
         device_layout.setContentsMargins(6, 18, 6, 6)
@@ -305,13 +456,13 @@ class CollectorWindow(QMainWindow):
 
         layout.addWidget(token_group)
 
-        # Step 2: Artifacts (탭 기반 - Phase 2.1)
+        # Step 2: Artifacts (tab-based)
         artifacts_group = QGroupBox("2. Select Artifacts")
         artifacts_outer_layout = QVBoxLayout(artifacts_group)
         artifacts_outer_layout.setContentsMargins(6, 16, 6, 6)
         artifacts_outer_layout.setSpacing(4)
 
-        # 탭 위젯 생성
+        # Create tab widget
         self.artifacts_tab = QTabWidget()
         self.artifacts_tab.setStyleSheet(f"""
             QTabWidget::pane {{
@@ -337,7 +488,7 @@ class CollectorWindow(QMainWindow):
             }}
         """)
 
-        # 아티팩트 체크박스 저장소
+        # Artifact checkboxes storage
         self.artifact_checks: Dict[str, QCheckBox] = {}
 
         # Tab 1: Windows Artifacts
@@ -352,19 +503,31 @@ class CollectorWindow(QMainWindow):
         ios_tab = self._create_ios_tab()
         self.artifacts_tab.addTab(ios_tab, "iOS")
 
+        # Tab 4: Linux
+        linux_tab = self._create_linux_tab()
+        self.artifacts_tab.addTab(linux_tab, "Linux")
+
+        # Tab 5: macOS
+        macos_tab = self._create_macos_tab()
+        self.artifacts_tab.addTab(macos_tab, "macOS")
+
         artifacts_outer_layout.addWidget(self.artifacts_tab)
 
-        # Select All (현재 탭에만 적용)
+        # Select All + Include Deleted option
         select_all_layout = QHBoxLayout()
         self.select_all_cb = QCheckBox("Select All (current tab)")
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
         select_all_layout.addWidget(self.select_all_cb)
         select_all_layout.addStretch()
+        self.include_deleted_cb = QCheckBox("Include deleted files")
+        self.include_deleted_cb.setChecked(True)
+        self.include_deleted_cb.setToolTip("Recover and collect deleted files from MFT (slower but more thorough)")
+        select_all_layout.addWidget(self.include_deleted_cb)
         artifacts_outer_layout.addLayout(select_all_layout)
 
         layout.addWidget(artifacts_group)
 
-        # Step 3: Progress (P2-1: 단계별 진행률 표시)
+        # Step 3: Progress (stage-based progress display)
         progress_group = QGroupBox("3. Collection Progress")
         progress_outer_layout = QVBoxLayout(progress_group)
         progress_outer_layout.setContentsMargins(6, 14, 6, 6)
@@ -376,9 +539,9 @@ class CollectorWindow(QMainWindow):
         progress_layout.setContentsMargins(0, 0, 0, 0)
         progress_layout.setSpacing(8)
 
-        # 전체 진행률
+        # Overall progress
         overall_layout = QHBoxLayout()
-        overall_label = QLabel("전체 진행률:")
+        overall_label = QLabel("Overall Progress:")
         overall_label.setMinimumWidth(80)
         self.overall_progress = QProgressBar()
         self.overall_progress.setTextVisible(True)
@@ -387,17 +550,17 @@ class CollectorWindow(QMainWindow):
         overall_layout.addWidget(self.overall_progress)
         progress_layout.addLayout(overall_layout)
 
-        # 단계별 진행률
+        # Stage-based progress
         stages_frame = QFrame()
         stages_frame.setObjectName("stagesFrame")
         stages_layout = QGridLayout(stages_frame)
         stages_layout.setContentsMargins(5, 5, 5, 5)
         stages_layout.setSpacing(8)
 
-        # 1. 수집 단계
+        # 1. Collection stage
         self.stage1_indicator = QLabel("○")
         self.stage1_indicator.setObjectName("stageIndicator")
-        self.stage1_label = QLabel("1. 수집")
+        self.stage1_label = QLabel("1. Collect")
         self.stage1_progress = QProgressBar()
         self.stage1_progress.setMaximumHeight(12)
         self.stage1_progress.setTextVisible(False)
@@ -405,10 +568,10 @@ class CollectorWindow(QMainWindow):
         stages_layout.addWidget(self.stage1_label, 0, 1)
         stages_layout.addWidget(self.stage1_progress, 0, 2)
 
-        # 2. 암호화 단계
+        # 2. Encryption stage
         self.stage2_indicator = QLabel("○")
         self.stage2_indicator.setObjectName("stageIndicator")
-        self.stage2_label = QLabel("2. 암호화")
+        self.stage2_label = QLabel("2. Encrypt")
         self.stage2_progress = QProgressBar()
         self.stage2_progress.setMaximumHeight(12)
         self.stage2_progress.setTextVisible(False)
@@ -416,10 +579,10 @@ class CollectorWindow(QMainWindow):
         stages_layout.addWidget(self.stage2_label, 1, 1)
         stages_layout.addWidget(self.stage2_progress, 1, 2)
 
-        # 3. 업로드 단계
+        # 3. Upload stage
         self.stage3_indicator = QLabel("○")
         self.stage3_indicator.setObjectName("stageIndicator")
-        self.stage3_label = QLabel("3. 업로드")
+        self.stage3_label = QLabel("3. Upload")
         self.stage3_progress = QProgressBar()
         self.stage3_progress.setMaximumHeight(12)
         self.stage3_progress.setTextVisible(False)
@@ -430,11 +593,18 @@ class CollectorWindow(QMainWindow):
         stages_layout.setColumnStretch(2, 1)
         progress_layout.addWidget(stages_frame)
 
-        # 현재 작업 및 예상 시간
+        # Current task and estimated time
         status_layout = QHBoxLayout()
-        self.current_file_label = QLabel("준비 완료")
+        self.current_file_label = QLabel("Ready")
         self.current_file_label.setWordWrap(True)
         status_layout.addWidget(self.current_file_label, 1)
+
+        # Elapsed time + heartbeat (proves the app is alive)
+        self.elapsed_label = QLabel("")
+        self.elapsed_label.setObjectName("elapsedLabel")
+        self.elapsed_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.elapsed_label.setStyleSheet("color: #888; font-size: 9px;")
+        status_layout.addWidget(self.elapsed_label)
 
         self.time_estimate_label = QLabel("")
         self.time_estimate_label.setObjectName("timeEstimate")
@@ -442,7 +612,15 @@ class CollectorWindow(QMainWindow):
         status_layout.addWidget(self.time_estimate_label)
         progress_layout.addLayout(status_layout)
 
-        # 수집된 파일 목록
+        # Heartbeat timer: updates elapsed time every second while collection is running
+        self._heartbeat_timer = QTimer(self)
+        self._heartbeat_timer.setInterval(1000)
+        self._heartbeat_timer.timeout.connect(self._update_heartbeat)
+        self._collection_start_time = None
+        self._heartbeat_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        self._heartbeat_idx = 0
+
+        # Collected files list
         self.collected_list = QListWidget()
         self.collected_list.setMaximumHeight(50)
         progress_layout.addWidget(self.collected_list)
@@ -461,7 +639,7 @@ class CollectorWindow(QMainWindow):
         self.collect_btn.setMinimumWidth(120)
         self.collect_btn.clicked.connect(self._start_collection)
         self.collect_btn.setObjectName("primaryButton")
-        # 명시적 스타일 설정 (비활성화/활성화 모두 보이도록)
+        # Explicit style settings (visible in both disabled/enabled states)
         self.collect_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['brand_primary']};
@@ -489,10 +667,10 @@ class CollectorWindow(QMainWindow):
         btn_layout.addWidget(self.cancel_btn, 1)  # stretch factor 1
         layout.addLayout(btn_layout)
 
-        # 남은 공간은 stretch로 채움
+        # Fill remaining space with stretch
         layout.addStretch()
 
-        # 스크롤 영역에 패널 설정
+        # Set panel to scroll area
         scroll_area.setWidget(panel)
         return scroll_area
 
@@ -523,7 +701,7 @@ class CollectorWindow(QMainWindow):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        # QScrollArea로 감싸기
+        # Wrap with QScrollArea
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -535,28 +713,46 @@ class CollectorWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(2)
 
-        # Windows 카테고리 아티팩트만 표시
+        # Group Windows artifacts by subcategory
+        subcategory_items: dict = {}
         for artifact_type, info in ARTIFACT_TYPES.items():
             category = info.get('category', 'windows')
             if category != 'windows' and 'category' in info:
                 continue
-            # 모바일 제외 (별도 탭)
             if artifact_type.startswith('mobile_'):
                 continue
+            subcat = info.get('subcategory', 'system')
+            subcategory_items.setdefault(subcat, []).append((artifact_type, info))
 
-            cb = QCheckBox(f"{info['name']}")
-            cb.setEnabled(False)  # Enable after token validation
-            cb.setProperty("artifact_type", artifact_type)
+        # Render each subcategory group in defined order
+        for subcat_key, subcat_label in self.WINDOWS_SUBCATEGORIES:
+            items = subcategory_items.get(subcat_key, [])
+            if not items:
+                continue
 
-            tooltip_parts = [info.get('description', '')]
-            if info.get('requires_admin'):
-                tooltip_parts.append("Requires administrator privileges")
-            if info.get('requires_mft'):
-                tooltip_parts.append("Requires MFT collection (pytsk3)")
-            cb.setToolTip(" | ".join(tooltip_parts))
+            # Section header
+            header = QLabel(f"  {subcat_label}")
+            header.setStyleSheet(
+                f"color: {COLORS['brand_primary']}; font-size: 9px; font-weight: bold; "
+                f"margin-top: 6px; margin-bottom: 2px;"
+            )
+            content_layout.addWidget(header)
 
-            self.artifact_checks[artifact_type] = cb
-            content_layout.addWidget(cb)
+            # Artifact checkboxes
+            for artifact_type, info in items:
+                cb = QCheckBox(f"{info['name']}")
+                cb.setEnabled(False)  # Enable after token validation
+                cb.setProperty("artifact_type", artifact_type)
+
+                tooltip_parts = [info.get('description', '')]
+                if info.get('requires_admin'):
+                    tooltip_parts.append("Requires administrator privileges")
+                if info.get('requires_mft'):
+                    tooltip_parts.append("Requires MFT collection (pytsk3)")
+                cb.setToolTip(" | ".join(tooltip_parts))
+
+                self.artifact_checks[artifact_type] = cb
+                content_layout.addWidget(cb)
 
         content_layout.addStretch()
         scroll.setWidget(content)
@@ -564,69 +760,71 @@ class CollectorWindow(QMainWindow):
 
         return tab
 
+    # Windows subcategory display order and labels
+    WINDOWS_SUBCATEGORIES = [
+        ('system',          'System Artifacts'),
+        ('filesystem',      'File System (MFT)'),
+        ('pc_messenger',    'PC Messenger'),
+        ('pc_apps',         'PC Applications'),
+    ]
+
+    # iOS subcategory display order and labels
+    IOS_SUBCATEGORIES = [
+        ('core',            'Core'),
+        ('system',          'System'),
+        ('messenger',       'Messenger'),
+        ('sns',             'SNS'),
+        ('email_browser',   'Email / Browser'),
+        ('korean',          'Korean Apps'),
+        ('productivity',    'Productivity / Media'),
+    ]
+
+    # Android subcategory display order and labels
+    ANDROID_SUBCATEGORIES = [
+        ('basic',               'Basic Collection (Non-Root)'),
+        ('app_system',          'System DB [Root]'),
+        ('app_messenger',       'Messenger'),
+        ('app_sns',             'SNS [Root Only]'),
+        ('app_korean',          'Korean Apps'),
+        ('app_email_browser',   'Email / Browser'),
+        ('screen_scrape',       'Screen Scraping'),
+    ]
+
+    # Android Tier headers (inserted as dividers before certain subcategories)
+    ANDROID_TIER_HEADERS = {
+        'basic':        'Tier 1 — Basic Collection (Non-Root)',
+        'app_system':   'Tier 2 — App Data (Root→DB / Non-Root→SDCard)',
+        'screen_scrape':'Tier 3 — Screen Scraping (Root/Non-Root)',
+    }
+
     def _create_android_tab(self) -> QWidget:
-        """Create Android Forensics tab"""
+        """Create Android Forensics tab with auto-detect root and auto-select"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        # 상태 정보 섹션
-        status_frame = QFrame()
-        status_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLORS['bg_tertiary']};
-                border: 1px solid {COLORS['border_subtle']};
-                border-radius: 4px;
-                padding: 4px;
-            }}
-            QLabel {{
-                font-size: 10px;
-                color: {COLORS['text_primary']};
-            }}
-        """)
-        status_layout = QGridLayout(status_frame)
-        status_layout.setContentsMargins(6, 6, 6, 6)
-        status_layout.setSpacing(4)
-        # Column stretches: 0=fixed, 1=expand, 2=fixed (prevent button cut-off)
-        status_layout.setColumnStretch(0, 0)
-        status_layout.setColumnStretch(1, 1)
-        status_layout.setColumnStretch(2, 0)
-
-        # ADB 상태
-        from collectors.artifact_collector import ADB_AVAILABLE
-        adb_status = "Available" if ADB_AVAILABLE else "Not Found"
-        self.adb_status_label = QLabel(f"ADB: {adb_status}")
-        self.adb_status_label.setStyleSheet(
-            f"color: {COLORS['success'] if ADB_AVAILABLE else COLORS['error']}; font-size: 10px;"
+        # Root status banner
+        self.android_root_banner = QLabel("Android device not connected")
+        self.android_root_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.android_root_banner.setFixedHeight(22)
+        self.android_root_banner.setStyleSheet(
+            f"background: {COLORS['bg_tertiary']}; color: {COLORS['text_tertiary']}; "
+            f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
         )
-        status_layout.addWidget(self.adb_status_label, 0, 0)
+        layout.addWidget(self.android_root_banner)
 
-        # 기기 연결 상태
-        self.android_device_label = QLabel("Device: Not connected")
-        self.android_device_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 10px;")
-        status_layout.addWidget(self.android_device_label, 0, 1)
+        # Limitation info label (shown for non-root devices)
+        self.android_limitation_label = QLabel("")
+        self.android_limitation_label.setWordWrap(True)
+        self.android_limitation_label.setVisible(False)
+        self.android_limitation_label.setStyleSheet(
+            f"background: {COLORS['bg_secondary']}; color: {COLORS['text_secondary']}; "
+            f"font-size: 8px; border-radius: 4px; padding: 4px 8px; margin: 2px 0px;"
+        )
+        layout.addWidget(self.android_limitation_label)
 
-        # 기기 새로고침 버튼
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setFixedSize(60, 20)
-        refresh_btn.clicked.connect(self._refresh_android_devices)
-        status_layout.addWidget(refresh_btn, 0, 2)
-
-        # 기기 정보 (루팅 상태 등)
-        self.android_info_label = QLabel("")
-        self.android_info_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 9px;")
-        status_layout.addWidget(self.android_info_label, 1, 0, 1, 3)
-
-        layout.addWidget(status_frame)
-
-        # USB 디버깅 가이드
-        guide_label = QLabel("USB Debugging: Settings > Developer Options > USB Debugging")
-        guide_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
-        guide_label.setWordWrap(True)
-        layout.addWidget(guide_label)
-
-        # 스크롤 영역
+        # Scroll area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -638,32 +836,162 @@ class CollectorWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(2)
 
-        # Android 카테고리 아티팩트
+        # Group artifacts by subcategory
+        subcategory_items: dict = {}
         for artifact_type, info in ARTIFACT_TYPES.items():
             if info.get('category') != 'android':
                 continue
+            subcat = info.get('subcategory', 'system')
+            if subcat not in subcategory_items:
+                subcategory_items[subcat] = []
+            subcategory_items[subcat].append((artifact_type, info))
 
-            cb = QCheckBox(f"{info['name']}")
-            cb.setEnabled(False)  # Enable after token validation
-            cb.setProperty("artifact_type", artifact_type)
+        # Render each subcategory group in defined order
+        for subcat_key, subcat_label in self.ANDROID_SUBCATEGORIES:
+            items = subcategory_items.get(subcat_key, [])
+            if not items:
+                continue
 
-            tooltip_parts = [info.get('description', '')]
-            if info.get('requires_root'):
-                tooltip_parts.append("Requires rooted device")
-            cb.setToolTip(" | ".join(tooltip_parts))
+            # Tier divider (horizontal line + tier header before certain subcategories)
+            if subcat_key in self.ANDROID_TIER_HEADERS:
+                # Horizontal separator line
+                line = QFrame()
+                line.setFrameShape(QFrame.Shape.HLine)
+                line.setStyleSheet(f"color: {COLORS['border_subtle']};")
+                line.setFixedHeight(1)
+                content_layout.addWidget(line)
+                # Tier header
+                tier_label = QLabel(f"  {self.ANDROID_TIER_HEADERS[subcat_key]}")
+                tier_label.setStyleSheet(
+                    f"color: {COLORS['info']}; font-size: 10px; font-weight: bold; "
+                    f"margin-top: 4px; margin-bottom: 2px;"
+                )
+                content_layout.addWidget(tier_label)
 
-            # 루트 필요 항목 표시
-            if info.get('requires_root'):
-                cb.setText(f"{info['name']} (Root)")
+            # Subcategory header
+            header = QLabel(f"  {subcat_label}")
+            header.setStyleSheet(
+                f"color: {COLORS['brand_primary']}; font-size: 9px; font-weight: bold; "
+                f"margin-top: 6px; margin-bottom: 2px;"
+            )
+            content_layout.addWidget(header)
 
-            self.artifact_checks[artifact_type] = cb
-            content_layout.addWidget(cb)
+            # Artifact checkboxes
+            for artifact_type, info in items:
+                # Show root requirement in name for clarity
+                name = info['name']
+                if info.get('requires_root') and '(Root)' not in name:
+                    name = f"{name} [Root]"
+                cb = QCheckBox(name)
+                cb.setEnabled(False)  # Enable after device detection
+                cb.setProperty("artifact_type", artifact_type)
+
+                tooltip_parts = [info.get('description', '')]
+                if info.get('requires_root'):
+                    tooltip_parts.append("Requires rooted device")
+                cb.setToolTip(" | ".join(tooltip_parts))
+
+                self.artifact_checks[artifact_type] = cb
+                content_layout.addWidget(cb)
 
         content_layout.addStretch()
         scroll.setWidget(content)
         layout.addWidget(scroll)
 
         return tab
+
+    def _update_android_root_status(self, is_rooted: bool, connected: bool):
+        """Update Android tab: root status banner, auto-select artifacts, show limitations"""
+        if not hasattr(self, 'android_root_banner'):
+            return
+
+        if not connected:
+            self.android_root_banner.setText("Android device not connected")
+            self.android_root_banner.setStyleSheet(
+                f"background: {COLORS['bg_tertiary']}; color: {COLORS['text_tertiary']}; "
+                f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
+            )
+            self.android_limitation_label.setVisible(False)
+            # Disable all android checkboxes
+            for artifact_type, cb in self.artifact_checks.items():
+                info = ARTIFACT_TYPES.get(artifact_type, {})
+                if info.get('category') == 'android':
+                    cb.setEnabled(False)
+                    cb.setChecked(False)
+            return
+
+        if is_rooted:
+            self.android_root_banner.setText(
+                "Root Detected \u2014 Full DB extraction enabled"
+            )
+            self.android_root_banner.setStyleSheet(
+                f"background: {COLORS['success_bg']}; color: {COLORS['success']}; "
+                f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
+            )
+            self.android_limitation_label.setVisible(False)
+        else:
+            self.android_root_banner.setText(
+                "Non-Root \u2014 External storage + Screen Scraping collection"
+            )
+            self.android_root_banner.setStyleSheet(
+                f"background: {COLORS['warning_bg']}; color: {COLORS['warning']}; "
+                f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
+            )
+            self.android_limitation_label.setText(
+                "Non-Root: Messenger apps auto-adapt to collect external storage data. "
+                "System info, media, and screen scraping are fully available. "
+                "Root-only items (marked [Root]) are disabled."
+            )
+            self.android_limitation_label.setVisible(True)
+
+        # Auto-select all applicable artifacts
+        # Import ANDROID_ARTIFACT_TYPES to detect dual-mode apps
+        try:
+            from collectors.android_collector import ANDROID_ARTIFACT_TYPES as _AAT
+        except ImportError:
+            _AAT = {}
+
+        for artifact_type, cb in self.artifact_checks.items():
+            info = ARTIFACT_TYPES.get(artifact_type, {})
+            if info.get('category') != 'android':
+                continue
+
+            # Screen scraping works on both Root and Non-Root — always enable when connected
+            if info.get('subcategory') == 'screen_scrape':
+                cb.setEnabled(True)
+                cb.setChecked(True)
+                cb.setToolTip(
+                    info.get('description', '') +
+                    " | Works on both Root and Non-Root devices"
+                )
+                continue
+
+            requires_root = info.get('requires_root', False)
+            # Dual-mode: has both 'root' and 'nonroot' in ANDROID_ARTIFACT_TYPES
+            android_info = _AAT.get(artifact_type, {})
+            is_dual_mode = 'root' in android_info and 'nonroot' in android_info
+
+            if requires_root and not is_rooted:
+                # Root-only, device not rooted → disable + uncheck
+                cb.setEnabled(False)
+                cb.setChecked(False)
+                cb.setToolTip(
+                    info.get('description', '') +
+                    " | Root required \u2014 root device for full access"
+                )
+            else:
+                # Available → enable + auto-check
+                cb.setEnabled(True)
+                cb.setChecked(True)
+                tooltip_parts = [info.get('description', '')]
+                if is_dual_mode:
+                    if is_rooted:
+                        tooltip_parts.append("Root: DB extraction")
+                    else:
+                        tooltip_parts.append("Non-Root: external storage + run-as")
+                elif requires_root:
+                    tooltip_parts.append("Root access used")
+                cb.setToolTip(" | ".join(tooltip_parts))
 
     def _create_ios_tab(self) -> QWidget:
         """Create iOS Forensics tab"""
@@ -672,61 +1000,12 @@ class CollectorWindow(QMainWindow):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        # 상태 정보 섹션
-        status_frame = QFrame()
-        status_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLORS['bg_tertiary']};
-                border: 1px solid {COLORS['border_subtle']};
-                border-radius: 4px;
-                padding: 4px;
-            }}
-            QLabel {{
-                font-size: 10px;
-                color: {COLORS['text_primary']};
-            }}
-            QComboBox {{
-                font-size: 10px;
-            }}
-        """)
-        status_layout = QVBoxLayout(status_frame)
-        status_layout.setContentsMargins(6, 6, 6, 6)
-        status_layout.setSpacing(4)
-
-        # 백업 선택
-        backup_row = QHBoxLayout()
-        backup_row.setSpacing(6)
-        backup_label = QLabel("Backup:")
-        backup_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 10px;")
-        self.ios_backup_combo = QComboBox()
-        self.ios_backup_combo.setMinimumWidth(150)
-        self.ios_backup_combo.setFixedHeight(22)
-        self.ios_backup_combo.currentIndexChanged.connect(self._on_ios_backup_selected)
-
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setFixedSize(60, 20)
-        refresh_btn.clicked.connect(self._refresh_ios_backups)
-
-        backup_row.addWidget(backup_label)
-        backup_row.addWidget(self.ios_backup_combo, 1)
-        backup_row.addWidget(refresh_btn)
-        status_layout.addLayout(backup_row)
-
-        # 백업 정보
-        self.ios_info_label = QLabel("No backup selected")
+        # Status label (simplified - backup selection handled by DeviceListPanel)
+        self.ios_info_label = QLabel("Select iOS backup from list")
         self.ios_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
-        self.ios_info_label.setWordWrap(True)
-        status_layout.addWidget(self.ios_info_label)
+        layout.addWidget(self.ios_info_label)
 
-        layout.addWidget(status_frame)
-
-        # 백업 생성 가이드
-        guide_label = QLabel("Backup: Connect device to iTunes/Finder > Back Up Now (unencrypted)")
-        guide_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
-        guide_label.setWordWrap(True)
-        layout.addWidget(guide_label)
-
-        # 스크롤 영역
+        # Scroll area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -738,9 +1017,71 @@ class CollectorWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(2)
 
-        # iOS 카테고리 아티팩트
+        # Group iOS artifacts by subcategory
+        subcategory_items: dict = {}
         for artifact_type, info in ARTIFACT_TYPES.items():
             if info.get('category') != 'ios':
+                continue
+            subcat = info.get('subcategory', 'core')
+            subcategory_items.setdefault(subcat, []).append((artifact_type, info))
+
+        # Render each subcategory group in defined order
+        for subcat_key, subcat_label in self.IOS_SUBCATEGORIES:
+            items = subcategory_items.get(subcat_key, [])
+            if not items:
+                continue
+
+            # Section header
+            header = QLabel(f"  {subcat_label}")
+            header.setStyleSheet(
+                f"color: {COLORS['brand_primary']}; font-size: 9px; font-weight: bold; "
+                f"margin-top: 6px; margin-bottom: 2px;"
+            )
+            content_layout.addWidget(header)
+
+            # Artifact checkboxes
+            for artifact_type, info in items:
+                cb = QCheckBox(f"{info['name']}")
+                cb.setEnabled(False)  # Enable after token validation
+                cb.setProperty("artifact_type", artifact_type)
+                cb.setToolTip(info.get('description', ''))
+
+                self.artifact_checks[artifact_type] = cb
+                content_layout.addWidget(cb)
+
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+        return tab
+
+    def _create_linux_tab(self) -> QWidget:
+        """Create Linux Forensics tab - E01 direct collection support"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        # Status label (simplified)
+        self.linux_info_label = QLabel("Select Linux E01/RAW image")
+        self.linux_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
+        layout.addWidget(self.linux_info_label)
+
+        # Scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(2)
+
+        # Linux category artifacts
+        for artifact_type, info in ARTIFACT_TYPES.items():
+            if info.get('category') != 'linux':
                 continue
 
             cb = QCheckBox(f"{info['name']}")
@@ -755,140 +1096,183 @@ class CollectorWindow(QMainWindow):
         scroll.setWidget(content)
         layout.addWidget(scroll)
 
-        # 초기 백업 목록 로드
-        QTimer.singleShot(100, self._refresh_ios_backups)
+        return tab
+
+    def _create_macos_tab(self) -> QWidget:
+        """Create macOS Forensics tab - E01 direct collection support"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        # Status label (simplified)
+        self.macos_info_label = QLabel("Select macOS E01/RAW image")
+        self.macos_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
+        layout.addWidget(self.macos_info_label)
+
+        # Scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(2)
+
+        # macOS category artifacts
+        for artifact_type, info in ARTIFACT_TYPES.items():
+            if info.get('category') != 'macos':
+                continue
+
+            cb = QCheckBox(f"{info['name']}")
+            cb.setEnabled(False)  # Enable after token validation
+            cb.setProperty("artifact_type", artifact_type)
+            cb.setToolTip(info.get('description', ''))
+
+            self.artifact_checks[artifact_type] = cb
+            content_layout.addWidget(cb)
+
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
 
         return tab
 
-    def _refresh_android_devices(self):
-        """Refresh Android device list"""
-        try:
-            from collectors.artifact_collector import ADB_AVAILABLE
-            if not ADB_AVAILABLE:
-                self.android_device_label.setText("Device: ADB not available")
-                return
-
-            import subprocess
-            result = subprocess.run(
-                ['adb', 'devices', '-l'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            lines = result.stdout.strip().split('\n')[1:]  # Skip header
-            devices = []
-            for line in lines:
-                if line.strip() and 'device' in line:
-                    parts = line.split()
-                    serial = parts[0]
-                    model = "Unknown"
-                    for part in parts:
-                        if part.startswith('model:'):
-                            model = part.split(':')[1]
-                    devices.append((serial, model))
-
-            if devices:
-                serial, model = devices[0]
-                self.android_device_label.setText(f"Device: {model}")
-                self.android_device_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 10px;")
-                self.android_info_label.setText(f"Serial: {serial}")
-                # Store for collection
-                self._android_device_serial = serial
-            else:
-                self.android_device_label.setText("Device: Not connected")
-                self.android_device_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 10px;")
-                self.android_info_label.setText("")
-                self._android_device_serial = None
-
-        except Exception as e:
-            self.android_device_label.setText(f"Device: Error")
-            self.android_device_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 10px;")
-            self.android_info_label.setText(str(e))
-            self._android_device_serial = None
-
-    def _refresh_ios_backups(self):
-        """Refresh iOS backup list"""
-        self.ios_backup_combo.clear()
-        self.ios_backup_combo.addItem("-- Select Backup --", None)
-
-        try:
-            from collectors.artifact_collector import IOS_AVAILABLE
-            if not IOS_AVAILABLE:
-                self.ios_info_label.setText("iOS backup support not available")
-                return
-
-            from collectors.ios_collector import find_ios_backups
-
-            backups = find_ios_backups()
-            for backup in backups:
-                display = f"{backup.device_name} ({backup.ios_version}) - {backup.backup_date.strftime('%Y-%m-%d')}"
-                if backup.encrypted:
-                    display += " [Encrypted]"
-                self.ios_backup_combo.addItem(display, str(backup.path))
-
-            if not backups:
-                self.ios_info_label.setText("No iOS backups found on this system")
-
-        except Exception as e:
-            self.ios_info_label.setText(f"Error loading backups: {e}")
-
-    def _on_ios_backup_selected(self, index: int):
-        """Handle iOS backup selection"""
-        if index <= 0:
-            self.ios_info_label.setText("No backup selected")
-            self.ios_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
-            self._ios_backup_path = None
-            return
-
-        backup_path = self.ios_backup_combo.currentData()
-        self._ios_backup_path = backup_path
-
-        try:
-            from collectors.ios_collector import parse_backup_info
-            from pathlib import Path
-
-            backup_info = parse_backup_info(Path(backup_path))
-            if backup_info:
-                info_text = f"Device: {backup_info.device_name} | iOS: {backup_info.ios_version} | Size: {backup_info.size_mb:.1f} MB"
-                if backup_info.encrypted:
-                    info_text += " | ENCRYPTED (cannot extract)"
-                    self.ios_info_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 9px;")
-                else:
-                    self.ios_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
-                self.ios_info_label.setText(info_text)
-        except Exception as e:
-            self.ios_info_label.setText(f"Error: {e}")
-            self.ios_info_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 9px;")
+    # [Removed] _refresh_android_devices, _refresh_ios_backups, _on_ios_backup_selected
+    # Device/backup selection is managed centrally by DeviceListPanel
 
     # =========================================================================
-    # Device Management Event Handlers (새로 추가)
+    # Device Management Event Handlers
     # =========================================================================
 
     def _on_device_added(self, device):
-        """디바이스 추가됨 (DeviceListPanel이 자동 처리)"""
+        """Device added (DeviceListPanel handles automatically)"""
         self._log(f"Device detected: {device.display_name}")
 
     def _on_device_removed(self, device_id: str):
-        """디바이스 제거됨 (DeviceListPanel이 자동 처리)"""
+        """Device removed (DeviceListPanel handles automatically)"""
         self._log(f"Device removed: {device_id}")
 
     def _on_device_selection_changed(self):
-        """디바이스 선택 변경됨"""
+        """Device selection changed"""
         selected = self.device_manager.get_selected_devices()
         count = len(selected)
         self._log(f"Selected {count} device(s)")
 
-        # 디바이스가 선택되면 수집 버튼 상태 업데이트
+        # [New] Auto-enable/disable platform tabs
+        self._update_platform_tab_states()
+
+        # Update collect button state when device is selected
         self._update_collect_button_state()
 
     def _on_image_file_added(self):
-        """포렌식 이미지 파일 추가됨 (DeviceListPanel에서 처리)"""
+        """Forensic image file added (handled by DeviceListPanel)"""
         self._log("Forensic image added")
+
+        # [New] Auto-enable/disable platform tabs
+        self._update_platform_tab_states()
+
         self._update_collect_button_state()
 
+    def _update_platform_tab_states(self):
+        """
+        Auto-navigate to relevant platform tab based on selected device
+
+        - All tabs remain accessible (not disabled)
+        - Auto-focus to appropriate tab based on detected OS
+        """
+        selected_devices = self.device_manager.get_selected_devices()
+
+        # Determine tab for auto-focus (priority: first selected device)
+        tab_map = {'windows': 0, 'android': 1, 'ios': 2, 'linux': 3, 'macos': 4}
+        target_tab = None
+
+        for device in selected_devices:
+            if device.device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
+                target_tab = tab_map['windows']
+                break
+
+            elif device.device_type == DeviceType.ANDROID_DEVICE:
+                target_tab = tab_map['android']
+                break
+
+            elif device.device_type in (DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE):
+                target_tab = tab_map['ios']
+                break
+
+            elif device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE):
+                detected_os = device.metadata.get('detected_os', 'unknown')
+                if detected_os == 'windows':
+                    target_tab = tab_map['windows']
+                elif detected_os == 'linux':
+                    target_tab = tab_map['linux']
+                elif detected_os == 'macos':
+                    target_tab = tab_map['macos']
+                # Don't auto-navigate for unknown (let user choose)
+                if target_tab is not None:
+                    break
+
+        # Update Linux/macOS tab info labels
+        self._update_linux_macos_info_labels(selected_devices)
+
+        # Update Android root status banner
+        android_device = None
+        for device in selected_devices:
+            if device.device_type == DeviceType.ANDROID_DEVICE:
+                android_device = device
+                break
+        if android_device:
+            is_rooted = android_device.metadata.get('rooted', False)
+            self._update_android_root_status(is_rooted=is_rooted, connected=True)
+        else:
+            self._update_android_root_status(is_rooted=False, connected=False)
+
+        # Auto-navigate to detected tab (only if different from current)
+        if target_tab is not None and self.artifacts_tab.currentIndex() != target_tab:
+            self.artifacts_tab.setCurrentIndex(target_tab)
+
+    def _update_linux_macos_info_labels(self, selected_devices: list):
+        """Update Linux/macOS tab info labels"""
+        linux_images = []
+        macos_images = []
+
+        for device in selected_devices:
+            if device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE):
+                detected_os = device.metadata.get('detected_os', 'unknown')
+                fs_type = device.metadata.get('filesystem_type', 'Unknown')
+
+                if detected_os == 'linux':
+                    linux_images.append(f"{device.display_name} ({fs_type})")
+                elif detected_os == 'macos':
+                    macos_images.append(f"{device.display_name} ({fs_type})")
+
+        # Update Linux tab info
+        if hasattr(self, 'linux_info_label'):
+            if linux_images:
+                self.linux_info_label.setText(
+                    f"✓ Selected: {', '.join(linux_images)}"
+                )
+                self.linux_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
+            else:
+                self.linux_info_label.setText("Select a Linux E01/RAW image from device list")
+                self.linux_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
+
+        # Update macOS tab info
+        if hasattr(self, 'macos_info_label'):
+            if macos_images:
+                self.macos_info_label.setText(
+                    f"✓ Selected: {', '.join(macos_images)}"
+                )
+                self.macos_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
+            else:
+                self.macos_info_label.setText("Select a macOS E01/RAW image from device list")
+                self.macos_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
+
     def _update_collect_button_state(self):
-        """수집 버튼 상태 업데이트"""
+        """Update collect button state"""
         has_token = self.collection_token is not None
         has_devices = len(self.device_manager.get_selected_devices()) > 0
         has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
@@ -1030,7 +1414,7 @@ class CollectorWindow(QMainWindow):
         """Toggle artifact checkboxes for current tab only"""
         checked = state == Qt.CheckState.Checked.value
 
-        # 현재 탭 인덱스에 따라 카테고리 결정
+        # Determine category based on current tab index
         current_tab = self.artifacts_tab.currentIndex()
         category_map = {0: 'windows', 1: 'android', 2: 'ios'}
         current_category = category_map.get(current_tab, 'windows')
@@ -1039,18 +1423,18 @@ class CollectorWindow(QMainWindow):
             if not cb.isEnabled():
                 continue
 
-            # 아티팩트 카테고리 확인
+            # Check artifact category
             artifact_info = ARTIFACT_TYPES.get(artifact_type, {})
             artifact_category = artifact_info.get('category', 'windows')
 
-            # Windows 탭: category가 없거나 'windows'인 것, 모바일 제외
+            # Windows tab: items without category or 'windows', exclude mobile
             if current_category == 'windows':
                 if artifact_type.startswith('mobile_'):
                     continue
                 if artifact_category not in ('windows', None) and 'category' in artifact_info:
                     continue
 
-            # 다른 탭: 해당 카테고리만
+            # Other tabs: matching category only
             elif artifact_category != current_category:
                 continue
 
@@ -1070,14 +1454,14 @@ class CollectorWindow(QMainWindow):
         result = validator.validate(token)
 
         if result.valid:
-            # [보안] 원본 세션 토큰은 저장하지 않음 (검증 완료 후 불필요)
-            # 수집 시작 시 session_id + collection_token으로 세션 검증
-            self.session_token = None  # 메모리에서 원본 토큰 제거
+            # [Security] Original session token not stored (unnecessary after validation)
+            # Session verified with session_id + collection_token at collection start
+            self.session_token = None  # Remove original token from memory
             self.session_id = result.session_id
             self.case_id = result.case_id
             self.collection_token = result.collection_token
-            # Windows에서 localhost는 IPv6(::1)로 해석되어 Docker 연결 실패
-            # 강제로 127.0.0.1로 변환
+            # On Windows, localhost resolves to IPv6 (::1) causing Docker connection failure
+            # Force conversion to 127.0.0.1
             raw_server_url = result.server_url or self.config['server_url']
             raw_ws_url = result.ws_url or self.config['ws_url']
             self.server_url = raw_server_url.replace('://localhost', '://127.0.0.1')
@@ -1091,81 +1475,90 @@ class CollectorWindow(QMainWindow):
             self._log(f"Allowed artifacts: {', '.join(self.allowed_artifacts)}")
 
             # Enable artifact selection
-            # 서버 아티팩트 이름을 Collector 이름으로 변환하여 매칭
+            # Map server artifact names to Collector names for matching
             mapped_allowed = set()
             for server_name in self.allowed_artifacts:
-                # 직접 매핑 확인
+                # Check direct mapping
                 if server_name in SERVER_TO_COLLECTOR_MAPPING:
                     mapped_allowed.add(SERVER_TO_COLLECTOR_MAPPING[server_name])
-                # 이미 Collector 이름인 경우
+                # If already a Collector name
                 if server_name in ARTIFACT_TYPES:
                     mapped_allowed.add(server_name)
 
-            # 'all'이 포함되었거나 allowed_artifacts가 없으면 모든 아티팩트 허용
+            # Allow all artifacts if 'all' is included or allowed_artifacts is empty
             allow_all = 'all' in self.allowed_artifacts or not result.allowed_artifacts
 
             self._log(f"Mapped artifacts for GUI: {', '.join(sorted(mapped_allowed))}")
             if allow_all:
                 self._log("All artifacts are allowed - selecting all by default")
 
+            # Enable and check all checkboxes by default
             for artifact_type, cb in self.artifact_checks.items():
-                # 모든 아티팩트 허용이거나 매핑된 목록에 있으면 활성화 및 선택
-                if allow_all or artifact_type in mapped_allowed:
-                    cb.setEnabled(True)
-                    cb.setChecked(True)  # 기본으로 모든 허용된 아티팩트 선택
+                cb.setEnabled(True)
+                cb.setChecked(True)
 
-            # 디바이스 선택 상태 포함하여 수집 버튼 상태 업데이트
+            self._log(f"[DEBUG] Enabled and checked all {len(self.artifact_checks)} checkboxes")
+
+            # Update collect button state including device selection status
             self._update_collect_button_state()
         else:
             self.token_status.setText(f"Invalid: {result.error}")
             self.token_status.setStyleSheet("color: #f72585;")
             self._log(f"Token validation failed: {result.error}", error=True)
 
+            # [2026-02-03] Display user-friendly error message popup
+            friendly_error = translate_error(result.error or "Unknown error")
+            QMessageBox.warning(
+                self,
+                f"⚠️ {friendly_error.title}",
+                f"{friendly_error.message}\n\nSolution:\n{friendly_error.solution}"
+            )
+
         self.validate_btn.setEnabled(True)
 
     def _start_collection(self):
         """Start the collection process"""
-        # === 세션 유효성 검증 (수집 시작 전 필수) ===
-        # 취소된 케이스, 만료된 세션 등 감지
-        # [보안] 원본 토큰 대신 session_id + collection_token 사용
+        # === Session validation (required before collection start) ===
+        # Detect cancelled cases, expired sessions, etc.
+        # [Security] Use session_id + collection_token instead of original token
         if not self.session_id or not self.collection_token:
             QMessageBox.warning(
                 self,
-                "세션 필요",
-                "유효한 세션이 없습니다.\n토큰을 입력하고 'Validate Token' 버튼을 눌러주세요."
+                "Session Required",
+                "No valid session found.\nPlease enter a token and click 'Validate Token'."
             )
             return
 
-        self._log("수집 시작 전 세션 유효성 검증 중...")
+        self._log("Validating session before starting collection...")
         validator = TokenValidator(self.config['server_url'])
         result = validator.validate_session(self.session_id, self.collection_token)
 
         if not result.can_proceed:
-            reason = result.reason or "알 수 없는 오류"
-            self._log(f"세션 검증 실패: {reason}", error=True)
-            self.token_status.setText("Invalid - 새 토큰 필요")
+            reason = result.reason or "Unknown error"
+            self._log(f"Session validation failed: {reason}", error=True)
+            self.token_status.setText("Invalid - New token required")
             self.token_status.setStyleSheet("color: #f72585;")
 
-            # 사용자에게 새 토큰 발급 안내
+            # Guide user to get new token
             QMessageBox.warning(
                 self,
-                "세션 검증 실패",
-                f"현재 세션으로 수집을 진행할 수 없습니다.\n\n"
-                f"원인: {reason}\n\n"
-                f"해결 방법:\n"
-                f"1. 웹 플랫폼에서 새 토큰을 발급받으세요.\n"
-                f"2. 새 토큰을 입력하고 'Validate Token'을 클릭하세요."
+                "Session Validation Failed",
+                f"Cannot proceed with collection using current session.\n\n"
+                f"Reason: {reason}\n\n"
+                f"Solution:\n"
+                f"1. Get a new token from the web platform.\n"
+                f"2. Enter the new token and click 'Validate Token'."
             )
-            # 세션 정보 초기화
+            # Clear session information
             self.session_id = None
             self.collection_token = None
             self.collect_btn.setEnabled(False)
             return
 
-        # 세션 검증 성공
-        self._log(f"세션 검증 성공 (케이스: {result.case_id}, 상태: {result.case_status})")
+        # Session validation success
+        self._log(f"Session validated (Case: {result.case_id}, Status: {result.case_status})")
 
-        # 디바이스 선택 확인
+        # Check device selection
         selected_devices = self.device_manager.get_selected_devices()
         if not selected_devices:
             QMessageBox.warning(self, "Error", "Please select at least one device")
@@ -1176,30 +1569,30 @@ class CollectorWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Please select at least one artifact type")
             return
 
-        # 선택된 디바이스 확인 (여러 개일 경우 명확히 표시)
+        # Confirm selected devices (show clearly when multiple)
         if len(selected_devices) > 1:
             device_list = "\n".join([f"  • {d.display_name}" for d in selected_devices])
             confirm = QMessageBox.question(
                 self,
-                "수집 대상 확인",
-                f"다음 {len(selected_devices)}개 디바이스에서 수집합니다:\n\n{device_list}\n\n"
-                f"선택된 아티팩트: {len(selected)}개\n\n"
-                f"계속하시겠습니까?\n\n"
-                f"(특정 디바이스만 수집하려면 '아니오'를 선택하고\n"
-                f"원하지 않는 디바이스의 체크를 해제하세요)",
+                "Confirm Collection Targets",
+                f"Collecting from {len(selected_devices)} device(s):\n\n{device_list}\n\n"
+                f"Selected artifacts: {len(selected)}\n\n"
+                f"Continue?\n\n"
+                f"(To collect from specific devices only, select 'No'\n"
+                f"and uncheck unwanted devices)",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
             if confirm != QMessageBox.StandardButton.Yes:
-                self._log("수집 취소됨: 사용자가 디바이스 선택을 재확인하려고 합니다")
+                self._log("Collection cancelled: User wants to reconfirm device selection")
                 return
 
         self._log(f"Starting collection from {len(selected_devices)} device(s)")
 
-        # 법적 동의 확인 (필수) - 서버 API 연동
+        # Legal consent check (required) - server API integration
         from gui.consent_dialog import show_consent_dialog
 
-        # 시스템 언어 감지 (기본: 영어)
+        # Detect system language (default: English)
         import locale
         system_lang = locale.getdefaultlocale()[0] or "en"
         lang_code = system_lang.split("_")[0] if "_" in system_lang else system_lang
@@ -1218,34 +1611,34 @@ class CollectorWindow(QMainWindow):
             self._log("Collection cancelled: User did not consent", error=True)
             QMessageBox.information(
                 self,
-                "수집 취소",
-                "법적 동의가 필요합니다.\n동의 없이는 수집을 진행할 수 없습니다."
+                "Collection Cancelled",
+                "Legal consent is required.\nCollection cannot proceed without consent."
             )
             return
 
-        # 동의 기록 저장
+        # Save consent record
         self.consent_record = consent_record
         self._log(f"Legal consent obtained: {consent_record['consent_hash'][:16]}...")
 
-        # BitLocker 감지 및 복호화 처리
-        # 주의: BitLocker 감지는 물리 디스크에만 적용 (E01/RAW 이미지는 제외)
+        # BitLocker detection and decryption handling
+        # Note: BitLocker detection applies only to physical disks (excludes E01/RAW images)
         bitlocker_decryptor = None
         bitlocker_info = None
 
-        # 선택된 디바이스 중 물리 디스크가 있는지 확인
+        # Check if any selected device is a physical disk
         has_physical_disk = any(
             d.device_type == DeviceType.WINDOWS_PHYSICAL_DISK
             for d in selected_devices
         )
 
         if BITLOCKER_AVAILABLE and has_physical_disk:
-            self._log("BitLocker 암호화 볼륨 확인 중...")
+            self._log("Checking for BitLocker encrypted volumes...")
             bitlocker_result = detect_bitlocker_on_system_drive()
 
             if bitlocker_result.is_encrypted:
-                self._log(f"BitLocker 암호화 볼륨 감지됨 (파티션 #{bitlocker_result.partition_index})")
+                self._log(f"BitLocker encrypted volume detected (Partition #{bitlocker_result.partition_index})")
 
-                # BitLocker 다이얼로그 표시
+                # Show BitLocker dialog
                 from gui.bitlocker_dialog import show_bitlocker_dialog
 
                 dialog_result = show_bitlocker_dialog(
@@ -1256,32 +1649,33 @@ class CollectorWindow(QMainWindow):
                         'encryption_method': bitlocker_result.encryption_method,
                     },
                     pybde_available=is_pybde_installed(),
+                    config=self.config,
                     parent=self
                 )
 
                 if dialog_result.success and not dialog_result.skip:
-                    # 자동 해제 모드 (manage-bde)
+                    # Auto-unlock mode (manage-bde)
                     if dialog_result.auto_decrypt:
-                        self._log("BitLocker 자동 해제 모드 선택됨 (manage-bde)")
+                        self._log("BitLocker auto-unlock mode selected (manage-bde)")
                         try:
                             from utils.bitlocker import disable_bitlocker, get_bitlocker_status
 
-                            # 진행 다이얼로그 표시
+                            # Show progress dialog
                             from PyQt6.QtWidgets import QProgressDialog
                             progress = QProgressDialog(
-                                "BitLocker 암호화를 해제하고 있습니다...\n"
-                                "디스크 크기에 따라 수 분~수 시간이 소요될 수 있습니다.",
-                                "취소",
+                                "Decrypting BitLocker...\n"
+                                "This may take several minutes to hours depending on disk size.",
+                                "Cancel",
                                 0, 100,
                                 self
                             )
-                            progress.setWindowTitle("BitLocker 해제 중")
+                            progress.setWindowTitle("Decrypting BitLocker")
                             progress.setWindowModality(Qt.WindowModality.WindowModal)
                             progress.setMinimumDuration(0)
                             progress.setValue(0)
                             progress.show()
 
-                            # 콜백으로 진행률 업데이트
+                            # Update progress via callback
                             def update_progress(percentage, message):
                                 if progress.wasCanceled():
                                     return
@@ -1289,7 +1683,7 @@ class CollectorWindow(QMainWindow):
                                 progress.setValue(int(percentage))
                                 QApplication.processEvents()
 
-                            # BitLocker 해제 실행
+                            # Execute BitLocker unlock
                             result = disable_bitlocker(
                                 drive="C:",
                                 progress_callback=update_progress,
@@ -1300,31 +1694,31 @@ class CollectorWindow(QMainWindow):
                             progress.close()
 
                             if result.success:
-                                self._log("BitLocker 해제 완료! MFT 기반 수집을 진행합니다.")
-                                # 자동 해제 플래그 설정 (수집 완료 후 재암호화용)
+                                self._log("BitLocker unlock complete! Proceeding with MFT-based collection.")
+                                # Set auto-unlock flag (for re-encryption after collection)
                                 self._bitlocker_auto_decrypt_used = True
                             else:
-                                self._log(f"BitLocker 해제 실패: {result.error}", error=True)
+                                self._log(f"BitLocker unlock failed: {result.error}", error=True)
                                 QMessageBox.warning(
                                     self,
-                                    "BitLocker 해제 실패",
-                                    f"BitLocker 해제에 실패했습니다:\n{result.error}\n\n"
-                                    "이전 방식(디렉토리 폴백)으로 수집을 진행합니다."
+                                    "BitLocker Unlock Failed",
+                                    f"Failed to unlock BitLocker:\n{result.error}\n\n"
+                                    "Proceeding with fallback method (directory traversal)."
                                 )
                                 self._bitlocker_auto_decrypt_used = False
 
                         except Exception as e:
-                            self._log(f"BitLocker 자동 해제 오류: {e}", error=True)
+                            self._log(f"BitLocker auto-unlock error: {e}", error=True)
                             QMessageBox.warning(
                                 self,
-                                "오류",
-                                f"BitLocker 해제 중 오류가 발생했습니다:\n{e}\n\n"
-                                "이전 방식으로 수집을 진행합니다."
+                                "Error",
+                                f"Error during BitLocker unlock:\n{e}\n\n"
+                                "Proceeding with fallback method."
                             )
                             self._bitlocker_auto_decrypt_used = False
                     else:
-                        # pybde 기반 복호화 시도
-                        self._log(f"BitLocker 복호화 시도 중... (키 타입: {dialog_result.key_type})")
+                        # Try pybde-based decryption
+                        self._log(f"Attempting BitLocker decryption... (Key type: {dialog_result.key_type})")
 
                         try:
                             decryptor = BitLockerDecryptor.from_physical_disk(
@@ -1332,7 +1726,7 @@ class CollectorWindow(QMainWindow):
                                 partition_index=bitlocker_result.partition_index
                             )
 
-                            # 키 타입에 따라 복호화
+                            # Decrypt based on key type
                             if dialog_result.key_type == "recovery_password":
                                 unlock_result = decryptor.unlock_with_recovery_password(
                                     dialog_result.key_value
@@ -1351,49 +1745,111 @@ class CollectorWindow(QMainWindow):
                             if unlock_result and unlock_result.success:
                                 bitlocker_decryptor = decryptor
                                 bitlocker_info = unlock_result.volume_info
-                                self._log("BitLocker 복호화 성공! 암호화된 볼륨에서 수집을 진행합니다.")
+                                self._log("BitLocker decryption successful! Proceeding with collection from encrypted volume.")
                             else:
                                 error_msg = unlock_result.error_message if unlock_result else "Unknown error"
-                                self._log(f"BitLocker 복호화 실패: {error_msg}", error=True)
+                                self._log(f"BitLocker decryption failed: {error_msg}", error=True)
                                 QMessageBox.warning(
                                     self,
-                                    "BitLocker 복호화 실패",
-                                    f"복호화에 실패했습니다: {error_msg}\n\n"
-                                    "이전 방식(암호화된 상태)으로 수집을 진행합니다."
+                                    "BitLocker Decryption Failed",
+                                    f"Decryption failed: {error_msg}\n\n"
+                                    "Proceeding with fallback method (encrypted state)."
                                 )
-                                # decryptor 정리
+                                # Cleanup decryptor
                                 decryptor.close()
 
                         except BitLockerError as e:
-                            self._log(f"BitLocker 오류: {e}", error=True)
+                            self._log(f"BitLocker error: {e}", error=True)
                             QMessageBox.warning(
                                 self,
-                                "BitLocker 오류",
-                                f"BitLocker 처리 중 오류가 발생했습니다:\n{e}\n\n"
-                                "이전 방식으로 수집을 진행합니다."
+                                "BitLocker Error",
+                                f"Error processing BitLocker:\n{e}\n\n"
+                                "Proceeding with fallback method."
                             )
                         except Exception as e:
-                            self._log(f"예상치 못한 오류: {e}", error=True)
+                            self._log(f"Unexpected error: {e}", error=True)
                             QMessageBox.warning(
                                 self,
-                                "오류",
-                                f"오류가 발생했습니다:\n{e}\n\n"
-                                "이전 방식으로 수집을 진행합니다."
+                                "Error",
+                                f"An error occurred:\n{e}\n\n"
+                                "Proceeding with fallback method."
                             )
 
                 elif dialog_result.skip:
-                    self._log("BitLocker 복호화를 건너뛰고 암호화된 상태로 수집을 진행합니다.")
+                    self._log("Skipping BitLocker decryption, proceeding with collection in encrypted state.")
                 else:
-                    # 취소됨 - 수집 중단
-                    self._log("BitLocker 다이얼로그가 취소되었습니다. 수집을 중단합니다.")
+                    # Cancelled - abort collection
+                    self._log("BitLocker dialog cancelled. Aborting collection.")
                     QMessageBox.information(
                         self,
-                        "수집 취소",
-                        "BitLocker 설정이 취소되어 수집을 진행하지 않습니다."
+                        "Collection Cancelled",
+                        "BitLocker configuration was cancelled. Collection will not proceed."
                     )
                     return
             else:
-                self._log("BitLocker 암호화 볼륨이 감지되지 않았습니다.")
+                self._log("No BitLocker encrypted volume detected.")
+
+        # iOS encrypted backup detection and password handling
+        ios_backup_password = None
+        has_encrypted_ios = any(
+            d.device_type == DeviceType.IOS_BACKUP and d.metadata.get('encrypted')
+            for d in selected_devices
+        )
+
+        if has_encrypted_ios:
+            self._log("Encrypted iOS backup detected, requesting password...")
+
+            # Get backup info for dialog
+            encrypted_device = next(
+                d for d in selected_devices
+                if d.device_type == DeviceType.IOS_BACKUP and d.metadata.get('encrypted')
+            )
+
+            from gui.ios_password_dialog import show_ios_password_dialog
+
+            # Check if decryption library is available
+            from collectors.ios_backup_decryptor import IPHONE_BACKUP_DECRYPT_AVAILABLE
+
+            dialog_result = show_ios_password_dialog(
+                backup_info={
+                    'device_name': encrypted_device.metadata.get('device_name', 'Unknown'),
+                    'ios_version': encrypted_device.metadata.get('ios_version', ''),
+                    'backup_date': encrypted_device.metadata.get('backup_date', ''),
+                    'size_mb': encrypted_device.size_bytes / (1024 * 1024) if encrypted_device.size_bytes else 0,
+                    'path': encrypted_device.metadata.get('path', ''),
+                },
+                library_available=IPHONE_BACKUP_DECRYPT_AVAILABLE,
+                parent=self
+            )
+
+            if dialog_result.success:
+                ios_backup_password = dialog_result.password
+                dialog_result.password = ""  # Clear from dialog result
+                self._log("iOS backup password accepted. Will verify during collection.")
+            elif dialog_result.skip:
+                self._log("Skipping encrypted iOS backup, excluding from collection.")
+                selected_devices = [
+                    d for d in selected_devices
+                    if not (d.device_type == DeviceType.IOS_BACKUP and d.metadata.get('encrypted'))
+                ]
+                if not selected_devices:
+                    self._log("No devices remaining after skip.", error=True)
+                    QMessageBox.information(
+                        self,
+                        "Collection Cancelled",
+                        "All selected devices were encrypted iOS backups.\n"
+                        "No devices left to collect from."
+                    )
+                    return
+            else:
+                # Cancelled
+                self._log("iOS backup password dialog cancelled. Aborting collection.")
+                QMessageBox.information(
+                    self,
+                    "Collection Cancelled",
+                    "iOS backup password was cancelled. Collection will not proceed."
+                )
+                return
 
         self._log(f"Starting collection for: {', '.join(selected)}")
 
@@ -1401,12 +1857,18 @@ class CollectorWindow(QMainWindow):
         self.collect_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.validate_btn.setEnabled(False)
+        self.select_all_cb.setEnabled(False)
+        self.include_deleted_cb.setEnabled(False)
         for cb in self.artifact_checks.values():
             cb.setEnabled(False)
 
-        # Phase 2.1: Android/iOS 옵션 가져오기
+        # Phase 2.1: Get Android/iOS options
         android_serial = getattr(self, '_android_device_serial', None)
         ios_backup = getattr(self, '_ios_backup_path', None)
+
+        # Phase 3.1: Get Linux/macOS mount paths
+        linux_mount = self.linux_mount_path.text().strip() if hasattr(self, 'linux_mount_path') else None
+        macos_mount = self.macos_mount_path.text().strip() if hasattr(self, 'macos_mount_path') else None
 
         # Start worker thread
         self.worker = CollectionWorker(
@@ -1416,179 +1878,364 @@ class CollectorWindow(QMainWindow):
             collection_token=self.collection_token,
             case_id=self.case_id,
             artifacts=selected,
-            consent_record=self.consent_record,  # P0 법적 필수
-            # 선택된 디바이스 목록
+            consent_record=self.consent_record,  # P0 legal requirement
+            # Selected devices list
             selected_devices=selected_devices,
-            # Phase 2.1: 메모리/모바일 옵션
+            # Phase 2.1: Memory/mobile options
             android_device_serial=android_serial,
             ios_backup_path=ios_backup,
-            # BitLocker 복호화된 볼륨
+            # Phase 3.1: Linux/macOS options
+            linux_mount_path=linux_mount if linux_mount else None,
+            macos_mount_path=macos_mount if macos_mount else None,
+            # BitLocker decrypted volume
             bitlocker_decryptor=bitlocker_decryptor,
+            # iOS encrypted backup password
+            ios_backup_password=ios_backup_password,
+            # Include deleted files option
+            include_deleted=self.include_deleted_cb.isChecked(),
+            # Application config (for security settings)
+            config=self.config,
         )
         self.worker.progress_updated.connect(self._update_progress)
         self.worker.file_collected.connect(self._add_collected_file)
         self.worker.log_message.connect(self._log)
         self.worker.finished.connect(self._collection_finished)
+        # [2026-02-24] iOS USB: password dialog + status update callbacks
+        self.worker.password_requested.connect(self._on_ios_password_requested)
+        self.worker.ios_status_update.connect(
+            lambda msg: self._show_ios_status(msg) if hasattr(self, '_ios_status_dialog') and self._ios_status_dialog else None
+        )
+        # [2026-02-25] Screen scraping: device unlock dialog
+        self.worker.unlock_requested.connect(self._on_unlock_requested)
         self.worker.start()
+
+        # Start heartbeat timer (elapsed time indicator)
+        self._collection_start_time = datetime.now()
+        self._heartbeat_idx = 0
+        self.elapsed_label.setText("")
+        self._heartbeat_timer.start()
+
+        # Show preparing dialog for iOS USB devices
+        # (closes when backup progress fires or collection finishes)
+        if any(d.device_type == DeviceType.IOS_DEVICE for d in selected_devices):
+            self._show_ios_status(
+                "Preparing iOS backup...\n"
+                "Connecting to device and checking encryption status."
+            )
 
     def _cancel_collection(self):
         """Cancel ongoing collection"""
         if hasattr(self, 'worker') and self.worker.isRunning():
+            self._close_ios_status()
             self.worker.cancel()
             self._log("Collection cancelled by user")
 
-            # [보안] 서버에 취소 알림 (Redis 활성 수집 상태 정리)
+            # [Security] Notify server of cancellation (clear Redis active collection state)
+            # Must run BEFORE _clear_session_data() since it needs session_id/collection_token
             self._notify_server_cancel()
+
+            # [2026-02-16] Immediately clear session data so user must enter new token
+            # Prevents accidentally re-authenticating with the old (used) token
+            self._clear_session_data()
+            self.token_status.setText("Cancelled - New token required")
+            self.token_status.setStyleSheet("color: #ffc107;")
+
+    def _on_ios_password_requested(self, error_msg: str):
+        """
+        Handle iOS USB password request from collector thread.
+
+        Runs in GUI thread (Qt signal connection). Shows dialog, then
+        unblocks the worker thread with the result.
+        """
+        # Close preparing indicator before showing password dialog
+        self._close_ios_status()
+
+        # Don't show dialog if collection was already cancelled
+        if hasattr(self, 'worker') and self.worker and self.worker._cancelled:
+            self.worker._pw_response = None
+            if self.worker._pw_event:
+                self.worker._pw_event.set()
+            return
+
+        from gui.ios_password_dialog import show_ios_backup_password_dialog
+        result = show_ios_backup_password_dialog(
+            error_msg=error_msg if error_msg else "",
+            parent=self
+        )
+        if hasattr(self, 'worker') and self.worker:
+            self.worker._pw_response = result.password if result.success else None
+            if self.worker._pw_event:
+                self.worker._pw_event.set()
+
+        # Show verifying indicator while collector checks the password
+        has_password = result.success and result.password
+        result.clear_sensitive()
+        if has_password:
+            self._show_ios_status(
+                "Verifying backup password...\n"
+                "This may take a few seconds.",
+                title="Verifying Password"
+            )
+
+    def _on_unlock_requested(self, error_msg: str):
+        """
+        [2026-02-25] Handle screen scraping unlock request from worker thread.
+
+        Shows a modal dialog asking the user to unlock the device,
+        then unblocks the worker thread with retry/skip decision.
+        """
+        if hasattr(self, 'worker') and self.worker and self.worker._cancelled:
+            self.worker._unlock_response = False
+            if self.worker._unlock_event:
+                self.worker._unlock_event.set()
+            return
+
+        result = QMessageBox.warning(
+            self,
+            "Device Unlock Required",
+            "Screen Scraping requires the device to be unlocked.\n\n"
+            "Please:\n"
+            "  1. Turn on the device screen\n"
+            "  2. Enter PIN / pattern / fingerprint to unlock\n"
+            "  3. Click 'Retry' to continue scraping\n\n"
+            "Click 'Skip' to skip screen scraping and continue with other artifacts.",
+            QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Discard,
+            QMessageBox.StandardButton.Retry
+        )
+
+        if hasattr(self, 'worker') and self.worker:
+            self.worker._unlock_response = (result == QMessageBox.StandardButton.Retry)
+            if self.worker._unlock_event:
+                self.worker._unlock_event.set()
+
+    def _show_ios_status(self, text: str, title: str = "iOS Backup"):
+        """Show or update the unified iOS status progress dialog.
+
+        If dialog already exists, just updates label text.
+        Otherwise creates a new indeterminate QProgressDialog.
+        """
+        from PyQt6.QtWidgets import QProgressDialog
+        if hasattr(self, '_ios_status_dialog') and self._ios_status_dialog:
+            # Update existing dialog text
+            self._ios_status_dialog.setLabelText(text)
+            self._ios_status_dialog.setWindowTitle(title)
+            QApplication.processEvents()
+            return
+        dlg = QProgressDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.setLabelText(text)
+        dlg.setRange(0, 0)
+        dlg.setCancelButton(None)
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setMinimumWidth(320)
+        dlg.setValue(0)
+        dlg.show()
+        QApplication.processEvents()
+        self._ios_status_dialog = dlg
+
+    def _close_ios_status(self):
+        """Close the unified iOS status dialog if open."""
+        if hasattr(self, '_ios_status_dialog') and self._ios_status_dialog:
+            self._ios_status_dialog.close()
+            self._ios_status_dialog = None
 
     def _update_progress(self, stage: int, stage_progress: int, overall_progress: int,
                          message: str, time_remaining: str):
         """
-        Update progress bars (P2-1: 단계별 진행률)
+        Update progress bars (stage-based progress)
 
         Args:
-            stage: 현재 단계 (1=수집, 2=암호화, 3=업로드)
-            stage_progress: 현재 단계 내 진행률 (0-100)
-            overall_progress: 전체 진행률 (0-100)
-            message: 현재 작업 설명
-            time_remaining: 예상 남은 시간 문자열
+            stage: Current stage (1=collection, 2=encryption, 3=upload)
+            stage_progress: Progress within current stage (0-100)
+            overall_progress: Overall progress (0-100)
+            message: Current task description
+            time_remaining: Estimated remaining time string
         """
-        # 전체 진행률
+        # Close any iOS preparing / password-verify dialog once real progress fires
+        self._close_ios_status()
+
+        # Overall progress
         self.overall_progress.setValue(overall_progress)
 
-        # 단계별 UI 업데이트
+        # Update stage UI
         indicators = [self.stage1_indicator, self.stage2_indicator, self.stage3_indicator]
         progress_bars = [self.stage1_progress, self.stage2_progress, self.stage3_progress]
         labels = [self.stage1_label, self.stage2_label, self.stage3_label]
 
         for i, (indicator, progress, label) in enumerate(zip(indicators, progress_bars, labels), 1):
             if i < stage:
-                # 완료된 단계
+                # Completed stage
                 indicator.setText("✓")
                 indicator.setStyleSheet("color: #4cc9f0;")
                 progress.setValue(100)
                 progress.setStyleSheet("QProgressBar::chunk { background-color: #4cc9f0; }")
             elif i == stage:
-                # 현재 진행 중인 단계
+                # Currently active stage
                 indicator.setText("●")
                 indicator.setStyleSheet("color: #f0c14c;")
                 progress.setValue(stage_progress)
                 progress.setStyleSheet("QProgressBar::chunk { background-color: #f0c14c; }")
             else:
-                # 대기 중인 단계
+                # Pending stage
                 indicator.setText("○")
                 indicator.setStyleSheet("color: #666;")
                 progress.setValue(0)
                 progress.setStyleSheet("")
 
-        # 현재 작업 및 시간 표시
+        # Display current task and time
         self.current_file_label.setText(message)
         if time_remaining:
-            self.time_estimate_label.setText(f"예상: {time_remaining}")
+            self.time_estimate_label.setText(f"Est: {time_remaining}")
+
+    def _update_heartbeat(self):
+        """Update elapsed time label with spinner animation (proves app is alive)"""
+        if self._collection_start_time is None:
+            return
+        elapsed = datetime.now() - self._collection_start_time
+        total_seconds = int(elapsed.total_seconds())
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+
+        spinner = self._heartbeat_frames[self._heartbeat_idx % len(self._heartbeat_frames)]
+        self._heartbeat_idx += 1
+
+        if hours > 0:
+            time_str = f"{hours}:{minutes:02d}:{seconds:02d}"
+        else:
+            time_str = f"{minutes:02d}:{seconds:02d}"
+
+        self.elapsed_label.setText(f"{spinner} {time_str}")
 
     def _add_collected_file(self, filename: str, success: bool):
-        """Add file to collected list"""
+        """Add file to collected list (scroll deferred to avoid progressive slowdown)"""
         item = QListWidgetItem(filename)
         if success:
             item.setForeground(QColor("#4cc9f0"))
         else:
             item.setForeground(QColor("#f72585"))
         self.collected_list.addItem(item)
-        self.collected_list.scrollToBottom()
+        # Only auto-scroll when list is small; for large lists it causes
+        # O(n) re-layout per addItem, degrading from fast to crawl.
+        if self.collected_list.count() <= 200:
+            self.collected_list.scrollToBottom()
 
     def _collection_finished(self, success: bool, message: str):
         """Handle collection completion"""
-        # BitLocker 자동 해제 사용 시 재암호화
+        # Stop heartbeat timer and show final elapsed time
+        self._heartbeat_timer.stop()
+        if self._collection_start_time is not None:
+            elapsed = datetime.now() - self._collection_start_time
+            total_seconds = int(elapsed.total_seconds())
+            minutes, seconds = divmod(total_seconds, 60)
+            hours, minutes = divmod(minutes, 60)
+            if hours > 0:
+                final_time = f"{hours}:{minutes:02d}:{seconds:02d}"
+            else:
+                final_time = f"{minutes:02d}:{seconds:02d}"
+            status = "✓" if success else "✗"
+            self.elapsed_label.setText(f"{status} {final_time}")
+            self._collection_start_time = None
+
+        # Close any remaining iOS status dialog
+        self._close_ios_status()
+
+        # Re-encrypt if BitLocker auto-unlock was used
         if getattr(self, '_bitlocker_auto_decrypt_used', False):
             self._reenable_bitlocker()
             self._bitlocker_auto_decrypt_used = False
 
         # Re-enable controls
-        self.collect_btn.setEnabled(False)  # 수집 완료/취소 후 비활성화 (새 토큰 필요)
+        self.collect_btn.setEnabled(False)  # Disable after collection complete/cancelled (new token required)
         self.cancel_btn.setEnabled(False)
         self.validate_btn.setEnabled(True)
+        self.select_all_cb.setEnabled(True)
+        self.include_deleted_cb.setEnabled(True)
+        for cb in self.artifact_checks.values():
+            cb.setEnabled(True)
 
-        # [보안] 세션 정보 초기화 - 토큰 재사용 방지
-        # 수집 완료/취소 후에는 새 토큰으로 다시 인증해야 함
+        # [Security] Clear session data - prevent token reuse
+        # After collection complete/cancelled, must re-authenticate with new token
         self._clear_session_data()
 
         if success:
             self._log(f"Collection completed: {message}")
-            self._log("새로운 수집을 위해서는 새 토큰이 필요합니다.")
-            QMessageBox.information(self, "Success", f"{message}\n\n새로운 수집을 위해서는 새 토큰을 발급받으세요.")
+            self._log("New token required for new collection.")
+            QMessageBox.information(self, "Success", f"{message}\n\nPlease get a new token for additional collections.")
         else:
             self._log(f"Collection failed: {message}", error=True)
-            self._log("새로운 수집을 위해서는 새 토큰이 필요합니다.")
-            QMessageBox.critical(self, "Error", f"{message}\n\n새로운 수집을 위해서는 새 토큰을 발급받으세요.")
+            self._log("New token required for new collection.")
+            QMessageBox.critical(self, "Error", f"{message}\n\nPlease get a new token for additional collections.")
 
-        self.status_bar.showMessage("Ready - 새 토큰 입력 필요")
-        self.token_status.setText("새 토큰 필요")
+        self.status_bar.showMessage("Ready - New token required")
+        self.token_status.setText("New token required")
         self.token_status.setStyleSheet("color: #ffc107;")
 
     def _reenable_bitlocker(self):
-        """수집 완료 후 BitLocker 재암호화"""
-        self._log("BitLocker 재암호화 시작...")
+        """Re-enable BitLocker after collection"""
+        self._log("Starting BitLocker re-encryption...")
 
         try:
             from utils.bitlocker import enable_bitlocker
 
-            # 진행 다이얼로그 표시
+            # Show progress dialog
             from PyQt6.QtWidgets import QProgressDialog
             progress = QProgressDialog(
-                "BitLocker 암호화를 다시 활성화하고 있습니다...\n"
-                "백그라운드에서 암호화가 진행됩니다.",
-                None,  # 취소 버튼 없음 (보안상 필수)
+                "Re-enabling BitLocker encryption...\n"
+                "Encryption will continue in background.",
+                None,  # No cancel button (security requirement)
                 0, 0,
                 self
             )
-            progress.setWindowTitle("BitLocker 재암호화")
+            progress.setWindowTitle("BitLocker Re-encryption")
             progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.setMinimumDuration(0)
             progress.show()
             QApplication.processEvents()
 
-            # BitLocker 재암호화 시작 (백그라운드 - 완료 대기 안함)
+            # Start BitLocker re-encryption (background - don't wait for completion)
             result = enable_bitlocker(
                 drive="C:",
-                wait_for_completion=False  # 백그라운드에서 암호화 진행
+                wait_for_completion=False  # Encryption continues in background
             )
 
             progress.close()
 
             if result.success:
-                self._log("BitLocker 재암호화가 시작되었습니다. 백그라운드에서 진행됩니다.")
+                self._log("BitLocker re-encryption started. Continuing in background.")
                 QMessageBox.information(
                     self,
-                    "BitLocker 재암호화",
-                    "BitLocker 암호화가 백그라운드에서 시작되었습니다.\n\n"
-                    "암호화 진행 상황은 Windows 설정에서 확인할 수 있습니다.\n"
-                    "(설정 > 개인 정보 및 보안 > 장치 암호화)"
+                    "BitLocker Re-encryption",
+                    "BitLocker encryption has started in the background.\n\n"
+                    "You can check encryption progress in Windows Settings.\n"
+                    "(Settings > Privacy & Security > Device Encryption)"
                 )
             else:
-                self._log(f"BitLocker 재암호화 실패: {result.error}", error=True)
+                self._log(f"BitLocker re-encryption failed: {result.error}", error=True)
                 QMessageBox.warning(
                     self,
-                    "BitLocker 재암호화 실패",
-                    f"BitLocker 재암호화에 실패했습니다:\n{result.error}\n\n"
-                    "수동으로 BitLocker를 다시 활성화해 주세요:\n"
+                    "BitLocker Re-encryption Failed",
+                    f"Failed to re-enable BitLocker:\n{result.error}\n\n"
+                    "Please manually re-enable BitLocker:\n"
                     "manage-bde -on C:"
                 )
 
         except Exception as e:
-            self._log(f"BitLocker 재암호화 오류: {e}", error=True)
+            self._log(f"BitLocker re-encryption error: {e}", error=True)
             QMessageBox.warning(
                 self,
-                "오류",
-                f"BitLocker 재암호화 중 오류가 발생했습니다:\n{e}\n\n"
-                "수동으로 BitLocker를 다시 활성화해 주세요:\n"
+                "Error",
+                f"Error during BitLocker re-encryption:\n{e}\n\n"
+                "Please manually re-enable BitLocker:\n"
                 "manage-bde -on C:"
             )
 
     def _clear_session_data(self):
         """
-        세션 데이터 초기화 - 토큰 재사용 방지
+        Clear session data - prevent token reuse
 
-        수집 완료/취소 후 호출되어 캐시된 세션 정보를 삭제합니다.
-        새로운 수집을 위해서는 새 토큰으로 다시 인증해야 합니다.
+        Called after collection complete/cancelled to delete cached session info.
+        New collection requires re-authentication with new token.
         """
         self.session_id = None
         self.case_id = None
@@ -1597,17 +2244,17 @@ class CollectorWindow(QMainWindow):
         self.ws_url = None
         self.allowed_artifacts = []
 
-        # 토큰 입력 필드 초기화
+        # Clear token input field
         if hasattr(self, 'token_input') and self.token_input:
             self.token_input.clear()
 
     def _notify_server_cancel(self):
         """
-        서버에 수집 중단 알림 (Redis 활성 수집 상태 정리)
+        Notify server of collection abort (clear Redis active collection state)
 
-        취소 시 서버의 active_collection 상태를 정리하여
-        동일 케이스에 대한 새 수집을 허용합니다.
-        실패해도 UI 동작에는 영향 없음 (best-effort).
+        Clears server's active_collection state on cancel to allow
+        new collection for the same case.
+        UI operation unaffected on failure (best-effort).
         """
         import requests
 
@@ -1615,12 +2262,12 @@ class CollectorWindow(QMainWindow):
             return
 
         try:
-            # 인증 후 저장된 server_url 우선 사용, 없으면 config에서 가져오기
+            # Prefer server_url from authentication, fallback to config
             server_url = getattr(self, 'server_url', None) or self.config.get('server_url', '')
             if not server_url:
                 return
 
-            # 수집도구 전용 abort 엔드포인트 사용
+            # Use collector-specific abort endpoint
             abort_url = f"{server_url}/api/v1/collector/collection/abort/{self.session_id}"
             response = requests.post(
                 abort_url,
@@ -1631,18 +2278,43 @@ class CollectorWindow(QMainWindow):
             )
 
             if response.status_code == 200:
-                self._log("서버 중단 알림 완료")
+                self._log("Server abort notification complete")
             else:
-                self._log(f"서버 중단 알림 실패: {response.status_code}", error=True)
+                self._log(f"Server abort notification failed: {response.status_code}", error=True)
         except Exception as e:
-            # 실패해도 무시 - 서버 stale 체크로 자동 정리됨
-            self._log(f"서버 중단 알림 실패 (무시됨): {e}", error=True)
+            # Ignore failure - server stale check handles cleanup
+            self._log(f"Server abort notification failed (ignored): {e}", error=True)
+
+    # Log level styles: (color, display_prefix)
+    _LOG_STYLES = {
+        'info':  ('#4cc9f0', 'INFO'),
+        'warn':  ('#ffc107', 'WARN'),
+        'skip':  ('#888888', 'SKIP'),
+        'error': ('#f72585', 'ERROR'),
+    }
 
     def _log(self, message: str, error: bool = False):
-        """Add message to log"""
+        """Add message to activity log.
+
+        Level is determined by message prefix tags (stripped before display):
+          [SKIP] → grey   "SKIP"  — artifact not present, normal
+          [WARN] → yellow "WARN"  — non-critical issue
+          else   → error flag: True → red "ERROR", False → blue "INFO"
+        """
         timestamp = datetime.now().strftime("%H:%M:%S")
-        prefix = "ERROR" if error else "INFO"
-        color = "#f72585" if error else "#4cc9f0"
+
+        # Extract level from message prefix tag
+        level = None
+        for tag in ('[SKIP]', '[WARN]'):
+            if message.startswith(tag):
+                level = tag[1:-1].lower()  # 'skip' or 'warn'
+                message = message[len(tag):].lstrip()
+                break
+
+        if level is None:
+            level = 'error' if error else 'info'
+
+        color, prefix = self._LOG_STYLES.get(level, self._LOG_STYLES['info'])
 
         html = f'<span style="color: #888;">[{timestamp}]</span> '
         html += f'<span style="color: {color};">[{prefix}]</span> '
@@ -1651,36 +2323,42 @@ class CollectorWindow(QMainWindow):
         self.log_text.append(html)
 
     def closeEvent(self, event):
-        """윈도우 종료 시 정리"""
-        # 디바이스 모니터링 중지
+        """Cleanup on window close"""
+        # Stop device monitoring
         self.device_manager.stop_monitoring()
 
-        # 진행 중인 수집 취소
+        # Cancel ongoing collection
         if hasattr(self, 'worker') and self.worker.isRunning():
             self.worker.cancel()
-            self.worker.wait(3000)  # 최대 3초 대기
+            self.worker.wait(3000)  # Wait max 3 seconds
         else:
-            # 수집 중이 아니더라도 활성 세션이 있으면 서버에 알림
-            # (토큰 인증 후 수집 시작 전 종료한 경우)
+            # Notify server if active session exists even without collection
+            # (closed after token auth but before collection start)
             self._notify_server_cancel()
 
         super().closeEvent(event)
 
 
 class CollectionWorker(QThread):
-    """Background worker for collection (P2-1: 단계별 진행률)"""
+    """Background worker for collection (stage-based progress)"""
 
-    # P2-1: 확장된 시그널 (stage, stage_progress, overall_progress, message, time_remaining)
+    # Extended signals (stage, stage_progress, overall_progress, message, time_remaining)
     progress_updated = pyqtSignal(int, int, int, str, str)
     file_collected = pyqtSignal(str, bool)
     log_message = pyqtSignal(str, bool)
     finished = pyqtSignal(bool, str)
+    # [2026-02-24] iOS USB backup password request (error_msg → GUI dialog)
+    password_requested = pyqtSignal(str)
+    # [2026-02-24] iOS status text update (shown in preparing/verify dialog)
+    ios_status_update = pyqtSignal(str)
+    # [2026-02-25] Screen scraping: device unlock required
+    unlock_requested = pyqtSignal(str)
 
-    # 단계별 가중치 (총 100%)
+    # Stage weights (total 100%)
     STAGE_WEIGHTS = {
-        1: 30,   # 수집: 30%
-        2: 30,   # 암호화: 30%
-        3: 40,   # 업로드: 40%
+        1: 30,   # Collection: 30%
+        2: 30,   # Encryption: 30%
+        3: 40,   # Upload: 40%
     }
 
     def __init__(
@@ -1692,13 +2370,22 @@ class CollectionWorker(QThread):
         case_id: str,
         artifacts: List[str],
         consent_record: dict = None,
-        # 선택된 디바이스 목록
+        # Selected device list
         selected_devices: List = None,
-        # Phase 2.1: 모바일 옵션
+        # Phase 2.1: Mobile options
         android_device_serial: str = None,
         ios_backup_path: str = None,
-        # BitLocker 복호화된 볼륨
+        # Phase 3.1: Linux/macOS options
+        linux_mount_path: str = None,
+        macos_mount_path: str = None,
+        # BitLocker decrypted volume
         bitlocker_decryptor=None,
+        # iOS encrypted backup password
+        ios_backup_password: str = None,
+        # Include deleted files
+        include_deleted: bool = True,
+        # Application config (for security settings)
+        config: dict = None,
     ):
         super().__init__()
         self.server_url = server_url
@@ -1707,33 +2394,126 @@ class CollectionWorker(QThread):
         self.collection_token = collection_token
         self.case_id = case_id
         self.artifacts = artifacts
-        self.consent_record = consent_record  # P0 법적 필수
+        self.consent_record = consent_record  # P0 legal requirement
         self._cancelled = False
+        self.config = config or {}
 
-        # 선택된 디바이스 목록
+        # Selected devices list
         self.selected_devices = selected_devices or []
 
-        # Phase 2.1: 모바일 옵션
+        # Phase 2.1: Mobile options
         self.android_device_serial = android_device_serial
         self.ios_backup_path = ios_backup_path
 
-        # BitLocker 복호화된 볼륨
+        # Phase 3.1: Linux/macOS options
+        self.linux_mount_path = linux_mount_path
+        self.macos_mount_path = macos_mount_path
+
+        # BitLocker decrypted volume
         self.bitlocker_decryptor = bitlocker_decryptor
 
-        # P2-1: 시간 추적
+        # iOS encrypted backup password
+        self.ios_backup_password = ios_backup_password
+
+        # Include deleted files
+        self.include_deleted = include_deleted
+
+        # [2026-02-24] iOS USB password callback: threading.Event for GUI ↔ worker sync
+        self._pw_event = None
+        self._pw_response = None
+
+        # [2026-02-25] Screen scraping unlock callback: threading.Event for GUI ↔ worker sync
+        self._unlock_event = None
+        self._unlock_response = None  # True = retry, False/None = skip
+
+        # Time tracking
         self._start_time = None
         self._stage_start_time = None
         self._processed_bytes = 0
         self._total_bytes_estimate = 0
 
+        # [2026-02-22] Heartbeat thread to keep collection session alive
+        self._heartbeat_stop_event = None
+        self._heartbeat_thread = None
+
+    def _start_heartbeat(self):
+        """
+        [2026-02-22] Start heartbeat thread to keep collection session alive.
+
+        Periodically calls validate-session endpoint during long operations
+        (iOS backup creation, PBKDF2, extraction) to prevent Redis TTL expiry.
+        """
+        import threading
+
+        self._heartbeat_stop_event = threading.Event()
+
+        def heartbeat_loop():
+            import logging as _log
+            logger = _log.getLogger(__name__)
+            while not self._heartbeat_stop_event.wait(timeout=300):  # Every 5 minutes
+                if self._cancelled:
+                    break
+                try:
+                    resp = requests.post(
+                        f"{self.server_url}/api/v1/collector/validate-session",
+                        json={
+                            'session_id': self.session_id,
+                            'collection_token': self.collection_token,
+                        },
+                        timeout=10,
+                    )
+                    if resp.ok:
+                        data = resp.json()
+                        if not data.get('valid', True):
+                            logger.warning(f"[Heartbeat] Session invalidated: {data.get('reason', 'unknown')}")
+                    else:
+                        logger.debug(f"[Heartbeat] Server returned {resp.status_code}")
+                except Exception as e:
+                    logger.debug(f"[Heartbeat] Failed: {e}")
+
+        self._heartbeat_thread = threading.Thread(
+            target=heartbeat_loop, daemon=True, name="collection-heartbeat"
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self):
+        """Stop heartbeat thread."""
+        if self._heartbeat_stop_event:
+            self._heartbeat_stop_event.set()
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=5)
+        self._heartbeat_stop_event = None
+        self._heartbeat_thread = None
+
+    def _request_password(self, error_msg=None):
+        """
+        Password callback: called from collector thread → emits signal → blocks until GUI responds.
+
+        Returns password string or None if cancelled (also sets _cancelled to stop collection).
+        """
+        import threading as _thr
+        self._pw_response = None
+        self._pw_event = _thr.Event()
+        self.password_requested.emit(error_msg or "")
+        self._pw_event.wait()  # Block until GUI sets response
+        if self._pw_response is None:
+            # User cancelled or doesn't know → stop entire collection
+            self._cancelled = True
+        return self._pw_response
+
     def cancel(self):
         """Cancel the collection"""
         self._cancelled = True
-        # 서버에 abort 신호 전송 (활성 수집 플래그 정리)
+        self._stop_heartbeat()
+        # Unblock password callback if waiting
+        if self._pw_event:
+            self._pw_response = None
+            self._pw_event.set()
+        # Send abort signal to server (clear active collection flag)
         self._abort_session()
 
     def _abort_session(self):
-        """서버에 세션 중단 알림 (활성 수집 플래그 정리)"""
+        """Notify server of session abort (clear active collection flag)"""
         if not self.session_id or not self.collection_token:
             return
         try:
@@ -1745,13 +2525,13 @@ class CollectionWorker(QThread):
                     'Content-Type': 'application/json',
                 },
                 json={'reason': 'collector_closed'},
-                timeout=5  # 빠른 타임아웃 (종료 시 기다리지 않기 위해)
+                timeout=5  # Quick timeout (don't wait during shutdown)
             )
         except Exception:
-            pass  # 실패해도 무시 (종료 중이므로)
+            pass  # Ignore failure (shutting down)
 
     def _calculate_overall_progress(self, stage: int, stage_progress: int) -> int:
-        """전체 진행률 계산"""
+        """Calculate overall progress"""
         completed_weight = sum(
             self.STAGE_WEIGHTS[s] for s in range(1, stage)
         )
@@ -1759,7 +2539,7 @@ class CollectionWorker(QThread):
         return int(completed_weight + current_weight)
 
     def _estimate_remaining_time(self, stage: int, stage_progress: int, items_done: int, total_items: int) -> str:
-        """예상 남은 시간 계산"""
+        """Estimate remaining time"""
         import time
 
         if not self._start_time or stage_progress <= 0:
@@ -1771,73 +2551,75 @@ class CollectionWorker(QThread):
         if overall_progress <= 0:
             return ""
 
-        # 예상 총 시간 계산
+        # Calculate estimated total time
         estimated_total = elapsed / (overall_progress / 100)
         remaining = max(0, estimated_total - elapsed)
 
         if remaining < 60:
-            return f"{int(remaining)}초"
+            return f"{int(remaining)}s"
         elif remaining < 3600:
             minutes = int(remaining / 60)
             seconds = int(remaining % 60)
-            return f"{minutes}분 {seconds}초"
+            return f"{minutes}m {seconds}s"
         else:
             hours = int(remaining / 3600)
             minutes = int((remaining % 3600) / 60)
-            return f"{hours}시간 {minutes}분"
+            return f"{hours}h {minutes}m"
 
     def _create_collector_for_device(self, device, output_dir: str):
         """
-        디바이스 유형에 맞는 수집기 생성
+        Create appropriate collector for device type
 
         Args:
-            device: UnifiedDeviceInfo 객체
-            output_dir: 출력 디렉토리
+            device: UnifiedDeviceInfo object
+            output_dir: Output directory
 
         Returns:
-            적절한 수집기 인스턴스 또는 None
+            Appropriate collector instance or None
         """
         try:
             device_type = device.device_type
 
-            # E01/RAW 이미지
+            # E01/RAW image
             if device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE):
                 file_path = device.metadata.get('file_path')
                 if not file_path:
-                    self.log_message.emit(f"⚠️ 이미지 파일 경로가 없습니다: {device.display_name}", True)
+                    self.log_message.emit(f"Image file path missing: {device.display_name}", True)
                     return None
 
                 collector = E01ArtifactCollector(file_path, output_dir)
 
-                # 첫 번째 NTFS 파티션 자동 선택
+                # Auto-select first NTFS partition
                 partitions = collector.list_partitions()
                 selected = False
                 for p in partitions:
                     if getattr(p, 'filesystem', '').upper() == 'NTFS':
                         if collector.select_partition(p.index):
-                            self.log_message.emit(f"✓ 파티션 선택: {p.filesystem} ({getattr(p, 'size_display', '')})", False)
+                            self.log_message.emit(f"Partition selected: {p.filesystem} ({getattr(p, 'size_display', '')})", False)
                             selected = True
                             break
 
                 if not selected and partitions:
-                    # NTFS가 없으면 첫 번째 파티션 선택
+                    # Select first partition if no NTFS found
                     collector.select_partition(partitions[0].index)
-                    self.log_message.emit(f"✓ 첫 번째 파티션 선택: {getattr(partitions[0], 'filesystem', 'Unknown')}", False)
+                    self.log_message.emit(f"First partition selected: {getattr(partitions[0], 'filesystem', 'Unknown')}", False)
 
                 return collector
 
-            # Windows 물리 디스크
+            # Windows physical disk
             elif device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
-                # LocalMFTCollector 사용 (BitLocker 자동 감지 + 디렉토리 폴백)
+                # Use LocalMFTCollector (BitLocker auto-detection + directory fallback)
                 if BASE_MFT_AVAILABLE:
-                    volume = device.metadata.get('volume', 'C')
+                    # [2026-02-15] Get volume letter from metadata, fallback to 'C' if None
+                    volume = device.metadata.get('volume') or 'C'
+                    self.log_message.emit(f"Using volume: {volume}:", False)
                     collector = LocalMFTCollector(output_dir, volume=volume)
                     self.log_message.emit(
-                        f"수집 모드: {collector.get_collection_mode()}", False
+                        f"Collection mode: {collector.get_collection_mode()}", False
                     )
                     return collector
                 else:
-                    # BaseMFTCollector 없으면 기존 ArtifactCollector 사용
+                    # Use legacy ArtifactCollector if BaseMFTCollector unavailable
                     decrypted_reader = None
                     if self.bitlocker_decryptor:
                         try:
@@ -1846,70 +2628,165 @@ class CollectionWorker(QThread):
                             pass
                     return ArtifactCollector(output_dir, decrypted_reader=decrypted_reader)
 
-            # Android 디바이스
+            # Android device
             elif device_type == DeviceType.ANDROID_DEVICE:
                 from collectors.android_collector import AndroidCollector
                 serial = device.metadata.get('serial')
                 collector = AndroidCollector(output_dir)
+                # Pass server credentials for screen scraping API calls
+                collector._server_url = self.server_url
+                collector._collection_token = self.collection_token
                 if serial:
                     collector.connect(serial)
                 return collector
 
-            # iOS 백업
+            # iOS backup
             elif device_type == DeviceType.IOS_BACKUP:
                 from collectors.ios_collector import iOSCollector
                 backup_path = device.metadata.get('path')
-                collector = iOSCollector(output_dir)
+                is_encrypted = device.metadata.get('encrypted', False)
+
+                encrypted_backup_obj = None
+                if is_encrypted and self.ios_backup_password and backup_path:
+                    # Create EncryptedBackup in collection thread (single PBKDF2)
+                    # This is the ONLY place where the password is consumed.
+                    from collectors.ios_backup_decryptor import create_encrypted_backup
+                    self.log_message.emit("Verifying iOS backup password (this may take 1-2 minutes)...", False)
+                    encrypted_backup_obj, error_msg = create_encrypted_backup(backup_path, self.ios_backup_password)
+                    if not encrypted_backup_obj:
+                        self.log_message.emit(f"iOS backup password verification failed: {error_msg}", True)
+                        return None
+
+                    self.log_message.emit("iOS backup password verified successfully.", False)
+
+                collector = iOSCollector(output_dir, encrypted_backup=encrypted_backup_obj)
                 if backup_path:
                     collector.select_backup(backup_path)
                 return collector
 
+            # [2026-02-03] iOS USB direct connection device
+            elif device_type == DeviceType.IOS_DEVICE:
+                from collectors.ios_collector import iOSDeviceConnector, PYMOBILEDEVICE3_AVAILABLE
+                if not PYMOBILEDEVICE3_AVAILABLE:
+                    self.log_message.emit("pymobiledevice3 is not installed", True)
+                    return None
+                udid = device.metadata.get('udid') or device.metadata.get('serial')
+                if not udid:
+                    self.log_message.emit("iOS device UDID not found", True)
+                    return None
+                collector = iOSDeviceConnector(output_dir, udid=udid)
+                # Device connection (required)
+                try:
+                    if not collector.connect(udid):
+                        self.log_message.emit("iOS device connection failed", True)
+                        return None
+                except Exception as e:
+                    self.log_message.emit(f"iOS connection error: {e}", True)
+                    return None
+
+                # [2026-02-24] Set password callback for encrypted device dialog
+                collector.set_password_callback(self._request_password)
+
+                udid_short = udid[:8] if len(udid) > 8 else udid
+                self.log_message.emit(f"iOS USB direct connection (UDID: {udid_short}...)", False)
+                return collector
+
             else:
-                self.log_message.emit(f"⚠️ 지원하지 않는 디바이스 유형: {device_type.name}", True)
+                self.log_message.emit(f"Unsupported device type: {device_type.name}", True)
                 return None
 
         except Exception as e:
-            self.log_message.emit(f"⚠️ 수집기 생성 실패: {e}", True)
+            self.log_message.emit(f"Collector creation failed: {e}", True)
             import logging
             logging.debug(f"Collector creation failed for {device.display_name}: {e}")
             return None
 
     def run(self):
-        """Run collection in background (P2-1: 단계별 진행률)"""
+        """Run collection in background (stage-based progress)"""
         import time
         import os
+
+        # [2026-02-16] File logging for collector diagnostics
+        import logging
+
+        # [2026-02-22] Filter to prevent credential VALUES from reaching log files.
+        # Only blocks messages containing actual credential patterns/values,
+        # NOT operational messages about encryption/decryption processes.
+        class _SensitiveFilter(logging.Filter):
+            _BLOCK_PATTERNS = (
+                'f0r_',              # Forensic password prefix value
+                'passphrase=',       # Named param with credential value
+                'change_password',   # API call that handles raw passwords
+                'old=""', "old=''",  # change_password param
+                'new=""', "new=''",  # change_password param
+                'bearer ',           # JWT token
+                'x-api-key',         # API key header
+                'encryption_key',    # Encryption key
+                'recovery_key',      # BitLocker recovery key
+            )
+            def filter(self, record):
+                msg = record.getMessage().lower()
+                return not any(p in msg for p in self._BLOCK_PATTERNS)
+
+        if self.config.get('dev_mode', False):
+            # Dev: DEBUG log in TEMP directory
+            _collector_log_path = os.path.join(os.environ.get('TEMP', '/tmp'), 'collector_debug.log')
+            _log_level = logging.DEBUG
+        else:
+            # Prod: WARNING+ log in user home directory
+            import sys as _sys
+            _log_dir = os.path.join(os.path.expanduser("~"), ".forensic_collector")
+            os.makedirs(_log_dir, exist_ok=True)
+            if _sys.platform != 'win32':
+                os.chmod(_log_dir, 0o700)
+            _collector_log_path = os.path.join(_log_dir, 'collector.log')
+            _log_level = logging.WARNING
+
+        _fh = logging.FileHandler(_collector_log_path, mode='w', encoding='utf-8')
+        _fh.setLevel(_log_level)
+        _fh.setFormatter(logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s'))
+        _fh.addFilter(_SensitiveFilter())
+        logging.getLogger().addHandler(_fh)
+        logging.getLogger().setLevel(_log_level)
+        logging.getLogger().info(f"[CollectorGUI] Logging to {_collector_log_path}")
 
         try:
             self._start_time = time.time()
 
+            # [2026-02-22] Start heartbeat to keep session alive during long operations
+            self._start_heartbeat()
+
             import tempfile
+            import sys as _sys
             output_dir = tempfile.mkdtemp(prefix="forensic_")
+            if _sys.platform != 'win32':
+                os.chmod(output_dir, 0o700)  # Unix: owner-only access
 
             encryptor = FileEncryptor()
 
             # ========================================
-            # STAGE 1: 수집 (30%)
+            # STAGE 1: Collection (30%)
             # ========================================
-            self.log_message.emit("📂 아티팩트 수집을 시작합니다...", False)
+            self.log_message.emit("Starting artifact collection...", False)
             collected_raw_files = []  # (file_path, artifact_type, metadata)
 
-            # 선택된 디바이스가 있으면 디바이스별로 수집
+            # If devices are selected, collect per device
             if self.selected_devices:
                 total_items = len(self.selected_devices) * len(self.artifacts)
                 item_index = 0
 
                 for device in self.selected_devices:
                     if self._cancelled:
-                        self.finished.emit(False, "수집이 취소되었습니다")
+                        self.finished.emit(False, "Collection cancelled")
                         return
 
                     device_name = device.display_name
-                    self.log_message.emit(f"📱 디바이스: {device_name}", False)
+                    self.log_message.emit(f"Device: {device_name}", False)
 
-                    # 디바이스 유형에 따라 적절한 수집기 생성
+                    # Create appropriate collector based on device type
                     collector = self._create_collector_for_device(device, output_dir)
                     if not collector:
-                        self.log_message.emit(f"⚠️ {device_name}: 수집기 생성 실패", True)
+                        self.log_message.emit(f"{device_name}: Collector creation failed", True)
                         continue
 
                     for artifact_type in self.artifacts:
@@ -1923,72 +2800,171 @@ class CollectionWorker(QThread):
 
                         self.progress_updated.emit(
                             1, stage_progress, overall_progress,
-                            f"[{device_name}] 수집 중: {artifact_type}...",
+                            f"[{device_name}] Collecting: {artifact_type}...",
                             remaining
                         )
 
                         try:
-                            # 청크 스트리밍: 100개씩 처리하여 GUI 멈춤 방지
+                            # Chunk streaming: process 100 at a time to prevent GUI freeze
                             CHUNK_SIZE = 100
                             file_count = 0
+                            error_count = 0
 
-                            for file_path, metadata in collector.collect(artifact_type):
+                            # [2026-02-08] iOS 백업 진행률 콜백 추가
+                            def ios_progress_callback(msg: str):
+                                # Progress percentage → update progress bar only (no log spam)
+                                if "progress:" in msg.lower():
+                                    try:
+                                        pct = float(msg.split(":")[-1].strip().rstrip("%"))
+                                        self.progress_updated.emit(
+                                            1, int(pct), self._calculate_overall_progress(1, int(pct)),
+                                            f"[{device_name}] {artifact_type}: {pct:.1f}%",
+                                            ""
+                                        )
+                                    except:
+                                        pass
+                                else:
+                                    # Non-progress messages (e.g. "Creating iOS backup") → log + status dialog
+                                    self.log_message.emit(f"[{device_name}] {msg}", False)
+                                    self.ios_status_update.emit(msg)
+
+                            # Pass progress callback for iOS artifacts
+                            _include_deleted = self.include_deleted
+                            if hasattr(collector, 'collect') and 'ios' in str(type(collector)).lower():
+                                collect_iter = collector.collect(artifact_type, progress_callback=ios_progress_callback)
+                            else:
+                                collect_iter = collector.collect(artifact_type, include_deleted=_include_deleted)
+
+                            for file_path, metadata in collect_iter:
                                 if self._cancelled:
                                     break
-                                # 디바이스 정보를 메타데이터에 추가
+
+                                # [2026-02-06] FIX: 에러 응답 필터링 (빈 경로 또는 status=error)
+                                if not file_path or metadata.get('status') in ('error', 'not_found', 'not_implemented'):
+                                    error_msg = metadata.get('error', metadata.get('message', 'Unknown error'))
+                                    status = metadata.get('status', 'error')
+
+                                    # [2026-02-25] Screen scraping unlock dialog:
+                                    # Show modal dialog and wait for user to unlock device, then retry
+                                    if (artifact_type == 'mobile_android_screen_scrape'
+                                            and 'UNLOCKED' in error_msg):
+                                        import threading
+                                        self._unlock_event = threading.Event()
+                                        self._unlock_response = None
+                                        self.unlock_requested.emit(error_msg)
+                                        self._unlock_event.wait()  # Block worker until GUI responds
+
+                                        if self._unlock_response:
+                                            # User clicked retry — re-run screen_scrape
+                                            self.log_message.emit(
+                                                f"[{device_name}] Retrying screen scraping...", False
+                                            )
+                                            try:
+                                                retry_iter = collector.collect(
+                                                    artifact_type, include_deleted=_include_deleted
+                                                )
+                                                for r_path, r_meta in retry_iter:
+                                                    if self._cancelled:
+                                                        break
+                                                    if not r_path or r_meta.get('status') in ('error', 'not_found'):
+                                                        r_err = r_meta.get('error', 'Unknown')
+                                                        self.log_message.emit(
+                                                            f"[{device_name}] {artifact_type}: {r_err}", True
+                                                        )
+                                                        error_count += 1
+                                                        continue
+                                                    r_meta['device_id'] = device.device_id
+                                                    r_meta['device_name'] = device_name
+                                                    r_meta['device_type'] = device.device_type.name
+                                                    collected_raw_files.append((r_path, artifact_type, r_meta))
+                                                    file_count += 1
+                                            except Exception as retry_e:
+                                                self.log_message.emit(
+                                                    f"[{device_name}] Screen scraping retry failed: {retry_e}", True
+                                                )
+                                        else:
+                                            self.log_message.emit(
+                                                f"[{device_name}] Screen scraping skipped by user", False
+                                            )
+                                        continue
+
+                                    # not_found = file absent from backup (normal for uninstalled apps)
+                                    # Unknown artifact type = other platform artifact (silent skip)
+                                    if status == 'not_found':
+                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: Not in backup", False)
+                                    elif status == 'skipped':
+                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: {error_msg}", False)
+                                    elif 'Root access required' in error_msg or 'not rooted' in error_msg:
+                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: Requires root", False)
+                                    elif error_msg not in ['Unknown artifact type: ' + artifact_type]:
+                                        self.log_message.emit(f"[{device_name}] {artifact_type}: {error_msg}", True)
+                                    error_count += 1
+                                    continue
+
+                                # Add device info to metadata
                                 metadata['device_id'] = device.device_id
                                 metadata['device_name'] = device_name
                                 metadata['device_type'] = device.device_type.name
                                 collected_raw_files.append((file_path, artifact_type, metadata))
-                                self.file_collected.emit(Path(file_path).name, True)
                                 file_count += 1
 
-                                # 100개마다 진행률 업데이트 + GUI 이벤트 처리
-                                if file_count % CHUNK_SIZE == 0:
-                                    self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count}개 수집 중...", False)
+                                # Rate-limit UI signals to prevent progressive slowdown
+                                # (QListWidget.addItem + scrollToBottom with thousands of items)
+                                if file_count <= 200 or file_count % CHUNK_SIZE == 0:
+                                    self.file_collected.emit(Path(file_path).name, True)
 
-                            if file_count == 0:
-                                self.log_message.emit(f"⚠️ [{device_name}] {artifact_type}: 파일을 찾을 수 없습니다", True)
-                            else:
-                                self.log_message.emit(f"✓ [{device_name}] {artifact_type}: {file_count}개 파일 수집됨", False)
+                                # Update progress every 100 items + process GUI events
+                                if file_count % CHUNK_SIZE == 0:
+                                    self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count} files collecting...", False)
+
+                            if file_count == 0 and error_count == 0:
+                                self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: No files found", False)
+                            elif file_count > 0:
+                                self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count} files collected", False)
 
                         except Exception as e:
                             import logging
-                            self.log_message.emit(f"수집 실패 [{device_name}] ({artifact_type}): {e}", True)
-                            logging.debug(f"Collection error for {artifact_type} on {device_name}: {e}")
+                            err_str = str(e)
+                            if 'Unknown artifact type' in err_str:
+                                # Cross-platform artifact sent to wrong collector (e.g. Windows type → Android)
+                                # Silently skip — not an error
+                                logging.debug(f"Skipped cross-platform artifact: {artifact_type} on {device_name}")
+                            else:
+                                self.log_message.emit(f"Collection failed [{device_name}] ({artifact_type}): {e}", True)
+                                logging.debug(f"Collection error for {artifact_type} on {device_name}: {e}")
 
-                    # 수집기 정리
+                    # Cleanup collector
                     if hasattr(collector, 'close'):
                         collector.close()
 
             else:
-                # 기존 방식: 선택된 디바이스가 없으면 로컬 시스템에서 수집
-                # LocalMFTCollector 사용 (BitLocker 자동 감지 + 디렉토리 폴백)
+                # Legacy mode: if no devices selected, collect from local system
+                # Use LocalMFTCollector (BitLocker auto-detection + directory fallback)
                 if BASE_MFT_AVAILABLE:
                     collector = LocalMFTCollector(output_dir, volume='C')
                     self.log_message.emit(
-                        f"수집 모드: {collector.get_collection_mode()}", False
+                        f"Collection mode: {collector.get_collection_mode()}", False
                     )
                     if collector._bitlocker_detected:
                         self.log_message.emit(
-                            "BitLocker 암호화 감지됨 - 디렉토리 폴백 사용", False
+                            "BitLocker encryption detected - using directory fallback", False
                         )
                 else:
-                    # BaseMFTCollector 없으면 기존 ArtifactCollector 사용
+                    # Use legacy ArtifactCollector if BaseMFTCollector unavailable
                     decrypted_reader = None
                     if self.bitlocker_decryptor:
                         try:
                             decrypted_reader = self.bitlocker_decryptor.get_decrypted_reader()
-                            self.log_message.emit("BitLocker 복호화된 볼륨을 사용합니다.", False)
+                            self.log_message.emit("Using BitLocker decrypted volume.", False)
                         except Exception as e:
-                            self.log_message.emit(f"BitLocker 볼륨 접근 실패: {e}", True)
+                            self.log_message.emit(f"BitLocker volume access failed: {e}", True)
                     collector = ArtifactCollector(output_dir, decrypted_reader=decrypted_reader)
 
                 total_artifacts = len(self.artifacts)
 
                 for i, artifact_type in enumerate(self.artifacts):
                     if self._cancelled:
-                        self.finished.emit(False, "수집이 취소되었습니다")
+                        self.finished.emit(False, "Collection cancelled")
                         return
 
                     stage_progress = int(((i + 1) / total_artifacts) * 100)
@@ -1997,13 +2973,13 @@ class CollectionWorker(QThread):
 
                     self.progress_updated.emit(
                         1, stage_progress, overall_progress,
-                        f"수집 중: {artifact_type}...",
+                        f"Collecting: {artifact_type}...",
                         remaining
                     )
-                    self.log_message.emit(f"수집 중: {artifact_type}", False)
+                    self.log_message.emit(f"Collecting: {artifact_type}", False)
 
                     try:
-                        # Phase 2.1: 카테고리별 kwargs 전달
+                        # Phase 2.1: Pass kwargs per category
                         collect_kwargs = {}
                         artifact_info = ARTIFACT_TYPES.get(artifact_type, {})
                         category = artifact_info.get('category', 'windows')
@@ -2012,46 +2988,54 @@ class CollectionWorker(QThread):
                             collect_kwargs['device_serial'] = self.android_device_serial
                         elif category == 'ios' and self.ios_backup_path:
                             collect_kwargs['backup_path'] = self.ios_backup_path
+                        elif category == 'linux' and self.linux_mount_path:
+                            collect_kwargs['target_root'] = self.linux_mount_path
+                        elif category == 'macos' and self.macos_mount_path:
+                            collect_kwargs['target_root'] = self.macos_mount_path
 
-                        # 청크 스트리밍: 100개씩 처리하여 GUI 멈춤 방지
+                        # Chunk streaming: process 100 at a time to prevent GUI freeze
                         CHUNK_SIZE = 100
                         file_count = 0
 
+                        collect_kwargs['include_deleted'] = self.include_deleted
                         for file_path, metadata in collector.collect(artifact_type, **collect_kwargs):
                             if self._cancelled:
                                 break
                             collected_raw_files.append((file_path, artifact_type, metadata))
-                            self.file_collected.emit(Path(file_path).name, True)
                             file_count += 1
 
-                            # 100개마다 진행률 업데이트 + GUI 이벤트 처리
+                            # Rate-limit UI signals to prevent progressive slowdown
+                            if file_count <= 200 or file_count % CHUNK_SIZE == 0:
+                                self.file_collected.emit(Path(file_path).name, True)
+
+                            # Update progress every 100 items + process GUI events
                             if file_count % CHUNK_SIZE == 0:
-                                self.log_message.emit(f"{artifact_type}: {file_count}개 수집 중...", False)
+                                self.log_message.emit(f"{artifact_type}: {file_count} files collecting...", False)
 
                         if file_count == 0:
-                            self.log_message.emit(f"⚠️ {artifact_type}: 파일을 찾을 수 없습니다", True)
+                            self.log_message.emit(f"[SKIP] {artifact_type}: No files found", False)
                         else:
-                            self.log_message.emit(f"✓ {artifact_type}: {file_count}개 파일 수집됨", False)
+                            self.log_message.emit(f"✓ {artifact_type}: {file_count} files collected", False)
 
                     except Exception as e:
                         import logging
-                        self.log_message.emit(f"수집 실패 ({artifact_type}): {e}", True)
+                        self.log_message.emit(f"Collection failed ({artifact_type}): {e}", True)
                         logging.debug(f"Collection error for {artifact_type}: {e}")
 
             if self._cancelled:
-                self.finished.emit(False, "수집이 취소되었습니다")
+                self.finished.emit(False, "Collection cancelled")
                 return
 
             # ========================================
-            # STAGE 2: 암호화 (30%)
+            # STAGE 2: Encryption (30%)
             # ========================================
-            self.log_message.emit(f"🔐 {len(collected_raw_files)}개 파일 암호화 중...", False)
+            self.log_message.emit(f"🔐 Encrypting {len(collected_raw_files)} files...", False)
             encrypted_files = []  # (enc_path, artifact_type, metadata)
             total_files = len(collected_raw_files)
 
             for j, (file_path, artifact_type, metadata) in enumerate(collected_raw_files):
                 if self._cancelled:
-                    self.finished.emit(False, "암호화가 취소되었습니다")
+                    self.finished.emit(False, "Encryption cancelled")
                     return
 
                 filename = Path(file_path).name
@@ -2061,7 +3045,7 @@ class CollectionWorker(QThread):
 
                 self.progress_updated.emit(
                     2, stage_progress, overall_progress,
-                    f"암호화 중: {filename}",
+                    f"Encrypting: {filename}",
                     remaining
                 )
 
@@ -2086,16 +3070,16 @@ class CollectionWorker(QThread):
                     ))
 
                 except Exception as e:
-                    self.log_message.emit(f"암호화 실패 ({filename}): {e}", True)
+                    self.log_message.emit(f"Encryption failed ({filename}): {e}", True)
 
             if self._cancelled:
-                self.finished.emit(False, "암호화가 취소되었습니다")
+                self.finished.emit(False, "Encryption cancelled")
                 return
 
             # ========================================
-            # STAGE 3: 업로드 (40%)
+            # STAGE 3: Upload (40%)
             # ========================================
-            self.log_message.emit(f"☁️ {len(encrypted_files)}개 파일 업로드 중...", False)
+            self.log_message.emit(f"☁️ Uploading {len(encrypted_files)} files...", False)
 
             uploader = SyncUploader(
                 server_url=self.server_url,
@@ -2103,7 +3087,8 @@ class CollectionWorker(QThread):
                 session_id=self.session_id,
                 collection_token=self.collection_token,
                 case_id=self.case_id,
-                consent_record=self.consent_record,  # P0 법적 필수
+                consent_record=self.consent_record,  # P0 legal requirement
+                config=self.config,
             )
 
             success_count = 0
@@ -2120,38 +3105,43 @@ class CollectionWorker(QThread):
 
                 self.progress_updated.emit(
                     3, stage_progress, overall_progress,
-                    f"업로드 중: {filename}",
+                    f"Uploading: {filename}",
                     remaining
                 )
 
                 result = uploader.upload_file(file_path, artifact_type, metadata)
                 if result.success:
                     success_count += 1
-                    self.log_message.emit(f"✓ 업로드 성공: {filename}", False)
+                    self.log_message.emit(f"✓ Upload successful: {filename}", False)
                 else:
-                    # [취소 확인] 서버에서 취소 응답을 받았는지 확인
+                    # [Cancel check] Check if server returned cancel response
                     if result.error and "CANCELLED" in result.error:
-                        self.log_message.emit("🛑 서버에서 수집이 취소되었습니다. 업로드를 중단합니다.", True)
+                        self.log_message.emit("🛑 Collection cancelled by server. Stopping upload.", True)
                         self._cancelled = True
                         break
-                    # [Phase 4] 업로드 실패 상세 로깅
-                    self.log_message.emit(f"✗ 업로드 실패 ({artifact_type}): {result.error}", True)
-                    # 보안: 디버그 정보는 logging 모듈로 레벨 제어
+                    # [2026-01-29] Cleanup in progress check - stop upload
+                    if result.error and "CLEANUP_IN_PROGRESS" in result.error:
+                        self.log_message.emit("⏳ Previous data cleanup in progress. Please try again after cleanup completes.", True)
+                        self._cancelled = True
+                        break
+                    # [Phase 4] Upload failure detailed logging
+                    self.log_message.emit(f"✗ Upload failed ({artifact_type}): {result.error}", True)
+                    # Security: Debug info controlled by logging module
                     import logging
                     logging.debug(f"Upload failed: artifact={artifact_type}, error={result.error}")
 
-            # 완료
+            # Complete
             elapsed = time.time() - self._start_time
-            elapsed_str = f"{int(elapsed)}초" if elapsed < 60 else f"{int(elapsed / 60)}분 {int(elapsed % 60)}초"
+            elapsed_str = f"{int(elapsed)}s" if elapsed < 60 else f"{int(elapsed / 60)}m {int(elapsed % 60)}s"
 
-            # [취소 확인] 취소된 경우 완료 신호를 보내지 않음
+            # [Cancel check] Don't send completion signal if cancelled
             if self._cancelled:
-                self.log_message.emit(f"🛑 수집 취소됨: {success_count}/{total_upload}개 파일 업로드 후 중단 (소요시간: {elapsed_str})", True)
-                self.progress_updated.emit(3, 0, 0, "취소됨", "")
-                self.finished.emit(False, f"수집 취소됨: {success_count}/{total_upload}개 파일 업로드 후 중단")
+                self.log_message.emit(f"🛑 Collection cancelled: {success_count}/{total_upload} files uploaded before stop (elapsed: {elapsed_str})", True)
+                self.progress_updated.emit(3, 0, 0, "Cancelled", "")
+                self.finished.emit(False, f"Collection cancelled: {success_count}/{total_upload} files uploaded before stop")
                 return
 
-            # === 업로드 완료 신호 전송 (파이프라인 상태 전환 트리거) ===
+            # === Send upload completion signal (pipeline state transition trigger) ===
             if success_count > 0:
                 try:
                     complete_url = f"{self.server_url}/api/v1/collector/collection/end/{self.session_id}"
@@ -2165,35 +3155,41 @@ class CollectionWorker(QThread):
                         timeout=30
                     )
                     if complete_response.ok:
-                        self.log_message.emit("✓ 수집 세션 완료 신호 전송 (임베딩 시작)", False)
+                        self.log_message.emit("✓ Collection session completion signal sent (embedding started)", False)
                     else:
-                        self.log_message.emit(f"⚠ 세션 완료 신호 실패: {complete_response.status_code}", True)
+                        self.log_message.emit(f"⚠ Session completion signal failed: {complete_response.status_code}", True)
                 except Exception as e:
-                    self.log_message.emit(f"⚠ 세션 완료 신호 오류: {e}", True)
+                    self.log_message.emit(f"⚠ Session completion signal error: {e}", True)
 
-            self.progress_updated.emit(3, 100, 100, "완료!", "")
+            self.progress_updated.emit(3, 100, 100, "Complete!", "")
             self.finished.emit(
                 True,
-                f"수집 완료: {success_count}/{total_upload}개 파일 업로드 (소요시간: {elapsed_str})"
+                f"Collection complete: {success_count}/{total_upload} files uploaded (elapsed: {elapsed_str})"
             )
 
         except Exception as e:
-            self.finished.emit(False, f"오류 발생: {str(e)}")
+            self.finished.emit(False, f"Error occurred: {str(e)}")
 
         finally:
-            # 임시 디렉토리 정리 (수집된 파일들 삭제)
+            # [2026-02-22] Stop heartbeat thread
+            self._stop_heartbeat()
+
+            # Cleanup temporary directory (delete collected files)
             if output_dir and os.path.exists(output_dir):
                 try:
                     import shutil
                     shutil.rmtree(output_dir)
-                    self.log_message.emit("임시 파일 정리 완료", False)
+                    self.log_message.emit("Temporary files cleaned up", False)
                 except Exception as e:
-                    self.log_message.emit(f"임시 파일 정리 중 오류: {e}", True)
+                    self.log_message.emit(f"Error cleaning up temporary files: {e}", True)
 
-            # BitLocker decryptor 리소스 정리
+            # Clear iOS backup passwords from memory
+            self.ios_backup_password = None
+
+            # BitLocker decryptor resource cleanup
             if self.bitlocker_decryptor:
                 try:
                     self.bitlocker_decryptor.close()
-                    self.log_message.emit("BitLocker 리소스 정리 완료", False)
+                    self.log_message.emit("BitLocker resources cleaned up", False)
                 except Exception as e:
-                    self.log_message.emit(f"BitLocker 정리 중 오류: {e}", True)
+                    self.log_message.emit(f"Error cleaning up BitLocker: {e}", True)

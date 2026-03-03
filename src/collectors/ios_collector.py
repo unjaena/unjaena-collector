@@ -124,6 +124,42 @@ def _sanitize_filename(filename: str) -> str:
     return sanitized
 
 
+def _get_hmac_key() -> bytes:
+    """
+    Load HMAC key for forensic backup password derivation.
+
+    Priority:
+        1. COLLECTOR_HMAC_KEY environment variable
+        2. config.json 'hmac_key' field (injected at build time)
+        3. Raise error if neither exists (key must not be hardcoded in source)
+    """
+    # Environment variable (highest priority)
+    env_key = os.environ.get('COLLECTOR_HMAC_KEY')
+    if env_key:
+        return env_key.encode()
+
+    # Config file (set during build)
+    for config_dir in [
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),  # src/
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),  # collector/
+    ]:
+        config_path = os.path.join(config_dir, 'config.json')
+        if os.path.exists(config_path):
+            try:
+                import json
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    cfg = json.load(f)
+                if cfg.get('hmac_key'):
+                    return cfg['hmac_key'].encode()
+            except Exception:
+                pass
+
+    raise RuntimeError(
+        "HMAC key not configured. "
+        "Set COLLECTOR_HMAC_KEY environment variable or add 'hmac_key' to config.json."
+    )
+
+
 def _derive_forensic_password(udid: str) -> str:
     """
     Derive a deterministic forensic backup password from device UDID.
@@ -131,9 +167,12 @@ def _derive_forensic_password(udid: str) -> str:
     Uses HMAC-SHA256 so the same UDID always produces the same password.
     This allows recovery after crash: re-derive the password to restore
     the device's encryption state.
+
+    The HMAC key is loaded from environment variable or config file,
+    never hardcoded in source code (open-source safe).
     """
     import hmac
-    key = b"ai-df-forensic-collector-v1"
+    key = _get_hmac_key()
     digest = hmac.new(key, udid.encode(), hashlib.sha256).hexdigest()
     return f"f0r_{digest[:20]}"
 
@@ -1726,12 +1765,16 @@ class iOSDeviceConnector:
         self._backup_path: Optional[Path] = None
         self._backup_collector: Optional['iOSCollector'] = None
 
-        # [2026-02-20] Encrypted backup state for forensic completeness
-        # NSFileProtectionComplete apps (KakaoBank, Baemin, etc.) require encrypted backup
-        self._encryption_was_off = False       # True if we enabled encryption
-        self._forensic_backup_password = None  # Auto-generated or user-provided password
+        # [2026-02-24] Encryption state — simplified to 4 variables
+        # _encryption_action: None=not yet decided, 'we_enabled'=we turned it ON, 'was_already_on'
+        self._encryption_action = None
+        self._forensic_backup_password = None  # Password for decryption (forensic or user-provided)
         self._encrypted_backup_obj = None      # iphone_backup_decrypt EncryptedBackup instance
-        self._existing_backup_password = None  # User-provided password for already-encrypted devices
+        self._backup_failed_reason = None      # Cached backup failure (skip retries)
+        self._password_callback = None         # GUI callback: callback(error_msg) -> password|None
+
+        # Timeout for all change_password() calls (seconds)
+        self._CHANGE_PASSWORD_TIMEOUT = 15
 
     @staticmethod
     def is_available() -> Dict[str, Any]:
@@ -1781,10 +1824,6 @@ class iOSDeviceConnector:
         try:
             self._lockdown = create_using_usbmux(serial=self.udid)
             self.device_info = self._get_device_info()
-
-            # [2026-02-21] Auto-recover from previous crash that left encryption ON
-            self._recover_encryption_state()
-
             return self.device_info is not None
         except Exception as e:
             _debug_print(f"[iOS] Connection error: {e}")
@@ -1810,75 +1849,58 @@ class iOSDeviceConnector:
             _debug_print(f"[iOS] Error getting device info: {e}")
             return None
 
-    def _recover_encryption_state(self):
+    def set_password_callback(self, callback):
         """
-        Auto-recover from previous crash that left forensic encryption ON.
+        Set password request callback for USB backup password dialog.
 
-        If the device has encryption ON and it matches our deterministic
-        forensic password (derived from UDID), disable it automatically.
-        This prevents the device being stuck with an unknown password
-        after a crash or force-quit.
+        callback(error_msg: str|None) -> str|None
+            Called from collector thread when user password is needed.
+            Returns password string, or None if cancelled.
         """
-        if not self._lockdown or not self.udid:
-            return
+        self._password_callback = callback
 
-        try:
-            svc = Mobilebackup2Service(lockdown=self._lockdown)
-            if not svc.will_encrypt:
-                return  # Encryption is OFF, nothing to recover
+    def _change_password_with_timeout(self, backup_dir: str, old_pw: str, new_pw: str) -> bool:
+        """
+        Run change_password() in a thread with timeout.
 
-            # Try our deterministic forensic password
-            forensic_pw = _derive_forensic_password(self.udid)
-            import tempfile
-            tmp = tempfile.mkdtemp(prefix='ios_recover_')
+        Returns True on success. On timeout, reconnects lockdown and returns False.
+        """
+        result_box = {'success': False, 'error': None}
 
+        def _do_change():
             try:
-                recover_svc = Mobilebackup2Service(lockdown=self._lockdown)
-                recover_svc.change_password(
-                    backup_directory=tmp,
-                    old=forensic_pw,
-                    new=""
+                svc = Mobilebackup2Service(lockdown=self._lockdown)
+                svc.change_password(
+                    backup_directory=backup_dir,
+                    old=old_pw,
+                    new=new_pw,
                 )
-                logger.info("[iOS] Recovered: disabled leftover forensic encryption from previous crash")
+                result_box['success'] = True
+            except Exception as e:
+                result_box['error'] = e
+
+        t = threading.Thread(target=_do_change, daemon=True)
+        t.start()
+        t.join(timeout=self._CHANGE_PASSWORD_TIMEOUT)
+
+        if t.is_alive():
+            logger.warning("[iOS] change_password() timed out — reconnecting lockdown")
+            try:
+                self._lockdown = create_using_usbmux(serial=self.udid)
             except Exception:
-                # Not our password — user-set encryption, leave it alone
                 pass
-            finally:
-                import shutil
-                shutil.rmtree(tmp, ignore_errors=True)
-
-        except Exception as e:
-            logger.debug(f"[iOS] Encryption recovery check skipped: {e}")
-
-    def set_existing_backup_password(self, password: str):
-        """
-        Set user-provided backup password for devices with existing encryption.
-
-        Called from GUI when the device already has backup encryption enabled
-        (will_encrypt=True). The password is used to decrypt the backup after creation.
-
-        Args:
-            password: User's existing iTunes/Finder backup password
-        """
-        self._existing_backup_password = password
-
-    def check_will_encrypt(self) -> bool:
-        """
-        Check if the device currently has backup encryption enabled.
-
-        Used by GUI to determine whether to show the password dialog
-        before starting collection.
-
-        Returns:
-            True if backup encryption is ON (user-set password exists)
-        """
-        if not PYMOBILEDEVICE3_AVAILABLE or not self._lockdown:
             return False
+
+        if result_box['success']:
+            return True
+
+        logger.info(f"[iOS] change_password() failed: {result_box['error']}")
+        # Reconnect lockdown after failed change_password (session may be stale)
         try:
-            svc = Mobilebackup2Service(lockdown=self._lockdown)
-            return svc.will_encrypt
+            self._lockdown = create_using_usbmux(serial=self.udid)
         except Exception:
-            return False
+            pass
+        return False
 
     def collect_device_info(
         self,
@@ -2113,7 +2135,14 @@ class iOSDeviceConnector:
         output_dir: Path,
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        """Create new iOS backup from device"""
+        """
+        Create new iOS backup from device.
+
+        Three scenarios:
+          A. will_encrypt=False → auto-enable forensic encryption → backup → close() restores
+          B. will_encrypt=True + forensic_pw matches → our previous encryption → backup
+          C. will_encrypt=True + forensic_pw fails → user password via callback → backup
+        """
         if not PYMOBILEDEVICE3_AVAILABLE:
             yield '', {
                 'artifact_type': 'mobile_ios_device_backup',
@@ -2129,63 +2158,69 @@ class iOSDeviceConnector:
         backup_dir.mkdir(exist_ok=True)
 
         try:
+            logger.info(f"[iOS] Creating Mobilebackup2Service (lockdown={type(self._lockdown).__name__})")
             backup_service = Mobilebackup2Service(lockdown=self._lockdown)
+            will_encrypt = backup_service.will_encrypt
+            logger.info(f"[iOS] Mobilebackup2Service created, will_encrypt={will_encrypt}")
 
-            # ============================================================
-            # [2026-02-20] Auto-enable backup encryption for forensic completeness
-            # NSFileProtectionComplete apps (KakaoBank, Baemin, Coupang, etc.)
-            # are excluded from unencrypted backups by iOS.
-            # ============================================================
-
-            # Deterministic password from UDID — recoverable even after crash
             forensic_pw = _derive_forensic_password(self.udid)
 
-            if not backup_service.will_encrypt:
+            # =============================================================
+            # Scenario A: Encryption OFF → enable with forensic password
+            # =============================================================
+            if not will_encrypt:
                 if progress_callback:
                     progress_callback("Enabling backup encryption for forensic completeness...")
 
-                try:
-                    backup_service.change_password(
-                        backup_directory=str(backup_dir),
-                        old="",
-                        new=forensic_pw
-                    )
+                if self._change_password_with_timeout(str(backup_dir), "", forensic_pw):
+                    self._encryption_action = 'we_enabled'
                     self._forensic_backup_password = forensic_pw
-                    self._encryption_was_off = True
                     logger.info("[iOS] Backup encryption enabled (was OFF)")
-                except Exception as enc_err:
-                    logger.warning(f"[iOS] Failed to enable encryption, falling back to unencrypted: {enc_err}")
+                else:
+                    # Timeout or failure — proceed unencrypted
+                    logger.warning("[iOS] Failed to enable encryption, proceeding unencrypted")
+                    self._encryption_action = None
                     self._forensic_backup_password = None
-                    self._encryption_was_off = False
-            elif backup_service.will_encrypt:
-                # Encryption is already ON — try our forensic password first
-                # (handles crash recovery: previous run enabled but didn't restore)
-                try:
-                    _test_svc = Mobilebackup2Service(lockdown=self._lockdown)
-                    _test_svc.change_password(
-                        backup_directory=str(backup_dir),
-                        old=forensic_pw,
-                        new=forensic_pw
-                    )
-                    # Success — this is our own forensic password (leftover from crash)
+
+            # =============================================================
+            # Scenario B/C: Encryption already ON
+            # =============================================================
+            else:
+                # Try forensic password first (crash recovery / our previous encryption)
+                if progress_callback:
+                    progress_callback("Verifying backup encryption password...")
+
+                if self._change_password_with_timeout(str(backup_dir), forensic_pw, forensic_pw):
+                    # Scenario B: our forensic password works
+                    self._encryption_action = 'was_already_on'
                     self._forensic_backup_password = forensic_pw
-                    self._encryption_was_off = True  # We should restore OFF when done
-                    logger.info("[iOS] Recovered from previous forensic encryption (crash recovery)")
-                except Exception:
-                    # Not our password — user-set encryption
-                    if self._existing_backup_password:
-                        self._forensic_backup_password = self._existing_backup_password
-                        self._encryption_was_off = False
-                        logger.info("[iOS] Device has backup encryption ON, using user-provided password")
+                    logger.info("[iOS] Forensic password verified — our previous encryption")
+                else:
+                    # Scenario C: unknown user password — ask via callback
+                    logger.info("[iOS] Forensic password rejected — requesting user password")
+                    user_pw = self._request_user_password(str(backup_dir), progress_callback)
+                    if user_pw:
+                        self._encryption_action = 'was_already_on'
+                        self._forensic_backup_password = user_pw
                     else:
-                        logger.info("[iOS] Device has backup encryption ON but no password provided")
-                        self._forensic_backup_password = None
+                        # User cancelled or doesn't know
+                        self._backup_failed_reason = (
+                            "Backup password unknown — cannot proceed.\n"
+                            "Reset via: Settings > General > Transfer or Reset iPhone "
+                            "> Reset > Reset All Settings (data preserved)"
+                        )
+                        yield '', {
+                            'artifact_type': 'mobile_ios_device_backup',
+                            'status': 'error',
+                            'error': self._backup_failed_reason,
+                        }
+                        return
 
-            # [2026-02-21] FIX: change_password() closes the service session internally.
-            # Must create a fresh Mobilebackup2Service for the actual backup.
+            # Create fresh service for backup (change_password closes the session)
+            logger.info("[iOS] Creating fresh Mobilebackup2Service for backup...")
             backup_service = Mobilebackup2Service(lockdown=self._lockdown)
+            logger.info(f"[iOS] Starting backup: full=True, dir={backup_dir}, encrypted={bool(self._forensic_backup_password)}")
 
-            # [2026-02-08] 백업 진행률 콜백 추가
             def backup_progress(percentage: float):
                 if progress_callback:
                     progress_callback(f"iOS backup progress: {percentage:.1f}%")
@@ -2195,16 +2230,15 @@ class iOSDeviceConnector:
                 backup_directory=str(backup_dir),
                 progress_callback=backup_progress
             )
+            logger.info("[iOS] Backup completed successfully")
 
-            # [2026-02-06] FIX: pymobiledevice3는 <backup_dir>/<UDID>/ 경로에 백업 생성
-            # 실제 백업 경로 찾기 (Manifest.plist 위치)
+            # pymobiledevice3 creates backup at <backup_dir>/<UDID>/
             actual_backup_path = backup_dir
             for subdir in backup_dir.iterdir():
                 if subdir.is_dir() and (subdir / 'Manifest.plist').exists():
                     actual_backup_path = subdir
                     break
 
-            # Calculate backup size
             total_size = sum(
                 f.stat().st_size for f in actual_backup_path.rglob('*') if f.is_file()
             )
@@ -2221,27 +2255,57 @@ class iOSDeviceConnector:
             }
 
         except Exception as e:
-            # [2026-02-21] FIX: Restore encryption state on backup failure
-            # Prevents device being left with unknown forensic password
-            if self._encryption_was_off and self._forensic_backup_password and self._lockdown:
-                try:
-                    restore_svc = Mobilebackup2Service(lockdown=self._lockdown)
-                    restore_svc.change_password(
-                        backup_directory=str(backup_dir),
-                        old=self._forensic_backup_password,
-                        new=""
-                    )
+            import traceback
+            err_type = type(e).__name__
+            err_msg = str(e) or f"(empty message, exception type: {err_type})"
+            logger.error(f"[iOS] Backup failed: [{err_type}] {err_msg}")
+            logger.error(f"[iOS] Backup traceback:\n{traceback.format_exc()}")
+
+            # Restore encryption if we enabled it
+            if self._encryption_action == 'we_enabled' and self._forensic_backup_password and self._lockdown:
+                if self._change_password_with_timeout(str(backup_dir), self._forensic_backup_password, ""):
                     logger.info("[iOS] Backup failed — encryption restored to OFF")
-                except Exception as restore_err:
-                    logger.warning(f"[iOS] Backup failed AND could not restore encryption: {restore_err}")
-                self._encryption_was_off = False
+                else:
+                    logger.warning("[iOS] Backup failed AND encryption restore failed")
+                self._encryption_action = None
                 self._forensic_backup_password = None
 
             yield '', {
                 'artifact_type': 'mobile_ios_device_backup',
                 'status': 'error',
-                'error': str(e),
+                'error': err_msg,
             }
+
+    def _request_user_password(
+        self,
+        backup_dir: str,
+        progress_callback: Optional[Callable[[str], None]] = None
+    ) -> Optional[str]:
+        """
+        Request user password via callback loop.
+
+        Returns verified password or None if cancelled.
+        """
+        if not self._password_callback:
+            logger.warning("[iOS] No password callback set — cannot request user password")
+            return None
+
+        error_msg = None
+        while True:
+            password = self._password_callback(error_msg)
+            if not password:
+                # User cancelled or clicked "I don't know"
+                return None
+
+            if progress_callback:
+                progress_callback("Verifying entered password...")
+
+            if self._change_password_with_timeout(backup_dir, password, password):
+                logger.info("[iOS] User password verified successfully")
+                return password
+
+            error_msg = "Incorrect password. Please try again."
+            logger.info("[iOS] User password rejected, requesting again")
 
     # =========================================================================
     # [2026-01-31] Unified collect() method - supports all artifact types
@@ -2250,7 +2314,8 @@ class iOSDeviceConnector:
     def collect(
         self,
         artifact_type: str,
-        progress_callback: Optional[Callable[[str], None]] = None
+        progress_callback: Optional[Callable[[str], None]] = None,
+        **kwargs
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         Unified artifact collection method.
@@ -2293,6 +2358,17 @@ class iOSDeviceConnector:
         # =====================================================================
         # Case 2: Backup-based artifacts -> Backup creation then file extraction via iOSCollector
         # =====================================================================
+
+        # [2026-02-24] Skip immediately if backup already failed (e.g., iOS 26 beta bug)
+        # Prevents wasting 10+ seconds per artifact on repeated failures
+        if self._backup_failed_reason:
+            yield '', {
+                'artifact_type': artifact_type,
+                'status': 'error',
+                'error': self._backup_failed_reason,
+            }
+            return
+
         if progress_callback:
             progress_callback(f"Preparing backup for {artifact_type}...")
 
@@ -2301,6 +2377,9 @@ class iOSDeviceConnector:
             backup_created = False
             for path, meta in self._create_backup_for_extraction(progress_callback):
                 if meta.get('status') == 'error':
+                    # Cache failure reason to skip subsequent backup-based artifacts
+                    err = meta.get('error', 'Unknown backup error')
+                    self._backup_failed_reason = f"Backup creation failed: {err}"
                     yield path, meta
                     return
                 if path:
@@ -2308,16 +2387,17 @@ class iOSDeviceConnector:
                     backup_created = True
 
             if not backup_created:
+                self._backup_failed_reason = "Failed to create device backup"
                 yield '', {
                     'artifact_type': artifact_type,
                     'status': 'error',
-                    'error': 'Failed to create device backup',
+                    'error': self._backup_failed_reason,
                 }
                 return
 
         # [2026-02-22] Early fail: encrypted backup but decryptor not available
         if self._forensic_backup_password and not self._encrypted_backup_obj:
-            msg = "Encrypted backup created but decryptor not available. Check iphone_backup_decrypt installation."
+            msg = self._backup_failed_reason or "Encrypted backup created but cannot decrypt. Check iphone_backup_decrypt installation."
             logger.error(f"[iOS] {msg}")
             if progress_callback:
                 progress_callback(f"[ERROR] {msg}")
@@ -2414,9 +2494,8 @@ class iOSDeviceConnector:
         """
         Initialize EncryptedBackup decryptor for encrypted iOS backups.
 
-        [2026-02-22] Extracted to reusable method — called from both
-        _collect_device_artifact (mobile_ios_device_backup) and
-        _create_backup_for_extraction (backup-based artifacts).
+        Password must already be confirmed in create_backup() — this method
+        simply runs PBKDF2 key derivation with the known password.
 
         Returns True if decryptor was initialized successfully.
         """
@@ -2424,11 +2503,9 @@ class iOSDeviceConnector:
             return False
 
         if progress_callback:
-            progress_callback("Initializing encrypted backup decryptor...")
+            progress_callback("Deriving decryption key (this may take 1-2 minutes)...")
         try:
             from collectors.ios_backup_decryptor import create_encrypted_backup
-            if progress_callback:
-                progress_callback("Deriving decryption key (this may take 1-2 minutes)...")
 
             enc_obj, err = create_encrypted_backup(
                 backup_path, self._forensic_backup_password
@@ -2439,15 +2516,20 @@ class iOSDeviceConnector:
                 if progress_callback:
                     progress_callback("Encrypted backup decryptor ready")
                 return True
-            else:
-                logger.warning(f"[iOS] Decryptor init failed: {err}")
-                if progress_callback:
-                    progress_callback(f"[WARNING] Decryptor failed: {err}")
+
+            # Password was verified in create_backup() but PBKDF2 failed = internal error
+            logger.error(f"[iOS] Decryptor init failed (internal error): {err}")
+            self._backup_failed_reason = f"Decryptor initialization failed: {err}"
+            if progress_callback:
+                progress_callback(f"[ERROR] Decryptor init failed: {err}")
+
         except ImportError as ie:
+            self._backup_failed_reason = f"iphone_backup_decrypt library not installed: {ie}"
             logger.warning(f"[iOS] ios_backup_decryptor import failed: {ie}")
             if progress_callback:
                 progress_callback("[WARNING] Encrypted backup support unavailable (missing: iphone_backup_decrypt)")
         except Exception as e:
+            self._backup_failed_reason = f"Decryptor error: {e}"
             logger.warning(f"[iOS] Decryptor init error: {e}")
             if progress_callback:
                 progress_callback(f"[WARNING] Decryptor error: {e}")
@@ -2473,6 +2555,26 @@ class iOSDeviceConnector:
         if manifest_plist.exists():
             if progress_callback:
                 progress_callback("Using existing backup...")
+
+            # Reused backup may be encrypted — set up decryptor
+            manifest_db = backup_dir / 'Manifest.db'
+            is_encrypted = False
+            if manifest_db.exists():
+                try:
+                    with open(manifest_db, 'rb') as f:
+                        header = f.read(16)
+                    is_encrypted = not header.startswith(b'SQLite format 3')
+                except Exception:
+                    pass
+
+            if is_encrypted and not self._encrypted_backup_obj:
+                forensic_pw = _derive_forensic_password(self.udid) if self.udid else None
+                if forensic_pw:
+                    self._forensic_backup_password = forensic_pw
+                    self._encryption_action = 'was_already_on'
+                if self._forensic_backup_password:
+                    self._init_encrypted_decryptor(str(backup_dir), progress_callback)
+
             yield str(backup_dir), {
                 'artifact_type': 'mobile_ios_device_backup',
                 'backup_path': str(backup_dir),
@@ -2487,7 +2589,7 @@ class iOSDeviceConnector:
                 yield path, meta
                 return
 
-            # [2026-02-22] Initialize decryptor for encrypted backups
+            # Initialize decryptor for encrypted backups
             if self._forensic_backup_password and path:
                 backup_path = meta.get('backup_path', path)
                 self._init_encrypted_decryptor(backup_path, progress_callback)
@@ -2496,18 +2598,17 @@ class iOSDeviceConnector:
 
     def close(self):
         """Clean up resources and restore device encryption state"""
-        # [2026-02-20] Restore device encryption to OFF if we enabled it
-        if self._encryption_was_off and self._forensic_backup_password and self._lockdown:
-            try:
-                backup_service = Mobilebackup2Service(lockdown=self._lockdown)
-                backup_service.change_password(
-                    backup_directory=str(self.output_dir),
-                    old=self._forensic_backup_password,
-                    new=""
-                )
+        # Restore encryption to OFF if we enabled it
+        if self._encryption_action == 'we_enabled' and self._forensic_backup_password and self._lockdown:
+            restore_dir = self.output_dir
+            if self._backup_path and self._backup_path.exists():
+                restore_dir = self._backup_path.parent
+
+            if self._change_password_with_timeout(str(restore_dir), self._forensic_backup_password, ""):
                 logger.info("[iOS] Backup encryption restored to OFF")
-            except Exception as e:
-                logger.warning(f"[iOS] Failed to restore encryption state: {e}")
+            else:
+                logger.warning("[iOS] Encryption restore failed — device may still have forensic encryption")
+                logger.warning("[iOS] To manually restore: use iTunes/Finder to change backup password")
 
         # Clean up EncryptedBackup resources
         if self._encrypted_backup_obj:
@@ -2521,7 +2622,6 @@ class iOSDeviceConnector:
         self._lockdown = None
         self._backup_collector = None
         self._forensic_backup_password = None
-        self._existing_backup_password = None
 
 
 class iOSCollector:
@@ -2592,7 +2692,8 @@ class iOSCollector:
     def collect(
         self,
         artifact_type: str,
-        progress_callback: Optional[Callable[[str], None]] = None
+        progress_callback: Optional[Callable[[str], None]] = None,
+        **kwargs
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         Collect specific artifact type from backup.

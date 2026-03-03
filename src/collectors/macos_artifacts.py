@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-macOS Artifact Definitions - macOS 시스템 아티팩트 수집 정의
+macOS Artifact Definitions - macOS System Artifact Collection Definitions
 
-디지털 포렌식을 위한 macOS 시스템 아티팩트 수집 필터를 정의합니다.
-APFS/HFS+ 파일시스템에서 수집 가능한 모든 주요 아티팩트를 포함합니다.
+Defines macOS system artifact collection filters for digital forensics.
+Includes all major artifacts collectable from APFS/HFS+ file systems.
 
 Categories:
-1. System Logs - 시스템 로그
-2. User Activity - 사용자 활동
-3. Launch Items - 시작 항목
-4. Network - 네트워크
-5. Applications - 애플리케이션
-6. Security - 보안
-7. Browser - 브라우저
-8. Persistence - 지속성
+1. System Logs
+2. User Activity
+3. Launch Items
+4. Network
+5. Applications
+6. Security
+7. Browser
+8. Persistence
 
 Usage:
     from collectors.macos_artifacts import MACOS_ARTIFACT_FILTERS
@@ -33,7 +33,7 @@ from typing import Dict, List, Any
 MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
 
     # ==========================================================================
-    # System Logs (시스템 로그)
+    # System Logs
     # ==========================================================================
 
     'macos_unified_log': {
@@ -46,7 +46,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'forensic_value': 'critical',
         'category': 'system_logs',
         'os_type': 'macos',
-        'note': 'log show 명령으로 파싱 필요',
+        'note': 'Parsing required via log show command',
     },
 
     'macos_system_log': {
@@ -54,7 +54,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/system.log',
             '/var/log/system.log.*.gz',
         ],
-        'description': '시스템 로그 (레거시)',
+        'description': 'System log (legacy)',
         'forensic_value': 'high',
         'category': 'system_logs',
         'os_type': 'macos',
@@ -64,7 +64,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/var/log/install.log',
         ],
-        'description': '설치 로그',
+        'description': 'Installation log',
         'forensic_value': 'high',
         'category': 'system_logs',
         'os_type': 'macos',
@@ -74,7 +74,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/var/log/asl/*.asl',
         ],
-        'description': 'Apple System Log (레거시)',
+        'description': 'Apple System Log (legacy)',
         'forensic_value': 'medium',
         'category': 'system_logs',
         'os_type': 'macos',
@@ -86,7 +86,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Library/Logs/DiagnosticReports/*.diag',
             '/Users/*/Library/Logs/DiagnosticReports/*.crash',
         ],
-        'description': '애플리케이션 크래시 리포트',
+        'description': 'Application crash reports',
         'forensic_value': 'medium',
         'category': 'system_logs',
         'os_type': 'macos',
@@ -96,14 +96,14 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/var/audit/*',
         ],
-        'description': 'BSM Audit 로그',
+        'description': 'BSM Audit log',
         'forensic_value': 'critical',
         'category': 'security',
         'os_type': 'macos',
     },
 
     # ==========================================================================
-    # User Activity (사용자 활동)
+    # User Activity
     # ==========================================================================
 
     'macos_bash_history': {
@@ -111,7 +111,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/.bash_history',
             '/var/root/.bash_history',
         ],
-        'description': 'Bash 명령어 히스토리',
+        'description': 'Bash command history',
         'forensic_value': 'critical',
         'category': 'user_activity',
         'os_type': 'macos',
@@ -123,7 +123,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/.zsh_history',
             '/var/root/.zsh_history',
         ],
-        'description': 'Zsh 명령어 히스토리 (Catalina+)',
+        'description': 'Zsh command history (Catalina+)',
         'forensic_value': 'critical',
         'category': 'user_activity',
         'os_type': 'macos',
@@ -134,7 +134,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Preferences/com.apple.recentitems.plist',
         ],
-        'description': '최근 사용 항목',
+        'description': 'Recent items',
         'forensic_value': 'high',
         'category': 'user_activity',
         'os_type': 'macos',
@@ -144,7 +144,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Preferences/com.apple.finder.plist',
         ],
-        'description': 'Finder 설정 및 최근 폴더',
+        'description': 'Finder settings and recent folders',
         'forensic_value': 'medium',
         'category': 'user_activity',
         'os_type': 'macos',
@@ -154,7 +154,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Application Support/com.apple.spotlight.Shortcuts',
         ],
-        'description': 'Spotlight 검색 기록',
+        'description': 'Spotlight search history',
         'forensic_value': 'high',
         'category': 'user_activity',
         'os_type': 'macos',
@@ -165,7 +165,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/.Trash/*',
             '/Users/*/.Trash/.DS_Store',
         ],
-        'description': '휴지통 내용',
+        'description': 'Trash contents',
         'forensic_value': 'high',
         'category': 'user_activity',
         'os_type': 'macos',
@@ -176,7 +176,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Application Support/Knowledge/knowledgeC.db',
             '/private/var/db/CoreDuet/Knowledge/knowledgeC.db',
         ],
-        'description': 'KnowledgeC 사용자 활동 DB',
+        'description': 'KnowledgeC user activity database',
         'forensic_value': 'critical',
         'category': 'user_activity',
         'os_type': 'macos',
@@ -188,7 +188,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Caches/com.apple.QuickLook.thumbnailcache/*',
             '/private/var/folders/*/*/C/com.apple.QuickLook.thumbnailcache/*',
         ],
-        'description': 'QuickLook 썸네일 캐시',
+        'description': 'QuickLook thumbnail cache',
         'forensic_value': 'high',
         'category': 'user_activity',
         'os_type': 'macos',
@@ -198,7 +198,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2',
         ],
-        'description': '다운로드 격리 기록',
+        'description': 'Download quarantine records',
         'forensic_value': 'critical',
         'category': 'user_activity',
         'os_type': 'macos',
@@ -206,14 +206,14 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
 
     # ==========================================================================
-    # FSEvents (파일 시스템 이벤트)
+    # FSEvents (File System Events)
     # ==========================================================================
 
     'macos_fseventsd': {
         'paths': [
             '/.fseventsd/*',
         ],
-        'description': 'FSEvents 파일 시스템 변경 로그',
+        'description': 'FSEvents file system change log',
         'forensic_value': 'critical',
         'category': 'filesystem',
         'os_type': 'macos',
@@ -223,14 +223,14 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/.Spotlight-V100/*',
         ],
-        'description': 'Spotlight 인덱스 데이터',
+        'description': 'Spotlight index data',
         'forensic_value': 'high',
         'category': 'filesystem',
         'os_type': 'macos',
     },
 
     # ==========================================================================
-    # Launch Items (시작 항목 - 지속성)
+    # Launch Items (Startup Items - Persistence)
     # ==========================================================================
 
     'macos_launch_agents_system': {
@@ -238,7 +238,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Library/LaunchAgents/*.plist',
             '/System/Library/LaunchAgents/*.plist',
         ],
-        'description': '시스템 Launch Agents',
+        'description': 'System Launch Agents',
         'forensic_value': 'critical',
         'category': 'persistence',
         'os_type': 'macos',
@@ -248,7 +248,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/LaunchAgents/*.plist',
         ],
-        'description': '사용자 Launch Agents',
+        'description': 'User Launch Agents',
         'forensic_value': 'critical',
         'category': 'persistence',
         'os_type': 'macos',
@@ -270,7 +270,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Preferences/com.apple.loginitems.plist',
             '/Users/*/Library/Application Support/com.apple.backgroundtaskmanagementagent/backgrounditems.btm',
         ],
-        'description': '로그인 항목',
+        'description': 'Login items',
         'forensic_value': 'critical',
         'category': 'persistence',
         'os_type': 'macos',
@@ -280,7 +280,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Library/StartupItems/*',
         ],
-        'description': 'Startup Items (레거시)',
+        'description': 'Startup Items (legacy)',
         'forensic_value': 'high',
         'category': 'persistence',
         'os_type': 'macos',
@@ -291,7 +291,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/at/tabs/*',
             '/usr/lib/cron/tabs/*',
         ],
-        'description': 'Cron 작업',
+        'description': 'Cron jobs',
         'forensic_value': 'high',
         'category': 'persistence',
         'os_type': 'macos',
@@ -303,7 +303,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/periodic/weekly/*',
             '/etc/periodic/monthly/*',
         ],
-        'description': 'Periodic 스크립트',
+        'description': 'Periodic scripts',
         'forensic_value': 'high',
         'category': 'persistence',
         'os_type': 'macos',
@@ -318,7 +318,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Library/Application Support/com.apple.TCC/TCC.db',
             '/Users/*/Library/Application Support/com.apple.TCC/TCC.db',
         ],
-        'description': 'TCC 권한 데이터베이스',
+        'description': 'TCC permissions database',
         'forensic_value': 'critical',
         'category': 'security',
         'os_type': 'macos',
@@ -330,7 +330,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Keychains/login.keychain-db',
             '/Library/Keychains/System.keychain',
         ],
-        'description': 'Keychain 데이터베이스',
+        'description': 'Keychain database',
         'forensic_value': 'critical',
         'category': 'security',
         'os_type': 'macos',
@@ -341,7 +341,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/db/SystemPolicy',
             '/var/db/SystemPolicyConfiguration/*',
         ],
-        'description': 'Gatekeeper 정책 데이터',
+        'description': 'Gatekeeper policy data',
         'forensic_value': 'high',
         'category': 'security',
         'os_type': 'macos',
@@ -352,7 +352,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Library/Apple/System/Library/CoreServices/XProtect.bundle/*',
             '/var/db/xprotect/*',
         ],
-        'description': 'XProtect 맬웨어 정의',
+        'description': 'XProtect malware definitions',
         'forensic_value': 'medium',
         'category': 'security',
         'os_type': 'macos',
@@ -367,7 +367,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Library/Preferences/SystemConfiguration/com.apple.airport.preferences.plist',
             '/Library/Preferences/com.apple.wifi.known-networks.plist',
         ],
-        'description': 'Wi-Fi 연결 기록',
+        'description': 'Wi-Fi connection history',
         'forensic_value': 'high',
         'category': 'network',
         'os_type': 'macos',
@@ -378,7 +378,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Library/Preferences/SystemConfiguration/preferences.plist',
             '/Library/Preferences/SystemConfiguration/NetworkInterfaces.plist',
         ],
-        'description': '네트워크 설정',
+        'description': 'Network settings',
         'forensic_value': 'medium',
         'category': 'network',
         'os_type': 'macos',
@@ -389,7 +389,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/hosts',
             '/private/etc/hosts',
         ],
-        'description': 'Hosts 파일',
+        'description': 'Hosts file',
         'forensic_value': 'high',
         'category': 'network',
         'os_type': 'macos',
@@ -402,7 +402,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/.ssh/config',
             '/var/root/.ssh/*',
         ],
-        'description': 'SSH 설정 및 기록',
+        'description': 'SSH settings and history',
         'forensic_value': 'critical',
         'category': 'network',
         'os_type': 'macos',
@@ -418,7 +418,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Safari/History.db',
             '/Users/*/Library/Safari/History.db-wal',
         ],
-        'description': 'Safari 방문 기록',
+        'description': 'Safari browsing history',
         'forensic_value': 'high',
         'category': 'browser',
         'os_type': 'macos',
@@ -429,7 +429,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Safari/Downloads.plist',
         ],
-        'description': 'Safari 다운로드 기록',
+        'description': 'Safari download history',
         'forensic_value': 'high',
         'category': 'browser',
         'os_type': 'macos',
@@ -439,7 +439,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Cookies/Cookies.binarycookies',
         ],
-        'description': 'Safari 쿠키',
+        'description': 'Safari cookies',
         'forensic_value': 'high',
         'category': 'browser',
         'os_type': 'macos',
@@ -449,7 +449,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Caches/com.apple.Safari/Cache.db',
         ],
-        'description': 'Safari 캐시',
+        'description': 'Safari cache',
         'forensic_value': 'medium',
         'category': 'browser',
         'os_type': 'macos',
@@ -462,7 +462,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Application Support/Google/Chrome/Default/Login Data',
             '/Users/*/Library/Application Support/Google/Chrome/Default/Bookmarks',
         ],
-        'description': 'Chrome 브라우저 데이터',
+        'description': 'Chrome browser data',
         'forensic_value': 'high',
         'category': 'browser',
         'os_type': 'macos',
@@ -475,7 +475,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Application Support/Firefox/Profiles/*.default*/cookies.sqlite',
             '/Users/*/Library/Application Support/Firefox/Profiles/*.default*/logins.json',
         ],
-        'description': 'Firefox 브라우저 데이터',
+        'description': 'Firefox browser data',
         'forensic_value': 'high',
         'category': 'browser',
         'os_type': 'macos',
@@ -491,7 +491,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Messages/chat.db',
             '/Users/*/Library/Messages/chat.db-wal',
         ],
-        'description': 'iMessage 메시지',
+        'description': 'iMessage messages',
         'forensic_value': 'critical',
         'category': 'applications',
         'os_type': 'macos',
@@ -503,7 +503,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Mail/V*/MailData/Envelope Index',
             '/Users/*/Library/Mail/V*/MailData/Envelope Index-wal',
         ],
-        'description': 'Mail 앱 인덱스',
+        'description': 'Mail app index',
         'forensic_value': 'high',
         'category': 'applications',
         'os_type': 'macos',
@@ -513,7 +513,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite',
         ],
-        'description': 'Notes 앱 데이터',
+        'description': 'Notes app data',
         'forensic_value': 'high',
         'category': 'applications',
         'os_type': 'macos',
@@ -525,7 +525,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Calendars/*.caldav/*.calendar/Events/*.ics',
             '/Users/*/Library/Calendars/Calendar Cache',
         ],
-        'description': 'Calendar 앱 데이터',
+        'description': 'Calendar app data',
         'forensic_value': 'medium',
         'category': 'applications',
         'os_type': 'macos',
@@ -535,7 +535,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Reminders/Container_v1/Stores/*.sqlite',
         ],
-        'description': 'Reminders 앱 데이터',
+        'description': 'Reminders app data',
         'forensic_value': 'medium',
         'category': 'applications',
         'os_type': 'macos',
@@ -545,7 +545,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Pictures/Photos Library.photoslibrary/database/Photos.sqlite',
         ],
-        'description': 'Photos 앱 데이터베이스',
+        'description': 'Photos app database',
         'forensic_value': 'medium',
         'category': 'applications',
         'os_type': 'macos',
@@ -555,7 +555,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Users/*/Library/Saved Application State/com.apple.Terminal.savedState/*',
         ],
-        'description': 'Terminal 저장 상태',
+        'description': 'Terminal saved state',
         'forensic_value': 'high',
         'category': 'applications',
         'os_type': 'macos',
@@ -569,7 +569,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/System/Library/CoreServices/SystemVersion.plist',
         ],
-        'description': 'macOS 버전 정보',
+        'description': 'macOS version information',
         'forensic_value': 'low',
         'category': 'system_info',
         'os_type': 'macos',
@@ -579,7 +579,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Library/Preferences/com.apple.Bluetooth.plist',
         ],
-        'description': 'Bluetooth 연결 기록',
+        'description': 'Bluetooth connection history',
         'forensic_value': 'medium',
         'category': 'system_info',
         'os_type': 'macos',
@@ -589,7 +589,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/var/db/lockdown/*',
         ],
-        'description': 'USB 기기 연결 기록 (iOS 페어링)',
+        'description': 'USB device connection history (iOS pairing)',
         'forensic_value': 'high',
         'category': 'system_info',
         'os_type': 'macos',
@@ -599,7 +599,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/Library/Preferences/com.apple.TimeMachine.plist',
         ],
-        'description': 'Time Machine 설정',
+        'description': 'Time Machine settings',
         'forensic_value': 'medium',
         'category': 'system_info',
         'os_type': 'macos',
@@ -612,7 +612,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
 # ==============================================================================
 
 def get_macos_artifacts_by_category(category: str) -> Dict[str, Dict[str, Any]]:
-    """카테고리별 macOS 아티팩트 반환"""
+    """Return macOS artifacts by category"""
     return {
         k: v for k, v in MACOS_ARTIFACT_FILTERS.items()
         if v.get('category') == category
@@ -620,7 +620,7 @@ def get_macos_artifacts_by_category(category: str) -> Dict[str, Dict[str, Any]]:
 
 
 def get_macos_artifacts_by_forensic_value(value: str) -> Dict[str, Dict[str, Any]]:
-    """포렌식 가치별 macOS 아티팩트 반환"""
+    """Return macOS artifacts by forensic value"""
     return {
         k: v for k, v in MACOS_ARTIFACT_FILTERS.items()
         if v.get('forensic_value') == value
@@ -628,7 +628,7 @@ def get_macos_artifacts_by_forensic_value(value: str) -> Dict[str, Dict[str, Any
 
 
 def get_all_macos_artifact_paths() -> List[str]:
-    """모든 macOS 아티팩트 경로 반환 (와일드카드 포함)"""
+    """Return all macOS artifact paths (including wildcards)"""
     paths = []
     for config in MACOS_ARTIFACT_FILTERS.values():
         paths.extend(config.get('paths', []))
@@ -636,7 +636,7 @@ def get_all_macos_artifact_paths() -> List[str]:
 
 
 def get_macos_categories() -> List[str]:
-    """macOS 아티팩트 카테고리 목록 반환"""
+    """Return list of macOS artifact categories"""
     categories = set()
     for config in MACOS_ARTIFACT_FILTERS.values():
         if 'category' in config:
@@ -644,7 +644,7 @@ def get_macos_categories() -> List[str]:
     return sorted(list(categories))
 
 
-# 아티팩트 통계
+# Artifact statistics
 MACOS_ARTIFACT_STATS = {
     'total_artifacts': len(MACOS_ARTIFACT_FILTERS),
     'categories': get_macos_categories(),

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-BitLocker Decryptor - 통합 BitLocker 복호화 클래스
+BitLocker Decryptor - Unified BitLocker decryption class
 
-물리 디스크, E01 이미지, RAW 이미지의 BitLocker 볼륨을 복호화하는
-고수준 API를 제공합니다.
+Provides a high-level API for decrypting BitLocker volumes from
+physical disks, E01 images, and RAW images.
 
 Usage:
     decryptor = BitLockerDecryptor.from_physical_disk(0, partition_index=0)
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BitLockerUnlockResult:
-    """BitLocker 잠금 해제 결과"""
+    """BitLocker unlock result"""
     success: bool
     key_type: Optional[BitLockerKeyType] = None
     error_message: Optional[str] = None
@@ -44,7 +44,7 @@ class BitLockerUnlockResult:
 
 @dataclass
 class BitLockerPartitionInfo:
-    """BitLocker 파티션 정보"""
+    """BitLocker partition information"""
     partition_index: int
     offset: int
     size: int
@@ -57,15 +57,15 @@ class BitLockerPartitionInfo:
 
 class BitLockerDecryptor:
     """
-    BitLocker 복호화 통합 클래스
+    Unified BitLocker decryption class
 
-    지원 키 타입:
-    - Recovery Password (48자리 숫자)
-    - Password (일반 비밀번호)
-    - BEK File (.BEK 시작 키 파일)
+    Supported Key Types:
+    - Recovery Password (48-digit number)
+    - Password (regular password)
+    - BEK File (.BEK startup key file)
 
-    미지원:
-    - TPM (하드웨어 의존)
+    Not Supported:
+    - TPM (hardware dependent)
     """
 
     def __init__(
@@ -142,7 +142,7 @@ class BitLockerDecryptor:
         drive_number: int,
         partition_index: int = 0
     ) -> 'BitLockerDecryptor':
-        """물리 디스크에서 BitLockerDecryptor 생성"""
+        """Create BitLockerDecryptor from physical disk"""
         from .disk_backends import PhysicalDiskBackend
 
         backend = PhysicalDiskBackend(drive_number)
@@ -174,7 +174,7 @@ class BitLockerDecryptor:
         e01_path: str,
         partition_index: int = 0
     ) -> 'BitLockerDecryptor':
-        """E01 이미지에서 BitLockerDecryptor 생성"""
+        """Create BitLockerDecryptor from E01 image"""
         from .disk_backends import E01DiskBackend
 
         backend = E01DiskBackend(e01_path)
@@ -207,7 +207,7 @@ class BitLockerDecryptor:
         partition_offset: int = 0,
         partition_size: int = None
     ) -> 'BitLockerDecryptor':
-        """RAW/DD 이미지에서 BitLockerDecryptor 생성"""
+        """Create BitLockerDecryptor from RAW/DD image"""
         from .disk_backends import RAWImageBackend
 
         backend = RAWImageBackend(image_path)
@@ -228,7 +228,7 @@ class BitLockerDecryptor:
         disk_backend: UnifiedDiskReader,
         partition_info: PartitionInfo
     ) -> 'BitLockerDecryptor':
-        """파티션 정보로 BitLockerDecryptor 생성"""
+        """Create BitLockerDecryptor from partition information"""
         return cls(
             disk_backend=disk_backend,
             partition_offset=partition_info.offset,
@@ -238,22 +238,22 @@ class BitLockerDecryptor:
 
     @staticmethod
     def _detect_partitions(backend: UnifiedDiskReader) -> List[PartitionInfo]:
-        """파티션 테이블 탐지 (간단 구현)"""
+        """Detect partition table (simple implementation)"""
         import struct
         partitions = []
 
         try:
-            # MBR 읽기
+            # Read MBR
             mbr = backend.read(0, 512)
             if len(mbr) < 512:
                 return []
 
-            # MBR 시그니처 확인
+            # Verify MBR signature
             signature = struct.unpack('<H', mbr[510:512])[0]
             if signature != 0xAA55:
                 return []
 
-            # 파티션 엔트리 파싱 (MBR)
+            # Parse partition entries (MBR)
             for i in range(4):
                 entry_offset = 446 + i * 16
                 entry = mbr[entry_offset:entry_offset + 16]
@@ -265,7 +265,7 @@ class BitLockerDecryptor:
                 lba_start = struct.unpack('<I', entry[8:12])[0]
                 sector_count = struct.unpack('<I', entry[12:16])[0]
 
-                # BitLocker 감지 (VBR 시그니처)
+                # Detect BitLocker (VBR signature)
                 partition_offset = lba_start * 512
                 vbr = backend.read(partition_offset, 512)
                 filesystem = cls._detect_filesystem(vbr)
@@ -288,32 +288,32 @@ class BitLockerDecryptor:
 
     @staticmethod
     def _detect_filesystem(vbr: bytes) -> str:
-        """VBR에서 파일시스템 감지"""
+        """Detect filesystem from VBR"""
         if len(vbr) < 512:
             return "Unknown"
 
-        # BitLocker 시그니처: "-FVE-FS-" at offset 3
+        # BitLocker signature: "-FVE-FS-" at offset 3
         if vbr[3:11] == b'-FVE-FS-':
             return "BitLocker"
 
-        # NTFS 시그니처
+        # NTFS signature
         if vbr[3:7] == b'NTFS':
             return "NTFS"
 
-        # FAT32 시그니처
+        # FAT32 signature
         if vbr[82:90] == b'FAT32   ':
             return "FAT32"
 
-        # exFAT 시그니처
+        # exFAT signature
         if vbr[3:11] == b'EXFAT   ':
             return "exFAT"
 
         return "Unknown"
 
-    # ========== 잠금 해제 메서드 ==========
+    # ========== Unlock Methods ==========
 
     def unlock_with_recovery_password(self, recovery_password: str) -> BitLockerUnlockResult:
-        """Recovery Password로 잠금 해제"""
+        """Unlock with Recovery Password"""
         if not self._bitlocker_backend:
             return BitLockerUnlockResult(
                 success=False,
@@ -345,7 +345,7 @@ class BitLockerDecryptor:
             )
 
     def unlock_with_password(self, password: str) -> BitLockerUnlockResult:
-        """일반 비밀번호로 잠금 해제"""
+        """Unlock with regular password"""
         if not self._bitlocker_backend:
             return BitLockerUnlockResult(
                 success=False,
@@ -377,7 +377,7 @@ class BitLockerDecryptor:
             )
 
     def unlock_with_bek_file(self, bek_path: str) -> BitLockerUnlockResult:
-        """.BEK 시작 키 파일로 잠금 해제"""
+        """Unlock with .BEK startup key file"""
         if not self._bitlocker_backend:
             return BitLockerUnlockResult(
                 success=False,
@@ -414,7 +414,7 @@ class BitLockerDecryptor:
         key_value: str = "",
         bek_path: str = ""
     ) -> BitLockerUnlockResult:
-        """통합 잠금 해제 메서드"""
+        """Unified unlock method"""
         if key_type == BitLockerKeyType.RECOVERY_PASSWORD:
             return self.unlock_with_recovery_password(key_value)
         elif key_type == BitLockerKeyType.PASSWORD:
@@ -427,10 +427,10 @@ class BitLockerDecryptor:
                 error_message=f"Unsupported key type: {key_type}"
             )
 
-    # ========== 복호화된 볼륨 접근 ==========
+    # ========== Decrypted Volume Access ==========
 
     def get_decrypted_reader(self) -> UnifiedDiskReader:
-        """복호화된 UnifiedDiskReader 반환"""
+        """Return decrypted UnifiedDiskReader"""
         if not self._bitlocker_backend:
             raise BitLockerError("BitLocker backend not initialized")
 
@@ -441,7 +441,7 @@ class BitLockerDecryptor:
 
         return self._bitlocker_backend
 
-    # ========== 정보 조회 ==========
+    # ========== Information Retrieval ==========
 
     def get_partition_info(self) -> BitLockerPartitionInfo:
         return self._partition_info or BitLockerPartitionInfo(
@@ -468,7 +468,7 @@ class BitLockerDecryptor:
             'partition_size': self._partition_size
         }
 
-    # ========== 리소스 관리 ==========
+    # ========== Resource Management ==========
 
     def close(self) -> None:
         if self._bitlocker_backend:

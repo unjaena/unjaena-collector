@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Linux Artifact Definitions - Linux 시스템 아티팩트 수집 정의
+Linux Artifact Definitions - Linux System Artifact Collection Definitions
 
-디지털 포렌식을 위한 Linux 시스템 아티팩트 수집 필터를 정의합니다.
-ext2/3/4 파일시스템에서 수집 가능한 모든 주요 아티팩트를 포함합니다.
+Defines Linux system artifact collection filters for digital forensics.
+Includes all major artifacts collectable from ext2/3/4 file systems.
 
 Supported Distributions:
 - Debian/Ubuntu
@@ -13,14 +13,14 @@ Supported Distributions:
 - Other systemd-based distributions
 
 Categories:
-1. System Logs - 시스템 로그
-2. Authentication - 인증 관련
-3. User Activity - 사용자 활동
-4. Network - 네트워크 설정
-5. Services - 서비스 및 데몬
-6. Persistence - 지속성 메커니즘
-7. Browser - 브라우저 아티팩트
-8. Applications - 애플리케이션 데이터
+1. System Logs
+2. Authentication
+3. User Activity
+4. Network Settings
+5. Services and Daemons
+6. Persistence Mechanisms
+7. Browser Artifacts
+8. Application Data
 
 Usage:
     from collectors.linux_artifacts import LINUX_ARTIFACT_FILTERS
@@ -40,7 +40,7 @@ from typing import Dict, List, Any
 LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
 
     # ==========================================================================
-    # System Logs (시스템 로그)
+    # System Logs
     # ==========================================================================
 
     'linux_syslog': {
@@ -48,7 +48,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/syslog',           # Debian/Ubuntu
             '/var/log/messages',         # RHEL/CentOS
         ],
-        'description': '시스템 로그 (커널, 서비스 메시지)',
+        'description': 'System log (kernel, service messages)',
         'forensic_value': 'high',
         'category': 'system_logs',
         'os_type': 'linux',
@@ -59,7 +59,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/auth.log',         # Debian/Ubuntu
             '/var/log/secure',           # RHEL/CentOS
         ],
-        'description': '인증 로그 (로그인, sudo, SSH)',
+        'description': 'Authentication log (login, sudo, SSH)',
         'forensic_value': 'critical',
         'category': 'authentication',
         'os_type': 'linux',
@@ -68,9 +68,9 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     'linux_kern_log': {
         'paths': [
             '/var/log/kern.log',         # Debian/Ubuntu
-            '/var/log/dmesg',            # 커널 메시지
+            '/var/log/dmesg',            # Kernel messages
         ],
-        'description': '커널 로그 (하드웨어, 드라이버)',
+        'description': 'Kernel log (hardware, drivers)',
         'forensic_value': 'high',
         'category': 'system_logs',
         'os_type': 'linux',
@@ -81,7 +81,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/boot.log',
             '/var/log/boot.msg',         # SUSE
         ],
-        'description': '부팅 로그',
+        'description': 'Boot log',
         'forensic_value': 'medium',
         'category': 'system_logs',
         'os_type': 'linux',
@@ -91,7 +91,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/var/log/daemon.log',
         ],
-        'description': '데몬 서비스 로그',
+        'description': 'Daemon service log',
         'forensic_value': 'medium',
         'category': 'system_logs',
         'os_type': 'linux',
@@ -102,7 +102,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/cron',
             '/var/log/cron.log',
         ],
-        'description': 'Cron 작업 로그',
+        'description': 'Cron job log',
         'forensic_value': 'high',
         'category': 'scheduled_tasks',
         'os_type': 'linux',
@@ -113,7 +113,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/mail.log',
             '/var/log/maillog',
         ],
-        'description': '메일 서버 로그',
+        'description': 'Mail server log',
         'forensic_value': 'medium',
         'category': 'system_logs',
         'os_type': 'linux',
@@ -124,7 +124,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/apt/history.log',
             '/var/log/apt/term.log',
         ],
-        'description': 'APT 패키지 설치 로그 (Debian/Ubuntu)',
+        'description': 'APT package installation log (Debian/Ubuntu)',
         'forensic_value': 'high',
         'category': 'package_manager',
         'os_type': 'linux',
@@ -135,7 +135,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/yum.log',
             '/var/log/dnf.log',
         ],
-        'description': 'YUM/DNF 패키지 설치 로그 (RHEL/CentOS/Fedora)',
+        'description': 'YUM/DNF package installation log (RHEL/CentOS/Fedora)',
         'forensic_value': 'high',
         'category': 'package_manager',
         'os_type': 'linux',
@@ -145,7 +145,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/var/log/dpkg.log',
         ],
-        'description': 'DPKG 패키지 로그',
+        'description': 'DPKG package log',
         'forensic_value': 'high',
         'category': 'package_manager',
         'os_type': 'linux',
@@ -155,7 +155,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/var/log/audit/audit.log',
         ],
-        'description': 'Audit 로그 (SELinux, 보안 이벤트)',
+        'description': 'Audit log (SELinux, security events)',
         'forensic_value': 'critical',
         'category': 'security',
         'os_type': 'linux',
@@ -164,9 +164,9 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     'linux_faillog': {
         'paths': [
             '/var/log/faillog',
-            '/var/log/btmp',             # 실패한 로그인 시도
+            '/var/log/btmp',             # Failed login attempts
         ],
-        'description': '로그인 실패 기록',
+        'description': 'Login failure records',
         'forensic_value': 'high',
         'category': 'authentication',
         'os_type': 'linux',
@@ -175,24 +175,24 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     'linux_lastlog': {
         'paths': [
             '/var/log/lastlog',
-            '/var/log/wtmp',             # 로그인 세션 기록
-            '/var/run/utmp',             # 현재 로그인 사용자
+            '/var/log/wtmp',             # Login session records
+            '/var/run/utmp',             # Currently logged-in users
         ],
-        'description': '로그인 세션 기록',
+        'description': 'Login session records',
         'forensic_value': 'high',
         'category': 'authentication',
         'os_type': 'linux',
     },
 
     # ==========================================================================
-    # Authentication & Users (인증 및 사용자)
+    # Authentication & Users
     # ==========================================================================
 
     'linux_passwd': {
         'paths': [
             '/etc/passwd',
         ],
-        'description': '사용자 계정 정보',
+        'description': 'User account information',
         'forensic_value': 'critical',
         'category': 'authentication',
         'os_type': 'linux',
@@ -202,7 +202,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/etc/shadow',
         ],
-        'description': '암호화된 비밀번호 해시',
+        'description': 'Encrypted password hashes',
         'forensic_value': 'critical',
         'category': 'authentication',
         'os_type': 'linux',
@@ -213,7 +213,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/group',
             '/etc/gshadow',
         ],
-        'description': '그룹 정보',
+        'description': 'Group information',
         'forensic_value': 'high',
         'category': 'authentication',
         'os_type': 'linux',
@@ -224,14 +224,14 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/sudoers',
             '/etc/sudoers.d/*',
         ],
-        'description': 'sudo 권한 설정',
+        'description': 'sudo privilege configuration',
         'forensic_value': 'critical',
         'category': 'authentication',
         'os_type': 'linux',
     },
 
     # ==========================================================================
-    # User Activity (사용자 활동)
+    # User Activity
     # ==========================================================================
 
     'linux_bash_history': {
@@ -239,11 +239,11 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.bash_history',
             '/root/.bash_history',
         ],
-        'description': 'Bash 명령어 히스토리',
+        'description': 'Bash command history',
         'forensic_value': 'critical',
         'category': 'user_activity',
         'os_type': 'linux',
-        'path_optional': True,  # 파일명으로 검색 허용
+        'path_optional': True,  # Allow search by filename
     },
 
     'linux_zsh_history': {
@@ -252,7 +252,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.zhistory',
             '/root/.zsh_history',
         ],
-        'description': 'Zsh 명령어 히스토리',
+        'description': 'Zsh command history',
         'forensic_value': 'critical',
         'category': 'user_activity',
         'os_type': 'linux',
@@ -263,7 +263,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/home/*/.local/share/fish/fish_history',
         ],
-        'description': 'Fish 명령어 히스토리',
+        'description': 'Fish command history',
         'forensic_value': 'high',
         'category': 'user_activity',
         'os_type': 'linux',
@@ -278,7 +278,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/root/.bashrc',
             '/etc/bash.bashrc',
         ],
-        'description': 'Bash 설정 파일 (별칭, 환경변수)',
+        'description': 'Bash configuration files (aliases, environment variables)',
         'forensic_value': 'high',
         'category': 'user_activity',
         'os_type': 'linux',
@@ -289,7 +289,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.viminfo',
             '/root/.viminfo',
         ],
-        'description': 'Vim 편집기 히스토리',
+        'description': 'Vim editor history',
         'forensic_value': 'medium',
         'category': 'user_activity',
         'os_type': 'linux',
@@ -300,7 +300,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/home/*/.local/share/recently-used.xbel',
         ],
-        'description': '최근 사용 파일 (GNOME)',
+        'description': 'Recently used files (GNOME)',
         'forensic_value': 'high',
         'category': 'user_activity',
         'os_type': 'linux',
@@ -311,14 +311,14 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.local/share/Trash/files/*',
             '/home/*/.local/share/Trash/info/*',
         ],
-        'description': '휴지통 내용',
+        'description': 'Trash contents',
         'forensic_value': 'high',
         'category': 'user_activity',
         'os_type': 'linux',
     },
 
     # ==========================================================================
-    # SSH & Remote Access (SSH 및 원격 접속)
+    # SSH & Remote Access
     # ==========================================================================
 
     'linux_ssh_config': {
@@ -327,7 +327,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/ssh/ssh_config',
             '/home/*/.ssh/config',
         ],
-        'description': 'SSH 설정',
+        'description': 'SSH configuration',
         'forensic_value': 'high',
         'category': 'network',
         'os_type': 'linux',
@@ -339,7 +339,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/root/.ssh/known_hosts',
             '/etc/ssh/ssh_known_hosts',
         ],
-        'description': 'SSH 접속 호스트 기록',
+        'description': 'SSH connection host records',
         'forensic_value': 'critical',
         'category': 'network',
         'os_type': 'linux',
@@ -351,7 +351,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.ssh/authorized_keys',
             '/root/.ssh/authorized_keys',
         ],
-        'description': 'SSH 인증된 공개키',
+        'description': 'SSH authorized public keys',
         'forensic_value': 'critical',
         'category': 'authentication',
         'os_type': 'linux',
@@ -365,7 +365,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.ssh/id_ecdsa',
             '/root/.ssh/id_rsa',
         ],
-        'description': 'SSH 개인키 (민감)',
+        'description': 'SSH private keys (sensitive)',
         'forensic_value': 'critical',
         'category': 'authentication',
         'os_type': 'linux',
@@ -373,7 +373,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
 
     # ==========================================================================
-    # Network Configuration (네트워크 설정)
+    # Network Configuration
     # ==========================================================================
 
     'linux_hosts': {
@@ -382,7 +382,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/hosts.allow',
             '/etc/hosts.deny',
         ],
-        'description': 'Hosts 파일',
+        'description': 'Hosts file',
         'forensic_value': 'high',
         'category': 'network',
         'os_type': 'linux',
@@ -392,7 +392,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/etc/resolv.conf',
         ],
-        'description': 'DNS 설정',
+        'description': 'DNS settings',
         'forensic_value': 'medium',
         'category': 'network',
         'os_type': 'linux',
@@ -404,7 +404,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/sysconfig/network-scripts/ifcfg-*',
             '/etc/netplan/*.yaml',
         ],
-        'description': '네트워크 인터페이스 설정',
+        'description': 'Network interface settings',
         'forensic_value': 'medium',
         'category': 'network',
         'os_type': 'linux',
@@ -416,14 +416,14 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/iptables/rules.v6',
             '/etc/sysconfig/iptables',
         ],
-        'description': '방화벽 규칙',
+        'description': 'Firewall rules',
         'forensic_value': 'high',
         'category': 'network',
         'os_type': 'linux',
     },
 
     # ==========================================================================
-    # Scheduled Tasks (예약 작업)
+    # Scheduled Tasks
     # ==========================================================================
 
     'linux_crontab': {
@@ -436,7 +436,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/cron.monthly/*',
             '/var/spool/cron/crontabs/*',
         ],
-        'description': 'Cron 예약 작업',
+        'description': 'Cron scheduled tasks',
         'forensic_value': 'critical',
         'category': 'scheduled_tasks',
         'os_type': 'linux',
@@ -446,7 +446,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/etc/anacrontab',
         ],
-        'description': 'Anacron 예약 작업',
+        'description': 'Anacron scheduled tasks',
         'forensic_value': 'high',
         'category': 'scheduled_tasks',
         'os_type': 'linux',
@@ -457,7 +457,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/spool/at/*',
             '/var/spool/atjobs/*',
         ],
-        'description': 'at 예약 작업',
+        'description': 'at scheduled tasks',
         'forensic_value': 'high',
         'category': 'scheduled_tasks',
         'os_type': 'linux',
@@ -469,23 +469,23 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/usr/lib/systemd/system/*.timer',
             '/home/*/.config/systemd/user/*.timer',
         ],
-        'description': 'Systemd 타이머',
+        'description': 'Systemd timers',
         'forensic_value': 'high',
         'category': 'scheduled_tasks',
         'os_type': 'linux',
     },
 
     # ==========================================================================
-    # Services & Daemons (서비스 및 데몬)
+    # Services & Daemons
     # ==========================================================================
 
-    'linux_systemd_services': {
+    'linux_systemd_service': {
         'paths': [
             '/etc/systemd/system/*.service',
             '/usr/lib/systemd/system/*.service',
             '/home/*/.config/systemd/user/*.service',
         ],
-        'description': 'Systemd 서비스 정의',
+        'description': 'Systemd service definitions',
         'forensic_value': 'critical',
         'category': 'services',
         'os_type': 'linux',
@@ -496,14 +496,14 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/init.d/*',
             '/etc/rc.local',
         ],
-        'description': 'SysV init 스크립트',
+        'description': 'SysV init scripts',
         'forensic_value': 'high',
         'category': 'services',
         'os_type': 'linux',
     },
 
     # ==========================================================================
-    # Persistence Mechanisms (지속성 메커니즘)
+    # Persistence Mechanisms
     # ==========================================================================
 
     'linux_autostart': {
@@ -511,7 +511,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/xdg/autostart/*.desktop',
             '/home/*/.config/autostart/*.desktop',
         ],
-        'description': '자동 시작 항목 (GUI)',
+        'description': 'Auto-start items (GUI)',
         'forensic_value': 'high',
         'category': 'persistence',
         'os_type': 'linux',
@@ -523,7 +523,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/profile.d/*',
             '/etc/environment',
         ],
-        'description': '로그인 시 실행 스크립트',
+        'description': 'Login execution scripts',
         'forensic_value': 'high',
         'category': 'persistence',
         'os_type': 'linux',
@@ -535,7 +535,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/ld.so.conf',
             '/etc/ld.so.conf.d/*',
         ],
-        'description': '동적 라이브러리 프리로드 설정',
+        'description': 'Dynamic library preload settings',
         'forensic_value': 'critical',
         'category': 'persistence',
         'os_type': 'linux',
@@ -547,14 +547,14 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/modprobe.d/*',
             '/etc/modules-load.d/*',
         ],
-        'description': '커널 모듈 설정',
+        'description': 'Kernel module settings',
         'forensic_value': 'high',
         'category': 'persistence',
         'os_type': 'linux',
     },
 
     # ==========================================================================
-    # Browser Artifacts (브라우저 아티팩트)
+    # Browser Artifacts
     # ==========================================================================
 
     'linux_firefox': {
@@ -565,7 +565,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.mozilla/firefox/*.default*/logins.json',
             '/home/*/.mozilla/firefox/*.default*/key4.db',
         ],
-        'description': 'Firefox 브라우저 데이터',
+        'description': 'Firefox browser data',
         'forensic_value': 'high',
         'category': 'browser',
         'os_type': 'linux',
@@ -580,7 +580,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.config/google-chrome/Default/Bookmarks',
             '/home/*/.config/google-chrome/Default/Web Data',
         ],
-        'description': 'Chrome 브라우저 데이터',
+        'description': 'Chrome browser data',
         'forensic_value': 'high',
         'category': 'browser',
         'os_type': 'linux',
@@ -593,7 +593,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.config/chromium/Default/Cookies',
             '/home/*/.config/chromium/Default/Login Data',
         ],
-        'description': 'Chromium 브라우저 데이터',
+        'description': 'Chromium browser data',
         'forensic_value': 'high',
         'category': 'browser',
         'os_type': 'linux',
@@ -601,7 +601,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
 
     # ==========================================================================
-    # Application Data (애플리케이션 데이터)
+    # Application Data
     # ==========================================================================
 
     'linux_docker': {
@@ -609,7 +609,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/lib/docker/containers/*/*.json',
             '/etc/docker/daemon.json',
         ],
-        'description': 'Docker 컨테이너 정보',
+        'description': 'Docker container information',
         'forensic_value': 'high',
         'category': 'applications',
         'os_type': 'linux',
@@ -621,7 +621,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/lib/mysql/*.err',
             '/home/*/.mysql_history',
         ],
-        'description': 'MySQL 로그 및 히스토리',
+        'description': 'MySQL logs and history',
         'forensic_value': 'high',
         'category': 'applications',
         'os_type': 'linux',
@@ -632,7 +632,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/postgresql/*.log',
             '/home/*/.psql_history',
         ],
-        'description': 'PostgreSQL 로그 및 히스토리',
+        'description': 'PostgreSQL logs and history',
         'forensic_value': 'high',
         'category': 'applications',
         'os_type': 'linux',
@@ -645,7 +645,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/httpd/access_log',
             '/var/log/httpd/error_log',
         ],
-        'description': 'Apache 웹 서버 로그',
+        'description': 'Apache web server logs',
         'forensic_value': 'high',
         'category': 'applications',
         'os_type': 'linux',
@@ -656,7 +656,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/log/nginx/access.log',
             '/var/log/nginx/error.log',
         ],
-        'description': 'Nginx 웹 서버 로그',
+        'description': 'Nginx web server logs',
         'forensic_value': 'high',
         'category': 'applications',
         'os_type': 'linux',
@@ -667,7 +667,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/home/*/.gitconfig',
             '/home/*/.git-credentials',
         ],
-        'description': 'Git 설정 및 자격 증명',
+        'description': 'Git settings and credentials',
         'forensic_value': 'medium',
         'category': 'applications',
         'os_type': 'linux',
@@ -675,7 +675,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
 
     # ==========================================================================
-    # System Configuration (시스템 설정)
+    # System Configuration
     # ==========================================================================
 
     'linux_os_release': {
@@ -685,7 +685,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/redhat-release',
             '/etc/debian_version',
         ],
-        'description': 'OS 버전 정보',
+        'description': 'OS version information',
         'forensic_value': 'medium',
         'category': 'system_config',
         'os_type': 'linux',
@@ -696,7 +696,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/hostname',
             '/etc/machine-id',
         ],
-        'description': '호스트명 및 머신 ID',
+        'description': 'Hostname and machine ID',
         'forensic_value': 'medium',
         'category': 'system_config',
         'os_type': 'linux',
@@ -706,7 +706,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'paths': [
             '/etc/fstab',
         ],
-        'description': '파일 시스템 마운트 설정',
+        'description': 'File system mount settings',
         'forensic_value': 'medium',
         'category': 'system_config',
         'os_type': 'linux',
@@ -717,7 +717,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/etc/timezone',
             '/etc/localtime',
         ],
-        'description': '시간대 설정',
+        'description': 'Timezone settings',
         'forensic_value': 'low',
         'category': 'system_config',
         'os_type': 'linux',
@@ -730,7 +730,7 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
 # ==============================================================================
 
 def get_linux_artifacts_by_category(category: str) -> Dict[str, Dict[str, Any]]:
-    """카테고리별 Linux 아티팩트 반환"""
+    """Return Linux artifacts by category"""
     return {
         k: v for k, v in LINUX_ARTIFACT_FILTERS.items()
         if v.get('category') == category
@@ -738,7 +738,7 @@ def get_linux_artifacts_by_category(category: str) -> Dict[str, Dict[str, Any]]:
 
 
 def get_linux_artifacts_by_forensic_value(value: str) -> Dict[str, Dict[str, Any]]:
-    """포렌식 가치별 Linux 아티팩트 반환"""
+    """Return Linux artifacts by forensic value"""
     return {
         k: v for k, v in LINUX_ARTIFACT_FILTERS.items()
         if v.get('forensic_value') == value
@@ -746,7 +746,7 @@ def get_linux_artifacts_by_forensic_value(value: str) -> Dict[str, Dict[str, Any
 
 
 def get_all_linux_artifact_paths() -> List[str]:
-    """모든 Linux 아티팩트 경로 반환 (와일드카드 포함)"""
+    """Return all Linux artifact paths (including wildcards)"""
     paths = []
     for config in LINUX_ARTIFACT_FILTERS.values():
         paths.extend(config.get('paths', []))
@@ -754,7 +754,7 @@ def get_all_linux_artifact_paths() -> List[str]:
 
 
 def get_linux_categories() -> List[str]:
-    """Linux 아티팩트 카테고리 목록 반환"""
+    """Return list of Linux artifact categories"""
     categories = set()
     for config in LINUX_ARTIFACT_FILTERS.values():
         if 'category' in config:
@@ -762,7 +762,7 @@ def get_linux_categories() -> List[str]:
     return sorted(list(categories))
 
 
-# 아티팩트 통계
+# Artifact statistics
 LINUX_ARTIFACT_STATS = {
     'total_artifacts': len(LINUX_ARTIFACT_FILTERS),
     'categories': get_linux_categories(),

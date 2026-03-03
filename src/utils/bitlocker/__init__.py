@@ -2,17 +2,17 @@
 """
 BitLocker Module for Forensic Collector
 
-BitLocker 암호화 볼륨 감지 및 복호화 지원
+Detection and decryption support for BitLocker encrypted volumes.
 
-주요 클래스:
-- BitLockerDecryptor: 고수준 복호화 API
-- BitLockerBackend: pybde 래퍼
-- PhysicalDiskBackend: Windows 물리 디스크 접근
+Main Classes:
+- BitLockerDecryptor: High-level decryption API
+- BitLockerBackend: pybde wrapper
+- PhysicalDiskBackend: Windows physical disk access
 
-지원 키 타입:
-- Recovery Password (48자리 숫자)
-- Password (일반 비밀번호)
-- BEK File (.BEK 시작 키 파일)
+Supported Key Types:
+- Recovery Password (48-digit number)
+- Password (regular password)
+- BEK File (.BEK startup key file)
 
 Usage:
     from utils.bitlocker import (
@@ -22,20 +22,21 @@ Usage:
         is_pybde_installed
     )
 
-    # BitLocker 볼륨 감지
+    # Detect BitLocker volume
     result = detect_bitlocker_on_system_drive()
     if result.is_encrypted:
         print(f"BitLocker detected at partition {result.partition_index}")
 
-    # 복호화
+    # Decryption
     if is_pybde_installed():
         decryptor = BitLockerDecryptor.from_physical_disk(0, result.partition_index)
-        unlock_result = decryptor.unlock_with_recovery_password("123456-234567-...")
+        # Recovery password: 8 groups of 6 digits separated by dashes
+        unlock_result = decryptor.unlock_with_recovery_password("<YOUR-RECOVERY-KEY>")
         if unlock_result.success:
             reader = decryptor.get_decrypted_reader()
 """
 
-# 예외 클래스
+# Exception classes
 from .unified_disk_reader import (
     BitLockerError,
     BitLockerKeyRequired,
@@ -48,21 +49,21 @@ from .unified_disk_reader import (
     PartitionInfo
 )
 
-# 키 타입
+# Key types
 from .bitlocker_backend import (
     BitLockerKeyType,
     BitLockerVolumeInfo,
     is_pybde_available
 )
 
-# 고수준 API
+# High-level API
 from .bitlocker_decryptor import (
     BitLockerDecryptor,
     BitLockerUnlockResult,
     BitLockerPartitionInfo
 )
 
-# 유틸리티
+# Utilities
 from .bitlocker_utils import (
     detect_bitlocker_on_system_drive,
     detect_bitlocker_partitions,
@@ -70,7 +71,7 @@ from .bitlocker_utils import (
     format_recovery_password,
     validate_recovery_password,
     BitLockerVolumeDetectionResult,
-    # manage-bde 기반 자동 해제/재암호화
+    # manage-bde based auto unlock/re-encryption
     ManageBdeResult,
     check_admin_privileges,
     get_bitlocker_status,
@@ -78,7 +79,7 @@ from .bitlocker_utils import (
     enable_bitlocker
 )
 
-# 디스크 백엔드
+# Disk backends
 from .disk_backends import (
     PhysicalDiskBackend,
     E01DiskBackend,
@@ -87,7 +88,7 @@ from .disk_backends import (
 )
 
 __all__ = [
-    # 예외
+    # Exceptions
     'BitLockerError',
     'BitLockerKeyRequired',
     'BitLockerInvalidKey',
@@ -97,7 +98,7 @@ __all__ = [
     'DiskPermissionError',
     'DiskReadError',
 
-    # 데이터 클래스
+    # Data classes
     'BitLockerKeyType',
     'BitLockerVolumeInfo',
     'BitLockerUnlockResult',
@@ -105,24 +106,24 @@ __all__ = [
     'BitLockerVolumeDetectionResult',
     'PartitionInfo',
 
-    # 메인 클래스
+    # Main class
     'BitLockerDecryptor',
 
-    # 유틸리티 함수
+    # Utility functions
     'detect_bitlocker_on_system_drive',
     'detect_bitlocker_partitions',
     'is_pybde_installed',
     'is_pybde_available',
     'format_recovery_password',
     'validate_recovery_password',
-    # manage-bde 기반 자동 해제/재암호화
+    # manage-bde based auto unlock/re-encryption
     'ManageBdeResult',
     'check_admin_privileges',
     'get_bitlocker_status',
     'disable_bitlocker',
     'enable_bitlocker',
 
-    # 디스크 백엔드
+    # Disk backends
     'PhysicalDiskBackend',
     'E01DiskBackend',
     'RAWImageBackend',

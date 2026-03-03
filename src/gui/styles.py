@@ -2,8 +2,8 @@
 """
 Platform Unified Theme Stylesheet
 
-웹 플랫폼과 동일한 다크 테마를 PyQt6용으로 구현합니다.
-Claude AI 영감의 브랜드 색상을 사용합니다.
+Implements a dark theme for PyQt6, matching the web platform.
+Uses brand colors inspired by Claude AI.
 
 Usage:
     from gui.styles import get_platform_stylesheet, COLORS
@@ -18,7 +18,7 @@ Usage:
 # =============================================================================
 
 COLORS = {
-    # 배경색
+    # Background colors
     'bg_primary': '#0d1117',
     'bg_secondary': '#161b22',
     'bg_tertiary': '#21262d',
@@ -26,19 +26,19 @@ COLORS = {
     'bg_hover': '#30363d',
     'bg_active': '#484f58',
 
-    # 텍스트색
+    # Text colors
     'text_primary': '#f0f6fc',
     'text_secondary': '#8b949e',
     'text_tertiary': '#6e7681',
     'text_link': '#58a6ff',
 
-    # 브랜드색 (Claude 영감)
+    # Brand colors (Claude inspired)
     'brand_primary': '#d4a574',
     'brand_secondary': '#b8956e',
     'brand_tertiary': '#9c7d5c',
     'brand_accent': '#e8c49a',
 
-    # 상태색
+    # Status colors
     'success': '#3fb950',
     'success_bg': 'rgba(63, 185, 80, 0.15)',
     'warning': '#d29922',
@@ -48,12 +48,12 @@ COLORS = {
     'info': '#58a6ff',
     'info_bg': 'rgba(88, 166, 255, 0.15)',
 
-    # 테두리색
+    # Border colors
     'border_subtle': '#30363d',
     'border_default': '#484f58',
     'border_muted': '#21262d',
 
-    # 아티팩트 유형별 색상
+    # Artifact type colors
     'artifact_registry': '#60a5fa',
     'artifact_prefetch': '#34d399',
     'artifact_eventlog': '#a78bfa',
@@ -71,10 +71,10 @@ COLORS = {
 
 def get_platform_stylesheet() -> str:
     """
-    플랫폼 통일 스타일시트 반환
+    Returns the platform unified stylesheet.
 
     Returns:
-        PyQt6용 QSS 스타일시트 문자열
+        QSS stylesheet string for PyQt6
     """
     return f"""
     /* =========================================
@@ -606,13 +606,13 @@ def get_platform_stylesheet() -> str:
 
 def get_status_color(status: str) -> str:
     """
-    상태에 따른 색상 반환
+    Returns color based on status.
 
     Args:
         status: 'ready', 'busy', 'error', 'locked'
 
     Returns:
-        색상 코드
+        Color code
     """
     status_colors = {
         'ready': COLORS['success'],
@@ -625,13 +625,13 @@ def get_status_color(status: str) -> str:
 
 def get_device_type_color(device_type: str) -> str:
     """
-    디바이스 유형에 따른 색상 반환
+    Returns color based on device type.
 
     Args:
-        device_type: 디바이스 유형 문자열
+        device_type: Device type string
 
     Returns:
-        색상 코드
+        Color code
     """
     type_colors = {
         'WINDOWS_PHYSICAL_DISK': '#60a5fa',  # blue

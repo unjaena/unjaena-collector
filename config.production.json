@@ -1,9 +1,10 @@
 {
-    "_comment": "운영 빌드용 설정. 빌드 전 server_url을 실제 도메인으로 변경하세요.",
+    "_comment": "운영 빌드용 설정. 빌드 전 server_url과 hmac_key를 실제 값으로 변경하세요.",
     "server_url": "https://YOUR-PRODUCTION-DOMAIN.com",
     "ws_url": "wss://YOUR-PRODUCTION-DOMAIN.com",
     "dev_mode": false,
     "allow_insecure": false,
     "version": "2.0.0",
-    "app_name": "Digital Forensics Collector"
+    "app_name": "Digital Intelligence Collector",
+    "hmac_key": "CHANGE-ME-TO-YOUR-SECRET-KEY"
 }

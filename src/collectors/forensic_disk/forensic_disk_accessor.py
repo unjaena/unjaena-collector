@@ -1,35 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-Forensic Disk Accessor - 통합 포렌식 디스크 접근 API
+Forensic Disk Accessor - Unified Forensic Disk Access API
 
-로컬 물리 디스크와 E01/RAW 이미지를 동일한 인터페이스로 접근합니다.
-Windows 파일시스템을 완전히 우회하여 잠긴 파일도 읽을 수 있습니다.
+Accesses local physical disks and E01/RAW images through a unified interface.
+Completely bypasses Windows filesystem to read locked files.
 
 Features:
-- 물리 디스크 (\\\\.\\PhysicalDrive{N}) 접근
-- E01/EWF 포렌식 이미지 접근
-- RAW/DD 이미지 파일 접근
-- 파티션 자동 탐지 (MBR/GPT)
-- 파일시스템 자동 감지 (NTFS, FAT32, exFAT)
-- MFT/FAT 기반 파일 읽기
-- 삭제된 파일 복구
-- ADS (Alternate Data Streams) 지원
+- Physical disk (\\\\.\\PhysicalDrive{N}) access
+- E01/EWF forensic image access
+- RAW/DD image file access
+- Automatic partition detection (MBR/GPT)
+- Automatic filesystem detection (NTFS, FAT32, exFAT)
+- MFT/FAT based file reading
+- Deleted file recovery
+- ADS (Alternate Data Streams) support
 
 Usage:
     from core.engine.collectors.filesystem.forensic_disk_accessor import ForensicDiskAccessor
 
-    # 물리 디스크 접근
+    # Physical disk access
     with ForensicDiskAccessor.from_physical_disk(0) as disk:
         disk.select_partition(0)  # C:
         data = disk.read_file("/Windows/System32/config/SYSTEM")
 
-    # E01 이미지 접근
+    # E01 image access
     with ForensicDiskAccessor.from_e01("evidence.E01") as disk:
         disk.select_partition(0)
         for chunk in disk.stream_file("/pagefile.sys"):
             analyze(chunk)
 
-    # 삭제된 파일 포함 전체 스캔
+    # Full scan including deleted files
     catalog = disk.scan_all_files(include_deleted=True)
 """
 
@@ -65,13 +65,13 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 
 class PartitionTableType:
-    """파티션 테이블 타입"""
+    """Partition table type"""
     MBR = "mbr"
     GPT = "gpt"
     UNKNOWN = "unknown"
 
 
-# GPT 파티션 타입 GUID (주요 타입만)
+# GPT partition type GUIDs (major types only)
 GPT_TYPE_GUIDS = {
     "C12A7328-F81F-11D2-BA4B-00A0C93EC93B": "EFI System",
     "E3C9E316-0B5C-4DB8-817D-F92DF00215AE": "Microsoft Reserved",
@@ -84,7 +84,7 @@ GPT_TYPE_GUIDS = {
     "933AC7E1-2EB4-4F13-B844-0E14E2AEF915": "Linux home",
 }
 
-# MBR 파티션 타입
+# MBR partition types
 MBR_PARTITION_TYPES = {
     0x00: "Empty",
     0x01: "FAT12",
@@ -116,7 +116,7 @@ MBR_PARTITION_TYPES = {
 
 @dataclass
 class FileCatalogEntry:
-    """파일 카탈로그 엔트리"""
+    """File catalog entry"""
     inode: int
     filename: str
     full_path: str = ""
@@ -135,7 +135,7 @@ class FileCatalogEntry:
 
     @property
     def name(self) -> str:
-        """filename 별칭 (호환성)"""
+        """Alias for filename (compatibility)"""
         return self.filename
 
 
@@ -145,10 +145,10 @@ class FileCatalogEntry:
 
 class ForensicDiskAccessor:
     """
-    통합 포렌식 디스크 접근 API
+    Unified Forensic Disk Access API
 
-    로컬 디스크와 E01 이미지를 동일한 인터페이스로 접근합니다.
-    Windows 파일시스템을 우회하여 raw sector 기반으로 파일을 읽습니다.
+    Accesses local disks and E01 images through a unified interface.
+    Reads files on raw sector basis, bypassing Windows filesystem.
 
     Usage:
         # Factory methods
@@ -171,7 +171,7 @@ class ForensicDiskAccessor:
     def __init__(self, backend: UnifiedDiskReader):
         """
         Args:
-            backend: UnifiedDiskReader 구현체
+            backend: UnifiedDiskReader implementation
         """
         self._backend = backend
         self._partitions: List[PartitionInfo] = []
@@ -179,17 +179,17 @@ class ForensicDiskAccessor:
         self._selected_partition: Optional[int] = None
         self._extractor: Optional[FileContentExtractor] = None
 
-        # MFT 인덱스 캐시 (경로 → inode)
+        # MFT index cache (path -> inode)
         self._path_cache: Dict[str, int] = {}
 
-        # MFT 부모-자식 인덱스 캐시 (parent_inode → [child_inodes])
+        # MFT parent-child index cache (parent_inode -> [child_inodes])
         self._parent_child_index: Dict[int, List[int]] = {}
         self._parent_index_built: bool = False
 
-        # 파일명 맵 캐시 ((parent_inode, lowercase_name) → inode)
+        # Filename map cache ((parent_inode, lowercase_name) -> inode)
         self._name_to_inode_map: Dict[tuple, int] = {}
 
-        # 파티션 탐지
+        # Partition detection
         self._detect_partitions()
 
     # ==========================================================================
@@ -199,17 +199,17 @@ class ForensicDiskAccessor:
     @classmethod
     def from_physical_disk(cls, drive_number: int) -> 'ForensicDiskAccessor':
         """
-        물리 디스크에서 접근자 생성
+        Create accessor from physical disk
 
         Args:
-            drive_number: 드라이브 번호 (0, 1, 2, ...)
+            drive_number: Drive number (0, 1, 2, ...)
 
         Returns:
-            ForensicDiskAccessor 인스턴스
+            ForensicDiskAccessor instance
 
         Raises:
-            DiskNotFoundError: 드라이브를 찾을 수 없음
-            DiskPermissionError: 관리자 권한 필요
+            DiskNotFoundError: Drive not found
+            DiskPermissionError: Administrator privileges required
         """
         backend = PhysicalDiskBackend(drive_number)
         return cls(backend)
@@ -217,16 +217,16 @@ class ForensicDiskAccessor:
     @classmethod
     def from_e01(cls, e01_path: str) -> 'ForensicDiskAccessor':
         """
-        E01 이미지에서 접근자 생성
+        Create accessor from E01 image
 
         Args:
-            e01_path: E01 파일 경로 (.E01, .E02, ... 자동 탐지)
+            e01_path: E01 file path (.E01, .E02, ... auto-detected)
 
         Returns:
-            ForensicDiskAccessor 인스턴스
+            ForensicDiskAccessor instance
 
         Raises:
-            DiskNotFoundError: 파일을 찾을 수 없음
+            DiskNotFoundError: File not found
         """
         backend = E01DiskBackend(e01_path)
         return cls(backend)
@@ -234,13 +234,13 @@ class ForensicDiskAccessor:
     @classmethod
     def from_raw(cls, raw_path: str) -> 'ForensicDiskAccessor':
         """
-        RAW/DD 이미지에서 접근자 생성
+        Create accessor from RAW/DD image
 
         Args:
-            raw_path: RAW 이미지 파일 경로
+            raw_path: RAW image file path
 
         Returns:
-            ForensicDiskAccessor 인스턴스
+            ForensicDiskAccessor instance
         """
         backend = RAWImageBackend(raw_path)
         return cls(backend)
@@ -248,13 +248,13 @@ class ForensicDiskAccessor:
     @classmethod
     def auto_detect(cls, source: str) -> 'ForensicDiskAccessor':
         """
-        소스 타입 자동 감지하여 접근자 생성
+        Create accessor by auto-detecting source type
 
         Args:
-            source: 디스크 번호(숫자) 또는 이미지 파일 경로
+            source: Disk number (numeric) or image file path
 
         Returns:
-            ForensicDiskAccessor 인스턴스
+            ForensicDiskAccessor instance
         """
         backend = create_disk_backend(source)
         return cls(backend)
@@ -264,50 +264,112 @@ class ForensicDiskAccessor:
     # ==========================================================================
 
     def _detect_partitions(self):
-        """파티션 테이블 탐지 (MBR/GPT)"""
-        # MBR 읽기
-        mbr = self._backend.read(0, 512)
+        """Detect partition table (MBR/GPT/Volume Image)"""
+        # [2026-01] Volume image support: check filesystem signature first
+        # Both MBR and VBR have 0x55AA at bytes 510-511,
+        # so we need to check NTFS/FAT filesystem signatures first
+        first_sector = self._backend.read(0, 512)
 
-        # MBR 시그니처 확인
-        if mbr[510:512] != b'\x55\xAA':
-            logger.warning("Invalid MBR signature")
+        # Check NTFS VBR signature (bytes 3-10: "NTFS    ")
+        if first_sector[3:11] == b'NTFS    ':
+            self._create_volume_image_partition('NTFS')
             return
 
-        # GPT 확인 (Protective MBR의 파티션 타입 0xEE)
-        if mbr[450] == 0xEE:
+        # Check BitLocker signature (bytes 3-10: "-FVE-FS-")
+        if first_sector[3:11] == b'-FVE-FS-':
+            self._create_volume_image_partition('BitLocker')
+            return
+
+        # Check exFAT signature (bytes 3-10: "EXFAT   ")
+        if first_sector[3:11] == b'EXFAT   ':
+            self._create_volume_image_partition('exFAT')
+            return
+
+        # Check FAT32 signature (bytes 82-89: "FAT32   ")
+        if first_sector[82:90] == b'FAT32   ':
+            self._create_volume_image_partition('FAT32')
+            return
+
+        # Check FAT16/FAT12 signature (bytes 54-61)
+        if first_sector[54:62] in (b'FAT16   ', b'FAT12   '):
+            fs = 'FAT16' if first_sector[54:62] == b'FAT16   ' else 'FAT12'
+            self._create_volume_image_partition(fs)
+            return
+
+        # Check MBR signature
+        if first_sector[510:512] != b'\x55\xAA':
+            # No MBR signature and no filesystem signature
+            # Check additional filesystems (ext, APFS, HFS+, etc.)
+            fs_type = self._detect_filesystem(0)
+            if fs_type != "Unknown":
+                self._create_volume_image_partition(fs_type)
+                return
+            logger.warning("Invalid MBR signature and no filesystem detected at offset 0")
+            return
+
+        # Check GPT (Protective MBR partition type 0xEE)
+        if first_sector[450] == 0xEE:
             self._partition_table_type = PartitionTableType.GPT
             self._parse_gpt()
         else:
             self._partition_table_type = PartitionTableType.MBR
-            self._parse_mbr(mbr)
+            self._parse_mbr(first_sector)
 
         logger.info(f"Detected {self._partition_table_type.upper()} with {len(self._partitions)} partition(s)")
 
+    def _create_volume_image_partition(self, fs_type: str):
+        """Create volume image as a single partition"""
+        self._partition_table_type = "volume"  # Volume image
+        total_size = self._backend.get_size()
+
+        # Determine partition type code
+        type_codes = {
+            'NTFS': 0x07, 'BitLocker': 0x07,
+            'FAT32': 0x0B, 'FAT16': 0x06, 'FAT12': 0x01,
+            'exFAT': 0x07, 'ext4': 0x83, 'ext3': 0x83, 'ext2': 0x83,
+            'APFS': 0xAF, 'HFS+': 0xAF,
+        }
+        ptype = type_codes.get(fs_type, 0x07)
+
+        partition = PartitionInfo(
+            index=0,
+            partition_type=ptype,
+            type_name=f"Volume Image ({fs_type})",
+            offset=0,
+            size=total_size,
+            lba_start=0,
+            sector_count=total_size // 512,
+            filesystem=fs_type,
+            is_bootable=False
+        )
+        self._partitions.append(partition)
+        logger.info(f"Detected volume image: {fs_type}, size={total_size / (1024**3):.2f} GB")
+
     def _parse_mbr(self, mbr: bytes):
-        """MBR 파티션 테이블 파싱"""
+        """Parse MBR partition table"""
         sector_size = 512
 
         for i in range(4):
             entry_offset = 446 + (i * 16)
             entry = mbr[entry_offset:entry_offset + 16]
 
-            # 파티션 타입
+            # Partition type
             partition_type = entry[4]
 
             if partition_type == 0:
                 continue
 
-            # LBA 시작 및 섹터 수
+            # LBA start and sector count
             lba_start = struct.unpack('<I', entry[8:12])[0]
             sector_count = struct.unpack('<I', entry[12:16])[0]
 
             if lba_start == 0 or sector_count == 0:
                 continue
 
-            # 부팅 플래그
+            # Bootable flag
             bootable = entry[0] == 0x80
 
-            # 파일시스템 감지
+            # Detect filesystem
             fs_type = self._detect_filesystem(lba_start * sector_size)
 
             partition = PartitionInfo(
@@ -325,22 +387,22 @@ class ForensicDiskAccessor:
             self._partitions.append(partition)
 
     def _parse_gpt(self):
-        """GPT 파티션 테이블 파싱"""
+        """Parse GPT partition table"""
         sector_size = 512
 
-        # GPT 헤더 읽기 (LBA 1)
+        # Read GPT header (LBA 1)
         gpt_header = self._backend.read(sector_size, sector_size)
 
         if gpt_header[:8] != b'EFI PART':
             logger.warning("Invalid GPT signature")
             return
 
-        # 파티션 엔트리 정보
+        # Partition entry information
         partition_entry_lba = struct.unpack('<Q', gpt_header[72:80])[0]
         partition_entry_count = struct.unpack('<I', gpt_header[80:84])[0]
         partition_entry_size = struct.unpack('<I', gpt_header[84:88])[0]
 
-        # 파티션 엔트리 읽기
+        # Read partition entries
         entries_per_sector = sector_size // partition_entry_size
         entry_index = 0
 
@@ -354,27 +416,27 @@ class ForensicDiskAccessor:
                 entry_offset = i * partition_entry_size
                 entry = sector_data[entry_offset:entry_offset + partition_entry_size]
 
-                # 타입 GUID (빈 파티션은 모두 0)
+                # Type GUID (empty partition is all zeros)
                 type_guid_raw = entry[0:16]
                 if type_guid_raw == b'\x00' * 16:
                     entry_index += 1
                     continue
 
-                # GUID를 문자열로 변환
+                # Convert GUID to string
                 type_guid = self._bytes_to_guid(type_guid_raw)
 
-                # LBA 시작/끝
+                # LBA start/end
                 lba_start = struct.unpack('<Q', entry[32:40])[0]
                 lba_end = struct.unpack('<Q', entry[40:48])[0]
 
-                # 파티션 이름 (UTF-16LE)
+                # Partition name (UTF-16LE)
                 name_bytes = entry[56:128]
                 try:
                     name = name_bytes.decode('utf-16-le').rstrip('\x00')
                 except:
                     name = ""
 
-                # 파일시스템 감지
+                # Detect filesystem
                 fs_type = self._detect_filesystem(lba_start * sector_size)
 
                 partition = PartitionInfo(
@@ -394,8 +456,8 @@ class ForensicDiskAccessor:
                 entry_index += 1
 
     def _bytes_to_guid(self, data: bytes) -> str:
-        """바이트를 GUID 문자열로 변환"""
-        # GUID는 little-endian으로 저장됨
+        """Convert bytes to GUID string"""
+        # GUID is stored in little-endian format
         part1 = struct.unpack('<I', data[0:4])[0]
         part2 = struct.unpack('<H', data[4:6])[0]
         part3 = struct.unpack('<H', data[6:8])[0]
@@ -405,7 +467,7 @@ class ForensicDiskAccessor:
         return f"{part1:08X}-{part2:04X}-{part3:04X}-{part4}-{part5}"
 
     def _detect_filesystem(self, partition_offset: int) -> str:
-        """파일시스템 타입 감지 (NTFS, FAT, exFAT, ext2/3/4, APFS, HFS+ 지원)"""
+        """Detect filesystem type (supports NTFS, FAT, exFAT, ext2/3/4, APFS, HFS+)"""
         try:
             vbr = self._backend.read(partition_offset, 512)
 
@@ -434,11 +496,11 @@ class ForensicDiskAccessor:
                 return 'FAT12'
 
             # APFS Container Superblock (offset 32: 'NXSB')
-            # APFS는 파티션 시작이 아닌 offset 32에 시그니처가 있음
+            # APFS has signature at offset 32, not at partition start
             if len(vbr) >= 36 and vbr[32:36] == b'NXSB':
                 return 'APFS'
 
-            # APFS 대체 위치 체크 (일부 구성에서)
+            # Check alternative APFS location (in some configurations)
             apfs_check = self._backend.read(partition_offset, 64)
             if len(apfs_check) >= 36 and apfs_check[32:36] == b'NXSB':
                 return 'APFS'
@@ -456,20 +518,20 @@ class ForensicDiskAccessor:
             # ext2/3/4 (superblock at offset 1024, magic at offset 56)
             sb = self._backend.read(partition_offset + 1024, 100)
             if len(sb) >= 58 and struct.unpack('<H', sb[56:58])[0] == 0xEF53:
-                # ext 버전 구분 (feature flags)
+                # Distinguish ext version (feature flags)
                 if len(sb) >= 96:
                     compat_features = struct.unpack('<I', sb[92:96])[0] if len(sb) >= 96 else 0
                     incompat_features = struct.unpack('<I', sb[96:100])[0] if len(sb) >= 100 else 0
 
-                    # ext4 특징: extents (0x40), flex_bg (0x200)
+                    # ext4 features: extents (0x40), flex_bg (0x200)
                     if incompat_features & 0x40:  # EXTENTS feature
                         return 'ext4'
-                    # ext3 특징: journal (0x04)
+                    # ext3 features: journal (0x04)
                     elif incompat_features & 0x04:  # JOURNAL feature
                         return 'ext3'
                     else:
                         return 'ext2'
-                return 'ext4'  # 기본값
+                return 'ext4'  # Default
 
         except Exception as e:
             logger.debug(f"Filesystem detection failed: {e}")
@@ -478,23 +540,23 @@ class ForensicDiskAccessor:
 
     def list_partitions(self) -> List[PartitionInfo]:
         """
-        파티션 목록 반환
+        Return partition list
 
         Returns:
-            PartitionInfo 리스트
+            List of PartitionInfo
         """
         return self._partitions.copy()
 
     def select_partition(self, index: int) -> None:
         """
-        파티션 선택
+        Select partition
 
         Args:
-            index: 파티션 인덱스 (list_partitions의 순서)
+            index: Partition index (order from list_partitions)
 
         Raises:
-            PartitionError: 잘못된 인덱스
-            FilesystemError: BitLocker 암호화 파티션
+            PartitionError: Invalid index
+            FilesystemError: BitLocker encrypted partition
         """
         if index < 0 or index >= len(self._partitions):
             raise PartitionError(f"Invalid partition index: {index}")
@@ -502,7 +564,7 @@ class ForensicDiskAccessor:
         partition = self._partitions[index]
         self._selected_partition = index
 
-        # BitLocker 암호화 파티션 경고
+        # BitLocker encrypted partition warning
         if partition.filesystem == 'BitLocker':
             from .unified_disk_reader import BitLockerError
             raise BitLockerError(
@@ -511,10 +573,10 @@ class ForensicDiskAccessor:
                 f"Use BitLocker unlock key or mount the volume first."
             )
 
-        # FileContentExtractor 생성
-        # 지원 파일시스템: NTFS, FAT, exFAT, ext2/3/4, APFS, HFS+
+        # Create FileContentExtractor
+        # Supported filesystems: NTFS, FAT, exFAT, ext2/3/4, APFS, HFS+
         supported_fs = (
-            'NTFS', 'FAT32', 'FAT16', 'FAT12', 'exFAT',  # Windows/범용
+            'NTFS', 'FAT32', 'FAT16', 'FAT12', 'exFAT',  # Windows/Universal
             'ext2', 'ext3', 'ext4',  # Linux
             'APFS', 'HFS+', 'HFSX', 'HFS'  # macOS
         )
@@ -530,40 +592,40 @@ class ForensicDiskAccessor:
             self._extractor = None
             logger.warning(f"Unsupported filesystem: {partition.filesystem}")
 
-        # 캐시 초기화
+        # Initialize cache
         self._path_cache.clear()
 
     def find_windows_partition(self) -> Optional[int]:
         """
-        Windows 시스템 파티션 찾기 (BitLocker 제외)
+        Find Windows system partition (excluding BitLocker)
 
-        Recovery 파티션과 BitLocker 암호화 파티션을 제외하고
-        Windows가 설치된 NTFS 파티션을 찾습니다.
+        Finds NTFS partition with Windows installed,
+        excluding Recovery and BitLocker encrypted partitions.
 
         Returns:
-            파티션 인덱스 또는 None
+            Partition index or None
 
         Note:
-            - BitLocker 암호화 파티션은 건너뜁니다
-            - Recovery 파티션 (< 50GB)은 건너뜁니다
-            - 가장 큰 NTFS 파티션을 반환합니다
+            - Skips BitLocker encrypted partitions
+            - Skips Recovery partitions (< 50GB)
+            - Returns the largest NTFS partition
         """
         candidates = []
 
         for i, p in enumerate(self._partitions):
-            # BitLocker 제외
+            # Exclude BitLocker
             if p.filesystem == 'BitLocker':
                 logger.info(f"Partition {i}: BitLocker encrypted - skipping")
                 continue
 
-            # NTFS만 고려
+            # Consider NTFS only
             if p.filesystem != 'NTFS':
                 continue
 
-            # Recovery 파티션 제외 (보통 50GB 미만)
+            # Exclude Recovery partition (usually under 50GB)
             size_gb = p.size / (1024 * 1024 * 1024)
             if size_gb < 50:
-                # Recovery 여부 확인
+                # Check if Recovery
                 if 'Recovery' in p.name or 'recovery' in p.type_name.lower():
                     logger.info(f"Partition {i}: Recovery partition - skipping")
                     continue
@@ -574,7 +636,7 @@ class ForensicDiskAccessor:
             logger.warning("No suitable Windows partition found")
             return None
 
-        # 가장 큰 파티션 선택
+        # Select largest partition
         candidates.sort(key=lambda x: x[1], reverse=True)
         best_idx = candidates[0][0]
 
@@ -582,11 +644,11 @@ class ForensicDiskAccessor:
         return best_idx
 
     def has_bitlocker_partitions(self) -> bool:
-        """BitLocker 암호화 파티션 존재 여부"""
+        """Check if BitLocker encrypted partitions exist"""
         return any(p.filesystem == 'BitLocker' for p in self._partitions)
 
     def get_selected_partition(self) -> Optional[PartitionInfo]:
-        """선택된 파티션 정보 반환"""
+        """Return selected partition info"""
         if self._selected_partition is None:
             return None
         return self._partitions[self._selected_partition]
@@ -597,29 +659,29 @@ class ForensicDiskAccessor:
 
     def read_file(self, path: str, max_size: int = None) -> bytes:
         """
-        경로로 파일 읽기
+        Read file by path
 
         Args:
-            path: 파일 경로 (예: "/Windows/System32/config/SYSTEM")
-            max_size: 최대 읽기 크기
+            path: File path (e.g., "/Windows/System32/config/SYSTEM")
+            max_size: Maximum read size
 
         Returns:
-            파일 내용 (bytes)
+            File content (bytes)
 
         Raises:
-            FilesystemError: 파일을 찾을 수 없음
+            FilesystemError: File not found
         """
         if self._extractor is None:
             raise FilesystemError("No partition selected or unsupported filesystem")
 
-        # 경로 정규화
+        # Normalize path
         path = self._normalize_path(path)
 
-        # 캐시에서 inode 찾기
+        # Find inode from cache
         if path in self._path_cache:
             return self._extractor.read_file_by_inode(self._path_cache[path], max_size=max_size)
 
-        # MFT에서 파일 찾기
+        # Find file in MFT
         inode = self._resolve_path_to_inode(path)
         if inode is None:
             raise FilesystemError(f"File not found: {path}")
@@ -634,15 +696,15 @@ class ForensicDiskAccessor:
         max_size: int = None
     ) -> bytes:
         """
-        MFT entry 번호로 파일 읽기
+        Read file by MFT entry number
 
         Args:
-            inode: MFT entry 번호
-            stream_name: ADS 이름 (예: "Zone.Identifier")
-            max_size: 최대 읽기 크기
+            inode: MFT entry number
+            stream_name: ADS name (e.g., "Zone.Identifier")
+            max_size: Maximum read size
 
         Returns:
-            파일 내용 (bytes)
+            File content (bytes)
         """
         if self._extractor is None:
             raise FilesystemError("No partition selected or unsupported filesystem")
@@ -655,14 +717,14 @@ class ForensicDiskAccessor:
         chunk_size: int = 64 * 1024 * 1024
     ) -> Generator[bytes, None, None]:
         """
-        대용량 파일 스트리밍
+        Stream large file
 
         Args:
-            path: 파일 경로
-            chunk_size: 청크 크기 (기본 64MB)
+            path: File path
+            chunk_size: Chunk size (default 64MB)
 
         Yields:
-            파일 데이터 청크
+            File data chunks
         """
         if self._extractor is None:
             raise FilesystemError("No partition selected")
@@ -682,15 +744,15 @@ class ForensicDiskAccessor:
         chunk_size: int = 64 * 1024 * 1024
     ) -> Generator[bytes, None, None]:
         """
-        MFT entry로 대용량 파일 스트리밍
+        Stream large file by MFT entry
 
         Args:
-            inode: MFT entry 번호
-            stream_name: ADS 이름
-            chunk_size: 청크 크기
+            inode: MFT entry number
+            stream_name: ADS name
+            chunk_size: Chunk size
 
         Yields:
-            파일 데이터 청크
+            File data chunks
         """
         if self._extractor is None:
             raise FilesystemError("No partition selected")
@@ -699,13 +761,13 @@ class ForensicDiskAccessor:
 
     def get_file_metadata(self, inode: int) -> FileMetadata:
         """
-        파일 메타데이터 조회
+        Get file metadata
 
         Args:
-            inode: MFT entry 번호
+            inode: MFT entry number
 
         Returns:
-            FileMetadata 객체
+            FileMetadata object
         """
         if self._extractor is None:
             raise FilesystemError("No partition selected")
@@ -714,13 +776,13 @@ class ForensicDiskAccessor:
 
     def list_ads_streams(self, inode: int) -> List[str]:
         """
-        파일의 ADS 목록 조회
+        List file's ADS streams
 
         Args:
-            inode: MFT entry 번호
+            inode: MFT entry number
 
         Returns:
-            ADS 이름 리스트 (예: ["Zone.Identifier", "encryptable"])
+            List of ADS names (e.g., ["Zone.Identifier", "encryptable"])
         """
         if self._extractor is None:
             raise FilesystemError("No partition selected")
@@ -729,13 +791,13 @@ class ForensicDiskAccessor:
 
     def path_exists(self, path: str) -> bool:
         """
-        경로 존재 여부 확인
+        Check if path exists
 
         Args:
-            path: 파일/디렉토리 경로
+            path: File/directory path
 
         Returns:
-            존재 여부
+            Existence status
         """
         if self._extractor is None:
             return False
@@ -749,13 +811,13 @@ class ForensicDiskAccessor:
 
     def is_directory(self, path: str) -> bool:
         """
-        경로가 디렉토리인지 확인
+        Check if path is a directory
 
         Args:
-            path: 경로
+            path: Path
 
         Returns:
-            디렉토리 여부
+            Whether it is a directory
         """
         if self._extractor is None:
             return False
@@ -773,36 +835,36 @@ class ForensicDiskAccessor:
 
     def _get_mft_entry_count(self) -> int:
         """
-        MFT 전체 엔트리 수 추정
+        Estimate total MFT entry count
 
-        $MFT 파일 크기를 기반으로 전체 엔트리 수를 계산합니다.
+        Calculates total entry count based on $MFT file size.
         """
         try:
-            # $MFT 메타데이터에서 크기 가져오기
+            # Get size from $MFT metadata
             mft_metadata = self._extractor.get_file_metadata(0)
             if mft_metadata and mft_metadata.size > 0:
-                # MFT 엔트리 크기는 일반적으로 1024 바이트
+                # MFT entry size is typically 1024 bytes
                 entry_count = mft_metadata.size // 1024
                 logger.debug(f"MFT size: {mft_metadata.size} bytes, estimated entries: {entry_count}")
                 return entry_count
         except Exception as e:
             logger.debug(f"Failed to get MFT size: {e}")
 
-        # 기본값: 500만 엔트리 (대용량 이미지 지원)
+        # Default: 5 million entries (supports large images)
         return 5000000
 
     def _build_parent_index(self) -> None:
         """
-        MFT 부모-자식 인덱스 구축 (최초 1회만 실행)
+        Build MFT parent-child index (runs only once)
 
-        MFT 전체를 순회하여 parent_inode → [child_inodes] 맵을 생성합니다.
-        이후 list_directory() 호출 시 O(1)로 자식을 조회할 수 있습니다.
+        Traverses the entire MFT to create a parent_inode -> [child_inodes] map.
+        Subsequent list_directory() calls can look up children in O(1).
 
-        또한 파일명 → inode 맵도 구축하여 대소문자 무관 검색을 지원합니다.
+        Also builds a filename -> inode map to support case-insensitive search.
 
-        디지털 포렌식 원칙:
-        - MFT 엔트리 수 제한 없음 (동적으로 전체 크기 감지)
-        - 삭제되지 않은 파일만 인덱싱 (list_directory 용)
+        Digital forensics principles:
+        - No MFT entry count limit (dynamically detects total size)
+        - Only indexes non-deleted files (for list_directory)
         """
         if self._parent_index_built or self._extractor is None:
             return
@@ -812,7 +874,7 @@ class ForensicDiskAccessor:
         self._name_to_inode_map = {}  # (parent_inode, lowercase_name) -> inode
 
         try:
-            # MFT 전체 순회 - 동적 크기 감지 (제한 없음)
+            # Full MFT traversal - dynamic size detection (no limit)
             max_entries = self._get_mft_entry_count()
             logger.info(f"MFT index building: scanning up to {max_entries:,} entries")
             consecutive_errors = 0
@@ -823,7 +885,7 @@ class ForensicDiskAccessor:
                 try:
                     entry_data = self._extractor.read_mft_entry(entry_num)
 
-                    # 유효하지 않은 엔트리 건너뛰기
+                    # Skip invalid entries
                     if entry_data[:4] != b'FILE':
                         consecutive_errors += 1
                         if consecutive_errors > max_consecutive_errors:
@@ -834,14 +896,14 @@ class ForensicDiskAccessor:
                     consecutive_errors = 0
                     metadata = self._extractor.get_file_metadata(entry_num)
 
-                    # 삭제되지 않은 항목만 인덱스에 추가
+                    # Only add non-deleted items to index
                     if not metadata.is_deleted:
                         parent = metadata.parent_ref
                         if parent not in self._parent_child_index:
                             self._parent_child_index[parent] = []
                         self._parent_child_index[parent].append(entry_num)
 
-                        # 파일명 맵에 추가 (대소문자 무관 검색용)
+                        # Add to filename map (for case-insensitive search)
                         key = (parent, metadata.filename.lower())
                         self._name_to_inode_map[key] = entry_num
                         indexed_count += 1
@@ -862,13 +924,13 @@ class ForensicDiskAccessor:
 
     def list_directory(self, path: str) -> List[FileCatalogEntry]:
         """
-        디렉토리 내용 조회 (인덱스 기반 O(1) 조회)
+        List directory contents (index-based O(1) lookup)
 
         Args:
-            path: 디렉토리 경로
+            path: Directory path
 
         Returns:
-            FileCatalogEntry 리스트
+            List of FileCatalogEntry
         """
         if self._extractor is None:
             return []
@@ -879,11 +941,11 @@ class ForensicDiskAccessor:
             if dir_inode is None:
                 return []
 
-            # 부모-자식 인덱스가 없으면 구축 (최초 1회)
+            # Build parent-child index if not exists (first time only)
             if not self._parent_index_built:
                 self._build_parent_index()
 
-            # 인덱스에서 자식 inode 목록 조회 (O(1))
+            # Look up child inode list from index (O(1))
             child_inodes = self._parent_child_index.get(dir_inode, [])
 
             results = []
@@ -891,7 +953,7 @@ class ForensicDiskAccessor:
                 try:
                     metadata = self._extractor.get_file_metadata(entry_num)
 
-                    # 삭제되지 않은 항목만 추가
+                    # Add only non-deleted items
                     if not metadata.is_deleted:
                         results.append(FileCatalogEntry(
                             inode=entry_num,
@@ -924,16 +986,16 @@ class ForensicDiskAccessor:
         progress_callback=None
     ) -> Dict[str, Any]:
         """
-        MFT 전체 스캔 (삭제된 파일 포함)
+        Full MFT scan (including deleted files)
 
-        디지털 포렌식 원칙:
-        - include_deleted=True (기본): 삭제 파일 포함
-        - max_entries=None (기본): 제한 없음, MFT 전체 스캔
+        Digital forensics principles:
+        - include_deleted=True (default): Include deleted files
+        - max_entries=None (default): No limit, scan entire MFT
 
         Args:
-            include_deleted: 삭제된 파일 포함 여부 (기본: True)
-            max_entries: 최대 스캔할 엔트리 수 (기본: None=제한없음)
-            progress_callback: 진행률 콜백 (current, total)
+            include_deleted: Include deleted files (default: True)
+            max_entries: Maximum entries to scan (default: None=no limit)
+            progress_callback: Progress callback (current, total)
 
         Returns:
             {
@@ -941,7 +1003,7 @@ class ForensicDiskAccessor:
                 'active_files': List[FileCatalogEntry],
                 'deleted_files': List[FileCatalogEntry],
                 'directories': List[FileCatalogEntry],
-                'special_files': Dict[str, int],  # $MFT, $LogFile 등의 inode
+                'special_files': Dict[str, int],  # inode for $MFT, $LogFile, etc.
             }
         """
         if self._extractor is None:
@@ -956,37 +1018,37 @@ class ForensicDiskAccessor:
             'errors': []
         }
 
-        # inode -> (parent_inode, filename) 매핑 (full_path 계산용)
+        # inode -> (parent_inode, filename) mapping (for full_path calculation)
         inode_info: Dict[int, Tuple[int, str]] = {}
 
-        # MFT 크기 추정 (entry 0에서)
+        # Estimate MFT size (from entry 0)
         entry_0 = self._extractor.read_mft_entry(0)
         if entry_0[:4] != b'FILE':
             return result
 
-        # MFT 전체 엔트리 수 계산 (동적)
+        # Calculate total MFT entry count (dynamic)
         total_mft_entries = self._get_mft_entry_count()
         if max_entries:
             total_mft_entries = min(total_mft_entries, max_entries)
 
         logger.info(f"Scanning MFT: {total_mft_entries:,} entries (max)")
 
-        # MFT 엔트리 순회
+        # Traverse MFT entries
         entry_num = 0
-        skip_count = 0  # 스킵된 빈 엔트리 수
+        skip_count = 0  # Count of skipped empty entries
 
         while entry_num < total_mft_entries:
             try:
                 entry = self._extractor.read_mft_entry(entry_num)
 
-                # 유효한 엔트리인지 확인 - 빈 엔트리는 스킵 (오류 아님)
+                # Check if valid entry - skip empty entries (not an error)
                 if entry[:4] != b'FILE':
                     skip_count += 1
                     entry_num += 1
                     continue
                 result['total_entries'] += 1
 
-                # 메타데이터 추출
+                # Extract metadata
                 try:
                     metadata = self._extractor.get_file_metadata(entry_num)
                 except Exception as e:
@@ -994,10 +1056,10 @@ class ForensicDiskAccessor:
                     entry_num += 1
                     continue
 
-                # inode -> (parent, name) 맵에 저장 (full_path 계산용)
+                # Store in inode -> (parent, name) map (for full_path calculation)
                 inode_info[entry_num] = (metadata.parent_ref, metadata.filename)
 
-                # 카탈로그 엔트리 생성
+                # Create catalog entry
                 catalog_entry = FileCatalogEntry(
                     inode=entry_num,
                     filename=metadata.filename,
@@ -1011,7 +1073,7 @@ class ForensicDiskAccessor:
                     ads_streams=metadata.ads_streams
                 )
 
-                # 특수 시스템 파일 ($MFT, $LogFile 등)
+                # Special system files ($MFT, $LogFile, etc.)
                 if metadata.filename.startswith('$') and entry_num < 24:
                     result['special_files'][metadata.filename] = entry_num
                 elif metadata.is_directory:
@@ -1022,13 +1084,13 @@ class ForensicDiskAccessor:
                 else:
                     result['active_files'].append(catalog_entry)
 
-                # 진행률 콜백
+                # Progress callback
                 if progress_callback and entry_num % 1000 == 0:
                     progress_callback(entry_num, max_entries or entry_num)
 
             except Exception as e:
                 result['errors'].append((entry_num, str(e)))
-                # 오류가 있어도 계속 진행 (디지털 포렌식 원칙: 완전 수집)
+                # Continue even on error (digital forensics principle: complete collection)
 
             entry_num += 1
 
@@ -1037,24 +1099,26 @@ class ForensicDiskAccessor:
                    f"{len(result['directories'])} directories, "
                    f"{len(result['deleted_files'])} deleted")
 
-        # full_path 계산 (inode 체인을 따라 경로 구축)
+        # Calculate full_path (build path by following inode chain)
         def build_full_path(inode: int, max_depth: int = 50) -> str:
-            """inode에서 전체 경로 구축"""
+            """Build full path from inode"""
             parts = []
             current = inode
             depth = 0
             while current in inode_info and depth < max_depth:
                 parent, name = inode_info[current]
-                if name and not name.startswith('$'):
+                # [2026-01] Include system folders like $Recycle.Bin in path
+                # NTFS reserved files (inode 0-23) are already separated into special_files
+                if name:
                     parts.append(name)
-                if parent == current or parent == 5:  # 루트 도달
+                if parent == current or parent == 5:  # Reached root
                     break
                 current = parent
                 depth += 1
             parts.reverse()
             return '/'.join(parts) if parts else ""
 
-        # active_files와 deleted_files에 full_path 설정
+        # Set full_path for active_files and deleted_files
         for entry in result['active_files']:
             entry.full_path = build_full_path(entry.inode)
 
@@ -1073,15 +1137,15 @@ class ForensicDiskAccessor:
         max_results: int = 100
     ) -> List[FileCatalogEntry]:
         """
-        파일명으로 검색
+        Search files by name
 
         Args:
-            name_pattern: 파일명 패턴 (대소문자 무시)
-            include_deleted: 삭제된 파일 포함
-            max_results: 최대 결과 수
+            name_pattern: Filename pattern (case-insensitive)
+            include_deleted: Include deleted files
+            max_results: Maximum number of results
 
         Returns:
-            FileCatalogEntry 리스트
+            List of FileCatalogEntry
         """
         results = []
         name_lower = name_pattern.lower()
@@ -1118,22 +1182,22 @@ class ForensicDiskAccessor:
     # ==========================================================================
 
     def _normalize_path(self, path: str) -> str:
-        """경로 정규화"""
-        # 백슬래시를 슬래시로 변환
+        """Normalize path"""
+        # Convert backslashes to forward slashes
         path = path.replace('\\', '/')
 
-        # 드라이브 문자 제거 (C:/)
+        # Remove drive letter (C:/)
         if len(path) > 2 and path[1] == ':':
             path = path[2:]
 
-        # 선행 슬래시 제거
+        # Remove leading slashes
         while path.startswith('/'):
             path = path[1:]
 
         return path
 
     def _resolve_path_to_inode(self, path: str) -> Optional[int]:
-        """경로를 MFT entry 번호로 변환"""
+        """Convert path to MFT entry number"""
         if not path:
             return 5  # Root directory
 
@@ -1144,7 +1208,7 @@ class ForensicDiskAccessor:
             if not part:
                 continue
 
-            # 현재 디렉토리의 인덱스에서 파일 찾기
+            # Find file in current directory's index
             found = self._find_in_directory(current_inode, part)
             if found is None:
                 return None
@@ -1154,39 +1218,39 @@ class ForensicDiskAccessor:
 
     def _find_in_directory(self, dir_inode: int, name: str) -> Optional[int]:
         """
-        디렉토리에서 파일 찾기 (인덱스 활용 - 대소문자 무시)
+        Find file in directory (using index - case-insensitive)
 
-        파일명 맵을 활용하여 O(1)로 파일을 찾습니다.
-        대소문자를 무시합니다.
+        Uses filename map for O(1) lookup.
+        Ignores case.
         """
         name_lower = name.lower()
 
-        # 부모-자식 인덱스가 없으면 구축 (최초 1회)
+        # Build parent-child index if not exists (first time only)
         if not self._parent_index_built:
             self._build_parent_index()
 
-        # 파일명 맵에서 직접 조회 (O(1))
+        # Direct lookup from filename map (O(1))
         if hasattr(self, '_name_to_inode_map'):
             key = (dir_inode, name_lower)
             if key in self._name_to_inode_map:
                 return self._name_to_inode_map[key]
 
-        # 인덱스에서 자식 inode 목록 조회
+        # Get child inode list from index
         child_inodes = self._parent_child_index.get(dir_inode, [])
 
-        # 자식 목록에서 파일명 매칭 (대소문자 무시)
+        # Match filename in child list (case-insensitive)
         for entry_num in child_inodes:
             try:
                 metadata = self._extractor.get_file_metadata(entry_num)
                 if metadata.filename.lower() == name_lower:
-                    # 캐시 업데이트
+                    # Update cache
                     if hasattr(self, '_name_to_inode_map'):
                         self._name_to_inode_map[(dir_inode, name_lower)] = entry_num
                     return entry_num
             except Exception:
                 continue
 
-        # 여전히 못 찾으면 limited fallback (10,000개만)
+        # If still not found, limited fallback (10,000 only)
         logger.debug(f"File '{name}' not found in index for dir_inode={dir_inode}")
         return None
 
@@ -1196,49 +1260,123 @@ class ForensicDiskAccessor:
 
     def read_mft_raw(self, max_size: int = None) -> bytes:
         """
-        $MFT 파일 raw 데이터 읽기
+        Read $MFT file raw data
 
         Args:
-            max_size: 최대 크기 (None = 전체)
+            max_size: Maximum size (None = all)
 
         Returns:
-            MFT raw 데이터
+            MFT raw data
         """
         return self.read_file_by_inode(0, max_size=max_size)
 
     def read_logfile_raw(self, max_size: int = None) -> bytes:
         """
-        $LogFile raw 데이터 읽기 (NTFS 트랜잭션 로그)
+        Read $LogFile raw data (NTFS transaction log)
         """
         return self.read_file_by_inode(2, max_size=max_size)
 
-    def read_usnjrnl_raw(self, max_size: int = None) -> bytes:
+    def read_usnjrnl_raw(self, max_size: int = None, skip_sparse: bool = True) -> bytes:
         """
-        $UsnJrnl:$J raw 데이터 읽기 (USN Journal)
+        Read $UsnJrnl:$J raw data (USN Journal)
 
-        $UsnJrnl은 entry 번호가 고정되지 않음 - $Extend 디렉토리에서 찾아야 함
+        $UsnJrnl entry number is not fixed - must be found in $Extend directory
+
+        Args:
+            max_size: Maximum read size
+            skip_sparse: If True, skip sparse regions and read only actual data (recommended)
+                        If False, fill sparse regions with zeros (memory warning)
+
+        Note:
+            USN Journal $J stream is typically a sparse file.
+            Logical size can be tens of GB but actual data is only a portion.
+            Recommended to use skip_sparse=True to read only actual data.
         """
-        # $Extend 디렉토리 (보통 entry 11)
+        # $Extend directory (usually entry 11)
         extend_inode = 11
 
-        # $Extend 아래에서 $UsnJrnl 찾기
+        # Find $UsnJrnl under $Extend
         usnjrnl_inode = self._find_in_directory(extend_inode, '$UsnJrnl')
         if usnjrnl_inode is None:
             raise FilesystemError("$UsnJrnl not found")
 
-        # $J 스트림 읽기
-        return self.read_file_by_inode(usnjrnl_inode, stream_name='$J', max_size=max_size)
+        if skip_sparse:
+            # [2026-01] Skip sparse regions and read only actual data
+            return self._read_file_skip_sparse(usnjrnl_inode, stream_name='$J', max_size=max_size)
+        else:
+            # Legacy method: fill sparse regions with zeros
+            return self.read_file_by_inode(usnjrnl_inode, stream_name='$J', max_size=max_size)
+
+    def _read_file_skip_sparse(
+        self,
+        inode: int,
+        stream_name: str = None,
+        max_size: int = None
+    ) -> bytes:
+        """
+        [2026-01] Skip sparse regions and read only actual data
+
+        Useful for large sparse files like USN Journal.
+        Does not include zeros from sparse regions, significantly reducing file size.
+        """
+        if self._extractor is None:
+            raise FilesystemError("No partition selected or unsupported filesystem")
+
+        # Read MFT entry
+        entry = self._extractor.read_mft_entry(inode)
+        if entry[:4] != b'FILE':
+            raise FilesystemError(f"Invalid MFT entry at inode {inode}")
+
+        # Extract metadata and data runs
+        metadata = self._extractor._parse_mft_entry_metadata(entry, inode, stream_name)
+
+        # Resident data
+        if metadata.is_resident:
+            data = metadata.resident_data
+            if max_size:
+                data = data[:max_size]
+            return data
+
+        # Non-resident: skip sparse regions and read only actual data
+        data = bytearray()
+        bytes_read = 0
+        target_size = max_size if max_size else metadata.size
+
+        # Limit to 1GB max (USN Journal actual data is typically hundreds of MB)
+        MAX_USNJRNL_SIZE = 1 * 1024 * 1024 * 1024
+        if target_size > MAX_USNJRNL_SIZE:
+            target_size = MAX_USNJRNL_SIZE
+            logger.info(f"Limiting USN Journal read to {MAX_USNJRNL_SIZE // (1024*1024)}MB")
+
+        for run in metadata.data_runs:
+            if bytes_read >= target_size:
+                break
+
+            if run.is_sparse:
+                # Skip sparse regions (do not fill with zeros)
+                continue
+
+            # Read actual clusters
+            run_offset = self._extractor.partition_offset + (run.lcn * self._extractor.cluster_size)
+            run_size = min(run.length * self._extractor.cluster_size, target_size - bytes_read)
+
+            chunk = self._backend.read(run_offset, run_size)
+            data.extend(chunk)
+            bytes_read += len(chunk)
+
+        logger.info(f"USN Journal: read {len(data)} bytes (skipped sparse regions)")
+        return bytes(data)
 
     # ==========================================================================
     # Disk Info
     # ==========================================================================
 
     def get_disk_info(self) -> DiskInfo:
-        """디스크 정보 반환"""
+        """Return disk information"""
         return self._backend.get_disk_info()
 
     def get_partition_table_type(self) -> str:
-        """파티션 테이블 타입 반환 (MBR/GPT)"""
+        """Return partition table type (MBR/GPT)"""
         return self._partition_table_type
 
     # ==========================================================================
@@ -1253,7 +1391,7 @@ class ForensicDiskAccessor:
         return False
 
     def close(self):
-        """리소스 해제"""
+        """Release resources"""
         if self._backend:
             self._backend.close()
         self._extractor = None
@@ -1266,28 +1404,28 @@ class ForensicDiskAccessor:
 
 def read_locked_file(path: str, drive_number: int = 0) -> bytes:
     """
-    잠긴 파일 읽기 (편의 함수)
+    Read locked file (convenience function)
 
-    Windows가 잠근 파일(레지스트리, pagefile 등)을 raw disk 접근으로 읽습니다.
+    Reads files locked by Windows (registry, pagefile, etc.) via raw disk access.
 
     Args:
-        path: 파일 경로 (예: "C:/Windows/System32/config/SYSTEM")
-        drive_number: 드라이브 번호 (기본 0)
+        path: File path (e.g., "C:/Windows/System32/config/SYSTEM")
+        drive_number: Drive number (default 0)
 
     Returns:
-        파일 내용
+        File content
 
     Usage:
         system_hive = read_locked_file("C:/Windows/System32/config/SYSTEM")
     """
     with ForensicDiskAccessor.from_physical_disk(drive_number) as disk:
-        # 드라이브 문자로 파티션 선택 추론
-        partition_index = 0  # 기본적으로 첫 번째 파티션
+        # Infer partition selection from drive letter
+        partition_index = 0  # Default to first partition
 
-        # 경로에서 드라이브 문자 추출
+        # Extract drive letter from path
         if len(path) > 2 and path[1] == ':':
             drive_letter = path[0].upper()
-            # C: = 파티션 0 (간단한 매핑, 실제로는 더 복잡함)
+            # C: = partition 0 (simple mapping, actually more complex)
             partition_index = ord(drive_letter) - ord('C')
             partition_index = max(0, partition_index)
 
@@ -1301,17 +1439,17 @@ def read_locked_file(path: str, drive_number: int = 0) -> bytes:
 
 def stream_large_file(path: str, drive_number: int = 0, chunk_size: int = 64 * 1024 * 1024):
     """
-    대용량 파일 스트리밍 (편의 함수)
+    Stream large file (convenience function)
 
-    pagefile.sys, hiberfil.sys 같은 대용량 파일을 메모리 효율적으로 스트리밍합니다.
+    Memory-efficiently streams large files like pagefile.sys, hiberfil.sys.
 
     Args:
-        path: 파일 경로
-        drive_number: 드라이브 번호
-        chunk_size: 청크 크기 (기본 64MB)
+        path: File path
+        drive_number: Drive number
+        chunk_size: Chunk size (default 64MB)
 
     Yields:
-        파일 데이터 청크
+        File data chunks
     """
     with ForensicDiskAccessor.from_physical_disk(drive_number) as disk:
         partition_index = 0

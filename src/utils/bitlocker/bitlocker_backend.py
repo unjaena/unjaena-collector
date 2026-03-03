@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-BitLocker Backend - pybde를 사용한 BitLocker 복호화 백엔드
+BitLocker Backend - BitLocker decryption backend using pybde
 
-지원 키 타입:
-- Recovery Password (48자리 숫자: 123456-234567-...)
-- Password (일반 비밀번호)
-- Start-up Key (.BEK 파일)
+Supported Key Types:
+- Recovery Password (48-digit number: 123456-234567-...)
+- Password (regular password)
+- Start-up Key (.BEK file)
 
-미지원:
-- TPM (Trusted Platform Module) - 하드웨어 의존
+Not Supported:
+- TPM (Trusted Platform Module) - hardware dependent
 """
 
 from typing import Optional, Union, BinaryIO, Any
@@ -24,13 +24,13 @@ from .unified_disk_reader import (
 
 logger = logging.getLogger(__name__)
 
-# pybde 모듈 동적 로드
+# Dynamic loading of pybde module
 _pybde = None
 _pybde_available = False
 
 
 def _load_pybde():
-    """pybde 모듈 로드 시도"""
+    """Attempt to load pybde module"""
     global _pybde, _pybde_available
     if _pybde is not None:
         return _pybde_available
@@ -49,7 +49,7 @@ def _load_pybde():
 
 
 class BitLockerKeyType(Enum):
-    """BitLocker 키 타입"""
+    """BitLocker key type"""
     RECOVERY_PASSWORD = "recovery_password"
     PASSWORD = "password"
     BEK_FILE = "bek_file"
@@ -58,7 +58,7 @@ class BitLockerKeyType(Enum):
 
 @dataclass
 class BitLockerVolumeInfo:
-    """BitLocker 볼륨 정보"""
+    """BitLocker volume information"""
     encryption_method: str = ""
     volume_identifier: str = ""
     creation_time: str = ""
@@ -69,8 +69,8 @@ class BitLockerVolumeInfo:
 
 class PartitionSliceReader:
     """
-    디스크 백엔드의 특정 파티션 영역을 파일 객체처럼 래핑
-    pybde.open_file_object()에 전달 가능
+    Wraps a specific partition area of the disk backend as a file-like object
+    Can be passed to pybde.open_file_object()
     """
 
     def __init__(self, backend: UnifiedDiskReader, offset: int, size: int):
@@ -120,8 +120,8 @@ class PartitionSliceReader:
 
 class BitLockerBackend(UnifiedDiskReader):
     """
-    pybde 볼륨을 UnifiedDiskReader 인터페이스로 래핑
-    복호화된 볼륨을 기존 포렌식 접근자와 동일하게 사용 가능
+    Wraps pybde volume with UnifiedDiskReader interface
+    Allows decrypted volume to be used with existing forensic accessors
     """
 
     def __init__(self, source: Union[str, PartitionSliceReader, BinaryIO]):
@@ -188,7 +188,7 @@ class BitLockerBackend(UnifiedDiskReader):
         except:
             return "Unknown"
 
-    # ========== 키 설정 메서드 ==========
+    # ========== Key Setting Methods ==========
 
     def set_recovery_password(self, recovery_password: str) -> None:
         if not self._pybde_volume:
@@ -227,7 +227,7 @@ class BitLockerBackend(UnifiedDiskReader):
         except Exception as e:
             raise BitLockerError(f"Failed to read startup key: {e}")
 
-    # ========== 잠금 해제 ==========
+    # ========== Unlock ==========
 
     def unlock(self) -> bool:
         if not self._pybde_volume:
@@ -261,7 +261,7 @@ class BitLockerBackend(UnifiedDiskReader):
             return True
         return self._pybde_volume.is_locked()
 
-    # ========== UnifiedDiskReader 인터페이스 구현 ==========
+    # ========== UnifiedDiskReader Interface Implementation ==========
 
     def read(self, offset: int, size: int) -> bytes:
         if not self._pybde_volume:
@@ -304,7 +304,7 @@ class BitLockerBackend(UnifiedDiskReader):
                 self._is_open = False
                 self._is_unlocked = False
 
-    # ========== 추가 메서드 ==========
+    # ========== Additional Methods ==========
 
     def get_volume_info(self) -> BitLockerVolumeInfo:
         return self._volume_info or BitLockerVolumeInfo()
@@ -356,5 +356,5 @@ class BitLockerBackend(UnifiedDiskReader):
 
 
 def is_pybde_available() -> bool:
-    """pybde 사용 가능 여부 확인"""
+    """Check if pybde is available"""
     return _load_pybde()
