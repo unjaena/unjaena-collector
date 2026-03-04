@@ -267,6 +267,58 @@ def main():
     resources_dir = collector_dir / "resources"
     resources_dir.mkdir(exist_ok=True)
 
+    # =========================================================================
+    # Signing key generation & embedding
+    # Generates a random base_key, XOR-encrypts it with the fixed diversifier,
+    # and patches request_signer.py so the binary contains the key.
+    # =========================================================================
+    import secrets as _secrets
+    import re as _re
+
+    signer_path = collector_dir / 'src' / 'core' / 'request_signer.py'
+    if signer_path.exists():
+        print("\n[SIGN] Generating request signing key...")
+
+        # Fixed diversifier (must match request_signer.py)
+        diversifier = (
+            b'\xa3\x7f\x1b\xe4\x92\x56\xd8\x0c'
+            b'\x4e\xb1\x63\xf7\x28\x9d\x05\xca'
+            b'\x71\xde\x3a\x8f\x44\xbb\x10\x65'
+            b'\xf2\x07\x59\xc6\x83\x2d\xae\x17'
+        )
+
+        base_key = _secrets.token_bytes(32)
+        encrypted_key = bytes(a ^ b for a, b in zip(base_key, diversifier))
+
+        # Format as Python bytes literal
+        enc_repr = repr(encrypted_key)
+
+        # Read and patch the source file
+        signer_source = signer_path.read_text(encoding='utf-8')
+        patched = _re.sub(
+            r"_EMBEDDED_KEY_ENC = .+?  # BUILD_REPLACE_MARKER",
+            f"_EMBEDDED_KEY_ENC = {enc_repr}  # BUILD_REPLACE_MARKER",
+            signer_source,
+        )
+
+        if patched != signer_source:
+            signer_path.write_text(patched, encoding='utf-8')
+            print(f"[SIGN] Embedded key patched into request_signer.py")
+        else:
+            print(f"[SIGN] WARNING: Could not find BUILD_REPLACE_MARKER in request_signer.py")
+
+        # Save base_key for server configuration
+        key_hex = base_key.hex()
+        key_file = collector_dir / '.signing_key'
+        key_file.write_text(key_hex, encoding='utf-8')
+        print(f"[SIGN] Base key saved to: {key_file}")
+        print(f"[SIGN] ┌──────────────────────────────────────────────────────────────────┐")
+        print(f"[SIGN] │ CLIENT_SIGNING_BASE_KEY={key_hex} │")
+        print(f"[SIGN] └──────────────────────────────────────────────────────────────────┘")
+        print(f"[SIGN] Set the above value in your server .env file")
+    else:
+        print(f"\n[SIGN] WARNING: request_signer.py not found at {signer_path}")
+
     # Run PyInstaller
     print("\n[BUILD] Starting PyInstaller build...")
     spec_file = collector_dir / 'ForensicCollector.spec'

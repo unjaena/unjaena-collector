@@ -23,6 +23,7 @@ from PyQt6.QtGui import QFont, QColor, QIcon
 from core.token_validator import TokenValidator, ValidationResult
 from core.encryptor import FileEncryptor
 from core.uploader import SyncUploader
+from core.request_signer import RequestSigner
 from collectors.artifact_collector import (
     ArtifactCollector, ARTIFACT_TYPES,
     LocalMFTCollector, BASE_MFT_AVAILABLE
@@ -321,6 +322,7 @@ class CollectorWindow(QMainWindow):
         self.server_url = None
         self.ws_url = None
         self.allowed_artifacts = []
+        self.request_signer = None
 
         # Unified device manager
         self.device_manager = UnifiedDeviceManager()
@@ -1460,6 +1462,15 @@ class CollectorWindow(QMainWindow):
             self.session_id = result.session_id
             self.case_id = result.case_id
             self.collection_token = result.collection_token
+
+            # [Security] Initialize request signer for HMAC-signed API calls
+            from utils.hardware_id import get_hardware_id
+            try:
+                hw_id = get_hardware_id()
+                self.request_signer = RequestSigner(hw_id, result.challenge_salt or "")
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"[RequestSigner] Init failed: {e}")
+                self.request_signer = None
             # On Windows, localhost resolves to IPv6 (::1) causing Docker connection failure
             # Force conversion to 127.0.0.1
             raw_server_url = result.server_url or self.config['server_url']
@@ -1895,6 +1906,8 @@ class CollectorWindow(QMainWindow):
             include_deleted=self.include_deleted_cb.isChecked(),
             # Application config (for security settings)
             config=self.config,
+            # Request signing
+            request_signer=self.request_signer,
         )
         self.worker.progress_updated.connect(self._update_progress)
         self.worker.file_collected.connect(self._add_collected_file)
@@ -2268,12 +2281,18 @@ class CollectorWindow(QMainWindow):
                 return
 
             # Use collector-specific abort endpoint
-            abort_url = f"{server_url}/api/v1/collector/collection/abort/{self.session_id}"
+            abort_path = f"/api/v1/collector/collection/abort/{self.session_id}"
+            abort_url = f"{server_url}{abort_path}"
+            abort_headers = {
+                'X-Collection-Token': self.collection_token,
+            }
+            if self.request_signer:
+                abort_headers.update(self.request_signer.sign_request(
+                    "POST", abort_path, None, self.collection_token,
+                ))
             response = requests.post(
                 abort_url,
-                headers={
-                    'X-Collection-Token': self.collection_token,
-                },
+                headers=abort_headers,
                 timeout=5,
             )
 
@@ -2386,6 +2405,8 @@ class CollectionWorker(QThread):
         include_deleted: bool = True,
         # Application config (for security settings)
         config: dict = None,
+        # Request signing
+        request_signer=None,
     ):
         super().__init__()
         self.server_url = server_url
@@ -2397,6 +2418,7 @@ class CollectionWorker(QThread):
         self.consent_record = consent_record  # P0 legal requirement
         self._cancelled = False
         self.config = config or {}
+        self.request_signer = request_signer
 
         # Selected devices list
         self.selected_devices = selected_devices or []
@@ -2517,13 +2539,19 @@ class CollectionWorker(QThread):
         if not self.session_id or not self.collection_token:
             return
         try:
-            abort_url = f"{self.server_url}/api/v1/collector/collection/abort/{self.session_id}"
+            abort_path = f"/api/v1/collector/collection/abort/{self.session_id}"
+            abort_url = f"{self.server_url}{abort_path}"
+            abort_headers = {
+                'X-Collection-Token': self.collection_token,
+                'Content-Type': 'application/json',
+            }
+            if self.request_signer:
+                abort_headers.update(self.request_signer.sign_request(
+                    "POST", abort_path, None, self.collection_token,
+                ))
             requests.post(
                 abort_url,
-                headers={
-                    'X-Collection-Token': self.collection_token,
-                    'Content-Type': 'application/json',
-                },
+                headers=abort_headers,
                 json={'reason': 'collector_closed'},
                 timeout=5  # Quick timeout (don't wait during shutdown)
             )
@@ -3089,6 +3117,7 @@ class CollectionWorker(QThread):
                 case_id=self.case_id,
                 consent_record=self.consent_record,  # P0 legal requirement
                 config=self.config,
+                request_signer=self.request_signer,
             )
 
             success_count = 0
@@ -3144,13 +3173,19 @@ class CollectionWorker(QThread):
             # === Send upload completion signal (pipeline state transition trigger) ===
             if success_count > 0:
                 try:
-                    complete_url = f"{self.server_url}/api/v1/collector/collection/end/{self.session_id}"
+                    complete_path = f"/api/v1/collector/collection/end/{self.session_id}"
+                    complete_url = f"{self.server_url}{complete_path}"
+                    complete_headers = {
+                        'X-Collection-Token': self.collection_token,
+                        'Content-Type': 'application/json',
+                    }
+                    if self.request_signer:
+                        complete_headers.update(self.request_signer.sign_request(
+                            "POST", complete_path, None, self.collection_token,
+                        ))
                     complete_response = requests.post(
                         complete_url,
-                        headers={
-                            'X-Collection-Token': self.collection_token,
-                            'Content-Type': 'application/json',
-                        },
+                        headers=complete_headers,
                         json={'trigger_analysis': True},
                         timeout=30
                     )

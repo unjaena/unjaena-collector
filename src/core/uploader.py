@@ -105,6 +105,7 @@ class RealTimeUploader:
         consent_record: dict = None,
         max_file_size: int = None,
         config: dict = None,
+        request_signer=None,
     ):
         """
         Initialize the uploader.
@@ -118,6 +119,7 @@ class RealTimeUploader:
             consent_record: Legal consent record (P0 legally required)
             max_file_size: Maximum file size in bytes (M2 security)
             config: Application config (for dev_mode flag)
+            request_signer: RequestSigner instance for HMAC signing (optional)
         """
         self.server_url = server_url.rstrip('/')
         self.ws_url = ws_url.rstrip('/')
@@ -127,6 +129,7 @@ class RealTimeUploader:
         self.consent_record = consent_record
         self.max_file_size = max_file_size or self.DEFAULT_MAX_FILE_SIZE
         self._dev_mode = config.get('dev_mode', False) if config else False
+        self.request_signer = request_signer
         self.ws = None
 
     async def connect_websocket(self):
@@ -268,13 +271,20 @@ class RealTimeUploader:
                     if self.consent_record:
                         data.add_field('consent_record', json.dumps(self.consent_record))
 
+                    upload_headers = {
+                        'X-Session-ID': self.session_id,
+                        'X-Collection-Token': self.collection_token,
+                    }
+                    if self.request_signer:
+                        upload_headers.update(self.request_signer.sign_request(
+                            "POST", "/api/v1/collector/raw-files/upload",
+                            None, self.collection_token,
+                        ))
+
                     async with session.post(
                         f"{self.server_url}/api/v1/collector/raw-files/upload",
                         data=data,
-                        headers={
-                            'X-Session-ID': self.session_id,
-                            'X-Collection-Token': self.collection_token,
-                        },
+                        headers=upload_headers,
                     ) as response:
                         if response.status == 200:
                             result = await response.json()
@@ -355,6 +365,7 @@ class SyncUploader:
         consent_record: dict = None,
         max_file_size: int = None,
         config: dict = None,
+        request_signer=None,
     ):
         self.server_url = server_url.rstrip('/')
         self.ws_url = ws_url.rstrip('/')
@@ -364,6 +375,7 @@ class SyncUploader:
         self.consent_record = consent_record
         self.max_file_size = max_file_size or self.DEFAULT_MAX_FILE_SIZE
         self._dev_mode = config.get('dev_mode', False) if config else False
+        self.request_signer = request_signer
 
     def upload_file(
         self,
@@ -429,6 +441,11 @@ class SyncUploader:
                         'X-Session-ID': self.session_id,
                         'X-Collection-Token': self.collection_token,
                     }
+                    if self.request_signer:
+                        headers.update(self.request_signer.sign_request(
+                            "POST", "/api/v1/collector/raw-files/upload",
+                            None, self.collection_token,
+                        ))
 
                     # Debug token transmission (first upload only)
                     # Security: log token hash instead of raw value

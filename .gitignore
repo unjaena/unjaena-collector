@@ -128,6 +128,7 @@ chain_of_custody/
 *.cer
 private/
 keys/
+.signing_key
 
 # Environment files (never commit secrets)
 .env

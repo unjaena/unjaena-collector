@@ -28,6 +28,7 @@ class ValidationResult:
     ws_url: Optional[str] = None
     expires_at: Optional[str] = None
     error: Optional[str] = None
+    challenge_salt: Optional[str] = None
 
 
 @dataclass
@@ -158,6 +159,7 @@ class TokenValidator:
                     server_url=data.get('server_url'),
                     ws_url=data.get('ws_url'),
                     expires_at=data.get('expires_at'),
+                    challenge_salt=data.get('challenge_salt'),
                 )
             else:
                 # M1 Security: Prevent server error exposure - convert to user-friendly message
