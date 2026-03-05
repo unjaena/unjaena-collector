@@ -199,6 +199,11 @@ def main():
         action='store_true',
         help='Skip USB dependency check'
     )
+    parser.add_argument(
+        '--reuse-key',
+        action='store_true',
+        help='Reuse existing signing key from .signing_key (skip key generation)'
+    )
     args = parser.parse_args()
 
     collector_dir = Path(__file__).parent
@@ -277,8 +282,6 @@ def main():
 
     signer_path = collector_dir / 'src' / 'core' / 'request_signer.py'
     if signer_path.exists():
-        print("\n[SIGN] Generating request signing key...")
-
         # Fixed diversifier (must match request_signer.py)
         diversifier = (
             b'\xa3\x7f\x1b\xe4\x92\x56\xd8\x0c'
@@ -287,7 +290,16 @@ def main():
             b'\xf2\x07\x59\xc6\x83\x2d\xae\x17'
         )
 
-        base_key = _secrets.token_bytes(32)
+        # --reuse-key: reuse existing .signing_key instead of generating new one
+        key_file = collector_dir / '.signing_key'
+        if args.reuse_key and key_file.exists():
+            key_hex = key_file.read_text(encoding='utf-8').strip()
+            base_key = bytes.fromhex(key_hex)
+            print(f"\n[SIGN] Reusing existing signing key from {key_file}")
+        else:
+            base_key = _secrets.token_bytes(32)
+            print("\n[SIGN] Generating new request signing key...")
+
         encrypted_key = bytes(a ^ b for a, b in zip(base_key, diversifier))
 
         # Format as Python bytes literal
