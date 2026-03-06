@@ -3,8 +3,10 @@ Real-time Upload Module
 
 Handles file uploads with WebSocket progress reporting.
 P2-2: User-friendly error message support
+R2: Direct upload to Cloudflare R2 via presigned URLs
 """
 import asyncio
+import hashlib
 import json
 import aiohttp
 import websockets
@@ -520,6 +522,336 @@ class SyncUploader:
         progress_callback: Callable[[float, str], None] = None,
     ) -> list:
         """Batch upload."""
+        results = []
+        total = len(files)
+
+        for i, (file_path, artifact_type, metadata) in enumerate(files):
+            progress = i / total
+            filename = Path(file_path).name
+
+            if progress_callback:
+                progress_callback(progress, filename)
+
+            result = self.upload_file(file_path, artifact_type, metadata)
+            results.append(result)
+
+        return results
+
+
+class R2DirectUploader:
+    """
+    R2 Direct Uploader — presigned URL을 통해 Cloudflare R2에 직접 업로드.
+
+    서버는 presigned URL 발급과 완료 확인만 담당하며, 실제 파일 전송은
+    클라이언트 → R2 직접 연결로 이루어져 서버 대역폭 부하를 제거합니다.
+
+    - 100MB 미만: 단일 PUT 업로드
+    - 100MB 이상: Multipart 업로드 (파트별 PUT)
+    - R2 실패 시 SyncUploader로 자동 폴백
+    """
+
+    DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
+
+    def __init__(
+        self,
+        server_url: str,
+        session_id: str,
+        collection_token: str,
+        case_id: str = None,
+        consent_record: dict = None,
+        max_file_size: int = None,
+        config: dict = None,
+        request_signer=None,
+        fallback_uploader: 'SyncUploader' = None,
+    ):
+        """
+        Args:
+            server_url: API 서버 URL (e.g., https://api.example.com)
+            session_id: 수집 세션 ID
+            collection_token: 수집 인증 토큰
+            case_id: 케이스 ID
+            consent_record: 법적 동의 기록
+            max_file_size: 최대 파일 크기 (bytes)
+            config: 앱 설정 (dev_mode 등)
+            request_signer: RequestSigner 인스턴스 (HMAC 서명)
+            fallback_uploader: R2 실패 시 사용할 SyncUploader
+        """
+        self.server_url = server_url.rstrip('/')
+        self.session_id = session_id
+        self.collection_token = collection_token
+        self.case_id = case_id
+        self.consent_record = consent_record
+        self.max_file_size = max_file_size or self.DEFAULT_MAX_FILE_SIZE
+        self._dev_mode = config.get('dev_mode', False) if config else False
+        self.request_signer = request_signer
+        self.fallback_uploader = fallback_uploader
+
+    def _get_auth_headers(self, method: str = "POST", path: str = "", body=None) -> dict:
+        """인증 헤더 생성 (세션 + 토큰 + HMAC 서명)"""
+        headers = {
+            'X-Session-ID': self.session_id,
+            'X-Collection-Token': self.collection_token,
+        }
+        if self.request_signer:
+            headers.update(self.request_signer.sign_request(
+                method, path, body, self.collection_token
+            ))
+        return headers
+
+    def _compute_file_hash(self, file_path: str) -> str:
+        """SHA-256 해시 계산"""
+        h = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _request_presigned_url(self, file_path: str, artifact_type: str, file_hash: str) -> dict:
+        """서버에서 presigned URL 발급 요청"""
+        file_size = os.path.getsize(file_path)
+        file_name = Path(file_path).name
+        endpoint = "/api/v1/collector/r2/presigned-url"
+
+        payload = {
+            "case_id": self.case_id,
+            "file_name": file_name,
+            "file_size": file_size,
+            "file_hash": file_hash,
+            "artifact_type": artifact_type,
+        }
+
+        headers = self._get_auth_headers("POST", endpoint, json.dumps(payload))
+        headers['Content-Type'] = 'application/json'
+
+        response = requests.post(
+            f"{self.server_url}{endpoint}",
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(f"Presigned URL request failed ({response.status_code}): {response.text[:200]}")
+
+        return response.json()
+
+    def _upload_single(self, file_path: str, presigned_url: str) -> None:
+        """단일 PUT으로 R2에 직접 업로드 (< 100MB)"""
+        file_size = os.path.getsize(file_path)
+        timeout = max(120, file_size / (1 * 1024 * 1024) + 60)  # 1MB/s + 60s buffer
+
+        with open(file_path, 'rb') as f:
+            response = requests.put(
+                presigned_url,
+                data=f,
+                headers={'Content-Type': 'application/octet-stream'},
+                timeout=timeout,
+            )
+
+        if response.status_code not in (200, 201):
+            raise RuntimeError(f"R2 PUT upload failed ({response.status_code}): {response.text[:200]}")
+
+    def _upload_multipart(self, file_path: str, presigned_info: dict) -> list:
+        """Multipart 업로드 (>= 100MB): 파트별 presigned URL로 PUT"""
+        urls = presigned_info['upload_url']
+        part_size = presigned_info.get('part_size', 50 * 1024 * 1024)
+        completed_parts = []
+
+        with open(file_path, 'rb') as f:
+            for part_info in urls:
+                part_number = part_info['part_number']
+                part_url = part_info['url']
+
+                # 파트 데이터 읽기
+                start = part_info.get('start', (part_number - 1) * part_size)
+                end = part_info.get('end', min(start + part_size, os.path.getsize(file_path)))
+                chunk_size = end - start
+
+                f.seek(start)
+                data = f.read(chunk_size)
+
+                timeout = max(120, chunk_size / (1 * 1024 * 1024) + 60)
+                response = requests.put(
+                    part_url,
+                    data=data,
+                    headers={'Content-Type': 'application/octet-stream'},
+                    timeout=timeout,
+                )
+
+                if response.status_code not in (200, 201):
+                    raise RuntimeError(
+                        f"R2 multipart part {part_number} upload failed "
+                        f"({response.status_code}): {response.text[:200]}"
+                    )
+
+                etag = response.headers.get('ETag', '').strip('"')
+                completed_parts.append({
+                    "PartNumber": part_number,
+                    "ETag": etag,
+                })
+
+                logger.debug(f"[R2] Part {part_number}/{len(urls)} uploaded ({chunk_size:,} bytes)")
+
+        return completed_parts
+
+    def _confirm_upload(
+        self, key: str, upload_id: str, file_hash: str,
+        file_name: str, artifact_type: str, parts: list = None,
+    ) -> dict:
+        """서버에 업로드 완료 확인 요청"""
+        endpoint = "/api/v1/collector/r2/upload-complete"
+
+        payload = {
+            "case_id": self.case_id,
+            "key": key,
+            "upload_id": upload_id,
+            "file_hash": file_hash,
+            "file_name": file_name,
+            "artifact_type": artifact_type,
+            "parts": parts,
+        }
+
+        headers = self._get_auth_headers("POST", endpoint, json.dumps(payload))
+        headers['Content-Type'] = 'application/json'
+
+        response = requests.post(
+            f"{self.server_url}{endpoint}",
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(f"Upload confirmation failed ({response.status_code}): {response.text[:200]}")
+
+        return response.json()
+
+    def _abort_upload(self, case_id: str, key: str, upload_id: str) -> None:
+        """Multipart 업로드 중단 (실패 시 정리)"""
+        try:
+            endpoint = "/api/v1/collector/r2/abort-upload"
+            headers = self._get_auth_headers("POST", endpoint)
+            headers['Content-Type'] = 'application/json'
+
+            requests.post(
+                f"{self.server_url}{endpoint}",
+                params={"case_id": case_id, "key": key, "upload_id": upload_id},
+                headers=headers,
+                timeout=15,
+            )
+            logger.info(f"[R2] Multipart upload aborted: {key}")
+        except Exception as e:
+            logger.warning(f"[R2] Failed to abort multipart upload: {e}")
+
+    def upload_file(
+        self,
+        file_path: str,
+        artifact_type: str,
+        metadata: dict,
+        progress_callback: Callable[[float], None] = None,
+    ) -> UploadResult:
+        """
+        R2 직접 업로드 (실패 시 SyncUploader 폴백).
+
+        1. SHA-256 해시 계산
+        2. 서버에서 presigned URL 발급
+        3. R2에 직접 PUT 업로드 (단일/멀티파트)
+        4. 서버에 업로드 완료 확인 → Celery 파싱 트리거
+        5. 실패 시 SyncUploader로 폴백
+        """
+        # 파일 크기 검증
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError as e:
+            return UploadResult.from_error(f"Cannot access file: {e}")
+
+        if file_size > self.max_file_size:
+            max_gb = self.max_file_size / (1024 ** 3)
+            file_gb = file_size / (1024 ** 3)
+            return UploadResult(
+                success=False,
+                error=f"File size ({file_gb:.2f}GB) exceeds maximum ({max_gb:.1f}GB).",
+                error_title="File Size Exceeded",
+                error_solution="Split the file or contact the administrator.",
+                is_recoverable=False,
+            )
+
+        if file_size == 0:
+            return UploadResult(
+                success=False,
+                error="Empty files cannot be uploaded.",
+                error_title="Empty File",
+                error_solution="Please verify the file contents.",
+                is_recoverable=False,
+            )
+
+        # SHA-256 해시 계산
+        try:
+            file_hash = self._compute_file_hash(file_path)
+        except Exception as e:
+            return UploadResult.from_error(f"Hash computation failed: {e}")
+
+        file_name = Path(file_path).name
+        presigned_info = None
+
+        try:
+            # Step 1: Presigned URL 요청
+            presigned_info = self._request_presigned_url(file_path, artifact_type, file_hash)
+            key = presigned_info['key']
+            is_multipart = presigned_info.get('multipart', False)
+            upload_id = presigned_info.get('upload_id')
+
+            # Step 2: R2에 직접 업로드
+            completed_parts = None
+            if is_multipart:
+                completed_parts = self._upload_multipart(file_path, presigned_info)
+            else:
+                upload_url = presigned_info['upload_url']
+                self._upload_single(file_path, upload_url)
+
+            # Step 3: 서버에 완료 확인
+            confirm_result = self._confirm_upload(
+                key=key,
+                upload_id=upload_id,
+                file_hash=file_hash,
+                file_name=file_name,
+                artifact_type=artifact_type,
+                parts=completed_parts,
+            )
+
+            logger.info(f"[R2] Upload complete: {file_name} → {key}")
+            return UploadResult(
+                success=True,
+                artifact_id=confirm_result.get('file_id'),
+            )
+
+        except Exception as e:
+            sanitized_error = _sanitize_error_for_logging(str(e))
+            logger.warning(f"[R2] Direct upload failed, falling back to SyncUploader: {sanitized_error}")
+
+            # Multipart 중단 정리
+            if presigned_info and presigned_info.get('upload_id'):
+                self._abort_upload(
+                    self.case_id,
+                    presigned_info.get('key', ''),
+                    presigned_info['upload_id'],
+                )
+
+            # 폴백: SyncUploader
+            if self.fallback_uploader:
+                logger.info(f"[R2] Falling back to SyncUploader for {file_name}")
+                return self.fallback_uploader.upload_file(
+                    file_path, artifact_type, metadata, progress_callback
+                )
+            else:
+                return UploadResult.from_error(f"R2 upload failed: {e}")
+
+    def upload_batch(
+        self,
+        files: list,
+        progress_callback: Callable[[float, str], None] = None,
+    ) -> list:
+        """Batch upload with R2 direct upload."""
         results = []
         total = len(files)
 
