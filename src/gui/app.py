@@ -5,6 +5,7 @@ PyQt6-based graphical interface for the forensic collector.
 Supports unified device management and parallel collection.
 """
 import asyncio
+import logging
 import requests
 from pathlib import Path
 from datetime import datetime
