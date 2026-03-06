@@ -616,7 +616,7 @@ class R2DirectUploader:
             "artifact_type": artifact_type,
         }
 
-        headers = self._get_auth_headers("POST", endpoint, json.dumps(payload))
+        headers = self._get_auth_headers("POST", endpoint)
         headers['Content-Type'] = 'application/json'
 
         response = requests.post(
@@ -707,7 +707,7 @@ class R2DirectUploader:
             "parts": parts,
         }
 
-        headers = self._get_auth_headers("POST", endpoint, json.dumps(payload))
+        headers = self._get_auth_headers("POST", endpoint)
         headers['Content-Type'] = 'application/json'
 
         response = requests.post(
