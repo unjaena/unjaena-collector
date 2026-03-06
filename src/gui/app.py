@@ -1479,10 +1479,18 @@ class CollectorWindow(QMainWindow):
             except Exception as e:
                 logging.getLogger(__name__).warning(f"[RequestSigner] Init failed: {e}")
                 self.request_signer = None
+            # [2026-03-06] 서버가 localhost URL을 반환하면 config URL 우선 사용
+            # RunPod 등 원격 서버에서 API_BASE_URL 미설정 시 localhost를 반환하는 문제 방지
+            raw_server_url = result.server_url or ""
+            raw_ws_url = result.ws_url or ""
+            if "localhost" in raw_server_url or "127.0.0.1" in raw_server_url:
+                raw_server_url = self.config['server_url']
+                raw_ws_url = self.config['ws_url']
+            if not raw_server_url:
+                raw_server_url = self.config['server_url']
+            if not raw_ws_url:
+                raw_ws_url = self.config['ws_url']
             # On Windows, localhost resolves to IPv6 (::1) causing Docker connection failure
-            # Force conversion to 127.0.0.1
-            raw_server_url = result.server_url or self.config['server_url']
-            raw_ws_url = result.ws_url or self.config['ws_url']
             self.server_url = raw_server_url.replace('://localhost', '://127.0.0.1')
             self.ws_url = raw_ws_url.replace('://localhost', '://127.0.0.1')
             self.allowed_artifacts = result.allowed_artifacts or list(ARTIFACT_TYPES.keys())

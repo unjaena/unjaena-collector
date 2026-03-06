@@ -266,7 +266,7 @@ def run_headless(args, config: dict) -> int:
 
     # Step 4: Run collection
     collector = HeadlessCollector(
-        server_url=result.server_url or server_url,
+        server_url=(server_url if ("localhost" in (result.server_url or "") or "127.0.0.1" in (result.server_url or "")) else (result.server_url or server_url)),
         session_id=result.session_id,
         collection_token=result.collection_token,
         case_id=result.case_id,
