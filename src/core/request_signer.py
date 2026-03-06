@@ -96,6 +96,8 @@ class RequestSigner:
         nonce = os.urandom(16).hex()  # 32 hex chars
 
         # Body hash (empty string hash for multipart / no body)
+        if isinstance(body, str):
+            body = body.encode("utf-8")
         body_hash = hashlib.sha256(body if body else b"").hexdigest()
 
         # Token prefix for binding (prevents cross-token replay)
