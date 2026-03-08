@@ -632,53 +632,80 @@ class R2DirectUploader:
         return response.json()
 
     def _upload_single(self, file_path: str, presigned_url: str) -> None:
-        """단일 PUT으로 R2에 직접 업로드 (< 100MB)"""
+        """단일 PUT으로 R2에 직접 업로드 (< 100MB), 최대 3회 재시도"""
         file_size = os.path.getsize(file_path)
         timeout = max(120, file_size / (1 * 1024 * 1024) + 60)  # 1MB/s + 60s buffer
+        max_retries = 3
 
-        with open(file_path, 'rb') as f:
-            response = requests.put(
-                presigned_url,
-                data=f,
-                headers={'Content-Type': 'application/octet-stream'},
-                timeout=timeout,
-            )
-
-        if response.status_code not in (200, 201):
-            raise RuntimeError(f"R2 PUT upload failed ({response.status_code}): {response.text[:200]}")
+        for attempt in range(1, max_retries + 1):
+            try:
+                with open(file_path, 'rb') as f:
+                    response = requests.put(
+                        presigned_url,
+                        data=f,
+                        headers={'Content-Type': 'application/octet-stream'},
+                        timeout=timeout,
+                    )
+                if response.status_code not in (200, 201):
+                    raise RuntimeError(f"R2 PUT upload failed ({response.status_code}): {response.text[:200]}")
+                return  # success
+            except Exception as e:
+                if attempt < max_retries:
+                    wait = attempt * 5
+                    logger.warning(f"[R2] Upload attempt {attempt}/{max_retries} failed, retrying in {wait}s: {e}")
+                    import time; time.sleep(wait)
+                else:
+                    raise
 
     def _upload_multipart(self, file_path: str, presigned_info: dict) -> list:
         """Multipart 업로드 (>= 100MB): 파트별 presigned URL로 PUT"""
         urls = presigned_info['upload_url']
         part_size = presigned_info.get('part_size', 50 * 1024 * 1024)
+        actual_file_size = os.path.getsize(file_path)
         completed_parts = []
 
         with open(file_path, 'rb') as f:
-            for part_info in urls:
+            for idx, part_info in enumerate(urls):
                 part_number = part_info['part_number']
                 part_url = part_info['url']
 
                 # 파트 데이터 읽기
-                start = part_info.get('start', (part_number - 1) * part_size)
-                end = part_info.get('end', min(start + part_size, os.path.getsize(file_path)))
+                # 서버가 평문 크기 기준으로 경계를 계산하므로,
+                # 암호화 후 실제 파일 크기로 재계산 (마지막 파트에서 잘림 방지)
+                start = (part_number - 1) * part_size
+                if idx == len(urls) - 1:
+                    # 마지막 파트: EOF까지 읽기 (암호화 오버헤드 포함)
+                    end = actual_file_size
+                else:
+                    end = min(start + part_size, actual_file_size)
                 chunk_size = end - start
 
                 f.seek(start)
                 data = f.read(chunk_size)
 
                 timeout = max(120, chunk_size / (1 * 1024 * 1024) + 60)
-                response = requests.put(
-                    part_url,
-                    data=data,
-                    headers={'Content-Type': 'application/octet-stream'},
-                    timeout=timeout,
-                )
-
-                if response.status_code not in (200, 201):
-                    raise RuntimeError(
-                        f"R2 multipart part {part_number} upload failed "
-                        f"({response.status_code}): {response.text[:200]}"
-                    )
+                max_retries = 3
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        response = requests.put(
+                            part_url,
+                            data=data,
+                            headers={'Content-Type': 'application/octet-stream'},
+                            timeout=timeout,
+                        )
+                        if response.status_code not in (200, 201):
+                            raise RuntimeError(
+                                f"R2 multipart part {part_number} upload failed "
+                                f"({response.status_code}): {response.text[:200]}"
+                            )
+                        break  # success
+                    except Exception as e:
+                        if attempt < max_retries:
+                            wait = attempt * 5
+                            logger.warning(f"[R2] Part {part_number} attempt {attempt}/{max_retries} failed, retrying in {wait}s: {e}")
+                            import time; time.sleep(wait)
+                        else:
+                            raise
 
                 etag = response.headers.get('ETag', '').strip('"')
                 completed_parts.append({
@@ -693,6 +720,7 @@ class R2DirectUploader:
     def _confirm_upload(
         self, key: str, upload_id: str, file_hash: str,
         file_name: str, artifact_type: str, parts: list = None,
+        is_encrypted: bool = False,
     ) -> dict:
         """서버에 업로드 완료 확인 요청"""
         endpoint = "/api/v1/collector/r2/upload-complete"
@@ -705,6 +733,7 @@ class R2DirectUploader:
             "file_name": file_name,
             "artifact_type": artifact_type,
             "parts": parts,
+            "is_encrypted": is_encrypted,
         }
 
         headers = self._get_auth_headers("POST", endpoint)
@@ -788,6 +817,7 @@ class R2DirectUploader:
 
         file_name = Path(file_path).name
         presigned_info = None
+        encrypted_path = None
 
         try:
             # Step 1: Presigned URL 요청
@@ -796,13 +826,48 @@ class R2DirectUploader:
             is_multipart = presigned_info.get('multipart', False)
             upload_id = presigned_info.get('upload_id')
 
+            # Step 1.5: Per-Case Encryption — 서버에서 DEK 수신 시 파일 암호화
+            encryption_key_hex = presigned_info.get('encryption_key')
+            is_encrypted = False
+            encrypted_path = None
+
+            if encryption_key_hex:
+                try:
+                    from core.secure_upload import AESGCMCipher
+                    cipher = AESGCMCipher(bytes.fromhex(encryption_key_hex))
+                    with open(file_path, 'rb') as f:
+                        plaintext = f.read()
+                    aad = file_hash.encode('utf-8')  # AAD = 평문 SHA-256
+                    encrypted_data = cipher.encrypt(plaintext, aad)
+                    del plaintext
+
+                    # 암호화된 임시 파일 생성
+                    encrypted_path = file_path + '.enc'
+                    with open(encrypted_path, 'wb') as f:
+                        f.write(encrypted_data)
+                    del encrypted_data
+
+                    is_encrypted = True
+                    logger.info(f"[R2] File encrypted: {file_name} ({os.path.getsize(encrypted_path):,} bytes)")
+                except Exception as enc_err:
+                    logger.error(f"[R2] Encryption failed, uploading plaintext: {enc_err}")
+                    is_encrypted = False
+                finally:
+                    del encryption_key_hex
+
+            upload_path = encrypted_path if is_encrypted else file_path
+
             # Step 2: R2에 직접 업로드
             completed_parts = None
             if is_multipart:
-                completed_parts = self._upload_multipart(file_path, presigned_info)
+                completed_parts = self._upload_multipart(upload_path, presigned_info)
             else:
                 upload_url = presigned_info['upload_url']
-                self._upload_single(file_path, upload_url)
+                self._upload_single(upload_path, upload_url)
+
+            # 암호화 임시 파일 정리
+            if encrypted_path and os.path.exists(encrypted_path):
+                os.remove(encrypted_path)
 
             # Step 3: 서버에 완료 확인
             confirm_result = self._confirm_upload(
@@ -812,6 +877,7 @@ class R2DirectUploader:
                 file_name=file_name,
                 artifact_type=artifact_type,
                 parts=completed_parts,
+                is_encrypted=is_encrypted,
             )
 
             logger.info(f"[R2] Upload complete: {file_name} → {key}")
@@ -823,6 +889,10 @@ class R2DirectUploader:
         except Exception as e:
             sanitized_error = _sanitize_error_for_logging(str(e))
             logger.error(f"[R2] Direct upload failed: {sanitized_error}")
+
+            # 암호화 임시 파일 정리
+            if encrypted_path and os.path.exists(encrypted_path):
+                os.remove(encrypted_path)
 
             # Multipart 중단 정리
             if presigned_info and presigned_info.get('upload_id'):
@@ -839,18 +909,44 @@ class R2DirectUploader:
         files: list,
         progress_callback: Callable[[float, str], None] = None,
     ) -> list:
-        """Batch upload with R2 direct upload."""
-        results = []
+        """Batch upload with R2 direct upload (parallel, max 4 concurrent)."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+
         total = len(files)
+        if total == 0:
+            return []
 
-        for i, (file_path, artifact_type, metadata) in enumerate(files):
-            progress = i / total
-            filename = Path(file_path).name
+        # 결과를 원래 순서대로 유지하기 위해 인덱스 기반 저장
+        results = [None] * total
+        completed_count = 0
+        lock = threading.Lock()
 
-            if progress_callback:
-                progress_callback(progress, filename)
-
+        def _upload_one(idx, file_path, artifact_type, metadata):
+            nonlocal completed_count
             result = self.upload_file(file_path, artifact_type, metadata)
-            results.append(result)
+            with lock:
+                results[idx] = result
+                completed_count += 1
+                if progress_callback:
+                    progress_callback(completed_count / total, Path(file_path).name)
+            return result
+
+        max_workers = min(4, total)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for i, (file_path, artifact_type, metadata) in enumerate(files):
+                future = executor.submit(_upload_one, i, file_path, artifact_type, metadata)
+                futures[future] = i
+
+            # 모든 작업 완료 대기 (예외 전파)
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    idx = futures[future]
+                    logger.error(f"[R2] Parallel upload failed (index {idx}): {e}")
+                    if results[idx] is None:
+                        results[idx] = UploadResult.from_error(str(e))
 
         return results

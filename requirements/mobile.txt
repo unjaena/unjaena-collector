@@ -1,0 +1,10 @@
+# Forensic Collector - Mobile device support (iOS + Android)
+
+# iOS Forensics
+biplist>=1.0.3
+pymobiledevice3>=4.0.0
+iphone_backup_decrypt>=0.6.0
+
+# Android Forensics (USB direct connection - no external ADB binary required)
+adb-shell[usb]>=0.4.4
+libusb1>=3.0.0

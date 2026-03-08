@@ -1,44 +1,12 @@
-# Forensic Collector - Windows EXE Dependencies
+# Forensic Collector - Windows dependencies (backward compatibility)
 # License: GPL-3.0 (due to pymobiledevice3 dependency)
-# v3.0 - Extended forensic collection support
-# - Windows artifacts (MFT, browser, registry, etc.)
-# - Memory forensics (WinPmem + Volatility3)
-# - Android forensics (USB direct - no external ADB binary)
-# - iOS forensics (USB direct - pymobiledevice3)
+#
+# This file is kept for backward compatibility.
+# For cross-platform usage, see requirements/ directory:
+#   - requirements/windows.txt  (Windows)
+#   - requirements/linux.txt    (Linux)
+#   - requirements/macos.txt    (macOS)
+-r requirements/windows.txt
 
-# GUI
-PyQt6>=6.6.0
-
-# HTTP Client
-requests>=2.31.0
-aiohttp>=3.9.0
-
-# WebSocket
-websockets>=12.0
-
-# Windows API
-pywin32>=306
-wmi>=1.5.1
-psutil>=5.9.0
-
-# File System - MFT Collection (REQUIRED for forensic collection)
-pytsk3>=20231007      # The Sleuth Kit bindings for raw disk/MFT access
-
-# Memory Forensics (OPTIONAL - requires separate installation)
-# volatility3>=2.5.0  # Memory analysis framework
-# yara-python>=4.3.0  # Malware detection rules
-
-# iOS Forensics
-biplist>=1.0.3        # Binary plist parsing for iOS backups
-pymobiledevice3>=4.0.0  # iOS USB direct connection (GPL-3.0)
-iphone_backup_decrypt>=0.6.0  # iOS encrypted backup decryption (MIT)
-
-# Android Forensics (USB direct connection - no external ADB binary required)
-adb-shell[usb]>=0.4.4   # ADB protocol implementation with USB support (Apache 2.0)
-libusb1>=3.0.0          # USB device access (LGPL 2.1)
-
-# Build
+# Build (optional)
 pyinstaller>=6.3.0
-
-# Utilities
-python-dateutil>=2.8.0

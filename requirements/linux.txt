@@ -1,0 +1,3 @@
+# Forensic Collector - Linux dependencies
+-r base.txt
+-r mobile.txt

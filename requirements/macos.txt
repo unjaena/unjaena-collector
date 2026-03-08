@@ -1,0 +1,3 @@
+# Forensic Collector - macOS dependencies
+-r base.txt
+-r mobile.txt

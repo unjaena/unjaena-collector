@@ -1,0 +1,13 @@
+# Forensic Collector - Windows dependencies
+-r base.txt
+-r mobile.txt
+
+# Windows API
+pywin32>=306
+wmi>=1.5.1
+
+# File System - MFT Collection (REQUIRED for forensic collection)
+pytsk3>=20231007
+
+# Build (optional)
+# pyinstaller>=6.3.0
