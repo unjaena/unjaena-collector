@@ -658,63 +658,76 @@ class R2DirectUploader:
                     raise
 
     def _upload_multipart(self, file_path: str, presigned_info: dict) -> list:
-        """Multipart 업로드 (>= 100MB): 파트별 presigned URL로 PUT"""
+        """Multipart 업로드 (>= 100MB): 파트 병렬 PUT (최대 4 동시)"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import time as _time
+
         urls = presigned_info['upload_url']
         part_size = presigned_info.get('part_size', 50 * 1024 * 1024)
         actual_file_size = os.path.getsize(file_path)
-        completed_parts = []
+        total_parts = len(urls)
 
+        # 파트별 데이터를 미리 읽어서 메모리에 준비 (병렬 PUT을 위해)
+        parts_data = []
         with open(file_path, 'rb') as f:
             for idx, part_info in enumerate(urls):
                 part_number = part_info['part_number']
-                part_url = part_info['url']
-
-                # 파트 데이터 읽기
-                # 서버가 평문 크기 기준으로 경계를 계산하므로,
-                # 암호화 후 실제 파일 크기로 재계산 (마지막 파트에서 잘림 방지)
                 start = (part_number - 1) * part_size
-                if idx == len(urls) - 1:
-                    # 마지막 파트: EOF까지 읽기 (암호화 오버헤드 포함)
+                if idx == total_parts - 1:
                     end = actual_file_size
                 else:
                     end = min(start + part_size, actual_file_size)
-                chunk_size = end - start
-
                 f.seek(start)
-                data = f.read(chunk_size)
+                data = f.read(end - start)
+                parts_data.append((part_info, data))
 
-                timeout = max(120, chunk_size / (1 * 1024 * 1024) + 60)
-                max_retries = 3
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        response = requests.put(
-                            part_url,
-                            data=data,
-                            headers={'Content-Type': 'application/octet-stream'},
-                            timeout=timeout,
+        def _upload_one_part(part_info, data):
+            part_number = part_info['part_number']
+            part_url = part_info['url']
+            chunk_size = len(data)
+            timeout = max(120, chunk_size / (1 * 1024 * 1024) + 60)
+            max_retries = 3
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = requests.put(
+                        part_url,
+                        data=data,
+                        headers={'Content-Type': 'application/octet-stream'},
+                        timeout=timeout,
+                    )
+                    if response.status_code not in (200, 201):
+                        raise RuntimeError(
+                            f"R2 multipart part {part_number} upload failed "
+                            f"({response.status_code}): {response.text[:200]}"
                         )
-                        if response.status_code not in (200, 201):
-                            raise RuntimeError(
-                                f"R2 multipart part {part_number} upload failed "
-                                f"({response.status_code}): {response.text[:200]}"
-                            )
-                        break  # success
-                    except Exception as e:
-                        if attempt < max_retries:
-                            wait = attempt * 5
-                            logger.warning(f"[R2] Part {part_number} attempt {attempt}/{max_retries} failed, retrying in {wait}s: {e}")
-                            import time; time.sleep(wait)
-                        else:
-                            raise
+                    etag = response.headers.get('ETag', '').strip('"')
+                    logger.debug(f"[R2] Part {part_number}/{total_parts} uploaded ({chunk_size:,} bytes)")
+                    return {"PartNumber": part_number, "ETag": etag}
+                except Exception as e:
+                    if attempt < max_retries:
+                        wait = attempt * 5
+                        logger.warning(f"[R2] Part {part_number} attempt {attempt}/{max_retries} failed, retrying in {wait}s: {e}")
+                        _time.sleep(wait)
+                    else:
+                        raise
 
-                etag = response.headers.get('ETag', '').strip('"')
-                completed_parts.append({
-                    "PartNumber": part_number,
-                    "ETag": etag,
-                })
+        # 파트 병렬 업로드 (최대 4 동시)
+        max_workers = min(4, total_parts)
+        completed_parts = [None] * total_parts
 
-                logger.debug(f"[R2] Part {part_number}/{len(urls)} uploaded ({chunk_size:,} bytes)")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for idx, (part_info, data) in enumerate(parts_data):
+                future = executor.submit(_upload_one_part, part_info, data)
+                futures[future] = idx
 
+            for future in as_completed(futures):
+                idx = futures[future]
+                completed_parts[idx] = future.result()  # 예외 시 전파
+
+        # 파트 번호 순서대로 정렬 (S3/R2 CompleteMultipartUpload 요구사항)
+        completed_parts.sort(key=lambda p: p['PartNumber'])
         return completed_parts
 
     def _confirm_upload(
@@ -932,7 +945,7 @@ class R2DirectUploader:
                     progress_callback(completed_count / total, Path(file_path).name)
             return result
 
-        max_workers = min(4, total)
+        max_workers = min(8, total)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {}
             for i, (file_path, artifact_type, metadata) in enumerate(files):
