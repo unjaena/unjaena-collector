@@ -1,0 +1,8 @@
+{
+    "server_url": "https://fnt4ag4359215e-80.proxy.runpod.net",
+    "ws_url": "wss://fnt4ag4359215e-80.proxy.runpod.net",
+    "dev_mode": false,
+    "allow_insecure": false,
+    "version": "2.1.0",
+    "app_name": "Digital Intelligence Collector"
+}
