@@ -945,7 +945,7 @@ class R2DirectUploader:
                     progress_callback(completed_count / total, Path(file_path).name)
             return result
 
-        max_workers = min(8, total)
+        max_workers = min(4, total)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {}
             for i, (file_path, artifact_type, metadata) in enumerate(files):
