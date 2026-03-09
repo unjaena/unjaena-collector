@@ -603,7 +603,7 @@ class R2DirectUploader:
         return h.hexdigest()
 
     def _request_presigned_url(self, file_path: str, artifact_type: str, file_hash: str) -> dict:
-        """서버에서 presigned URL 발급 요청 (최대 3회 재시도)"""
+        """서버에서 presigned URL 발급 요청 (최대 5회 재시도)"""
         import time as _time
         file_size = os.path.getsize(file_path)
         file_name = Path(file_path).name
@@ -617,7 +617,7 @@ class R2DirectUploader:
             "artifact_type": artifact_type,
         }
 
-        max_retries = 3
+        max_retries = 5
         for attempt in range(1, max_retries + 1):
             try:
                 headers = self._get_auth_headers("POST", endpoint)
@@ -627,7 +627,7 @@ class R2DirectUploader:
                     f"{self.server_url}{endpoint}",
                     json=payload,
                     headers=headers,
-                    timeout=30,
+                    timeout=60,
                 )
 
                 if response.status_code == 429:
@@ -761,7 +761,7 @@ class R2DirectUploader:
         file_name: str, artifact_type: str, parts: list = None,
         is_encrypted: bool = False,
     ) -> dict:
-        """서버에 업로드 완료 확인 요청 (최대 3회 재시도)"""
+        """서버에 업로드 완료 확인 요청 (최대 5회 재시도)"""
         import time as _time
         endpoint = "/api/v1/collector/r2/upload-complete"
 
@@ -776,7 +776,7 @@ class R2DirectUploader:
             "is_encrypted": is_encrypted,
         }
 
-        max_retries = 3
+        max_retries = 5
         for attempt in range(1, max_retries + 1):
             try:
                 headers = self._get_auth_headers("POST", endpoint)
@@ -786,7 +786,7 @@ class R2DirectUploader:
                     f"{self.server_url}{endpoint}",
                     json=payload,
                     headers=headers,
-                    timeout=30,
+                    timeout=60,
                 )
 
                 if response.status_code == 429:
