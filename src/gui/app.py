@@ -633,10 +633,9 @@ class CollectorWindow(QMainWindow):
         self._heartbeat_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         self._heartbeat_idx = 0
 
-        # Collected files list
+        # Collected files list (hidden — file names shown in log instead)
         self.collected_list = QListWidget()
-        self.collected_list.setMaximumHeight(50)
-        progress_layout.addWidget(self.collected_list)
+        self.collected_list.setVisible(False)
 
         progress_outer_layout.addWidget(progress_content)
 
@@ -1534,10 +1533,11 @@ class CollectorWindow(QMainWindow):
         else:
             self.token_status.setText(f"Invalid: {result.error}")
             self.token_status.setStyleSheet("color: #f72585;")
-            self._log(f"Token validation failed: {result.error}", error=True)
 
             # [2026-02-03] Display user-friendly error message popup
             friendly_error = translate_error(result.error or "Unknown error")
+            self._log(f"Token validation failed: {friendly_error.title} - {friendly_error.message}", error=True)
+            self._log(f"Solution: {friendly_error.solution}", error=True)
             QMessageBox.warning(
                 self,
                 f"⚠️ {friendly_error.title}",
@@ -2161,17 +2161,8 @@ class CollectorWindow(QMainWindow):
         self.elapsed_label.setText(f"{spinner} {time_str}")
 
     def _add_collected_file(self, filename: str, success: bool):
-        """Add file to collected list (scroll deferred to avoid progressive slowdown)"""
-        item = QListWidgetItem(filename)
-        if success:
-            item.setForeground(QColor("#4cc9f0"))
-        else:
-            item.setForeground(QColor("#f72585"))
-        self.collected_list.addItem(item)
-        # Only auto-scroll when list is small; for large lists it causes
-        # O(n) re-layout per addItem, degrading from fast to crawl.
-        if self.collected_list.count() <= 200:
-            self.collected_list.scrollToBottom()
+        """Add file to collected list — disabled (file names shown in log only)"""
+        pass
 
     def _collection_finished(self, success: bool, message: str):
         """Handle collection completion"""
