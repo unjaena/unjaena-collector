@@ -479,15 +479,16 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
             FileNotFoundError: File not found
             ValueError: Unsupported extension
         """
+        # [SECURITY] Validate path traversal BEFORE resolving
+        raw_path = str(file_path)
+        if '..' in raw_path:
+            raise ValueError("Path traversal detected")
+
         path = Path(file_path).resolve()
 
         # Check file exists
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
-
-        # Prevent path traversal
-        if '..' in str(path):
-            raise ValueError("Path traversal detected")
 
         ext = path.suffix.lower()
         all_extensions = self.E01_EXTENSIONS | self.RAW_EXTENSIONS

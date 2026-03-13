@@ -8,7 +8,7 @@ If you discover a security vulnerability in this project, please report it respo
 
 ### How to Report
 
-1. Email: Send details to the repository maintainers via private contact
+1. Email: Send details to **admin@unjaena.com**
 2. Include:
    - Description of the vulnerability
    - Steps to reproduce
@@ -41,7 +41,7 @@ If you discover a security vulnerability in this project, please report it respo
 
 ### Data Handling
 - Collected artifacts encrypted before upload
-- Chain of custody with tamper-evident hash chains
+- Chain of custody with per-entry SHA-256 integrity logging
 - No credentials stored in application code or config templates
 - All sensitive configuration via environment variables
 

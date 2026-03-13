@@ -1800,8 +1800,8 @@ class AndroidCollector:
         if use_su:
             # For root-protected files, copy to temp location first
             temp_path = f'/data/local/tmp/forensic_temp_{hashlib.md5(remote_path.encode()).hexdigest()[:8]}'
-            self._adb_shell(f'cp "{remote_path}" "{temp_path}"', use_su=True)
-            self._adb_shell(f'chmod 644 "{temp_path}"', use_su=True)
+            self._adb_shell(f'cp {shlex.quote(remote_path)} {shlex.quote(temp_path)}', use_su=True)
+            self._adb_shell(f'chmod 644 {shlex.quote(temp_path)}', use_su=True)
             actual_remote_path = temp_path
 
         for attempt in range(self.MAX_RETRIES):
@@ -1814,13 +1814,13 @@ class AndroidCollector:
                     )
                     success = rc == 0 and local_path.is_file()
                     if success and temp_path:
-                        self._adb_shell(f'rm "{temp_path}"', use_su=True)
+                        self._adb_shell(f'rm {shlex.quote(temp_path)}', use_su=True)
                     return success
                 device.pull(actual_remote_path, str(local_path))
 
                 if temp_path:
                     # Clean up temp file
-                    self._adb_shell(f'rm "{temp_path}"', use_su=True)
+                    self._adb_shell(f'rm {shlex.quote(temp_path)}', use_su=True)
 
                 return True
 
@@ -2053,12 +2053,12 @@ class AndroidCollector:
                 progress_callback(f"[Non-Root] {app_name}: Scanning {sdcard_path}...")
 
             # Check if path exists
-            result = self._shell_cmd(f'ls -d {sdcard_path} 2>/dev/null')
+            result = self._shell_cmd(f'ls -d {shlex.quote(sdcard_path)} 2>/dev/null')
             if not result or 'No such file' in result:
                 continue
 
             # Get file listing
-            file_list = self._shell_cmd(f'find {sdcard_path} -type f 2>/dev/null')
+            file_list = self._shell_cmd(f'find {shlex.quote(sdcard_path)} -type f 2>/dev/null')
             if not file_list:
                 # Fallback: try ls -R
                 ls_output = self._shell_cmd(f'ls -R {shlex.quote(sdcard_path)} 2>/dev/null')
@@ -2098,7 +2098,7 @@ class AndroidCollector:
                 try:
                     # Get file info (size + timestamp)
                     stat_output = self._shell_cmd(
-                        f'stat -c "%s %Y" "{remote_file}" 2>/dev/null'
+                        f'stat -c "%s %Y" {shlex.quote(remote_file)} 2>/dev/null'
                     )
                     file_size = 0
                     file_mtime = ''
@@ -3464,7 +3464,7 @@ class AndroidCollector:
                 )
 
             # Check if path exists on device
-            result = self._shell_cmd(f'ls -d {ext_path} 2>/dev/null')
+            result = self._shell_cmd(f'ls -d {shlex.quote(ext_path)} 2>/dev/null')
             if not result or 'No such file' in result:
                 logger.debug(f"[External] Path not found: {ext_path}")
                 continue
@@ -3492,7 +3492,7 @@ class AndroidCollector:
                 try:
                     # Get file info (size + timestamp)
                     stat_output = self._shell_cmd(
-                        f'stat -c "%s %Y" "{remote_file}" 2>/dev/null'
+                        f'stat -c "%s %Y" {shlex.quote(remote_file)} 2>/dev/null'
                     )
                     file_size = 0
                     file_mtime = ''
@@ -4364,7 +4364,7 @@ class AndroidCollector:
             _time.sleep(1)  # Wait for Agent to write file
 
             # Read fingerprint file
-            output, rc = self._adb_shell(f'cat {AGENT_FP_PATH}')
+            output, rc = self._adb_shell(f'cat {shlex.quote(AGENT_FP_PATH)}')
             fp = output.strip()
 
             if len(fp) == 64 and all(c in '0123456789abcdef' for c in fp):
@@ -4403,8 +4403,9 @@ class AndroidCollector:
         # [보안] 토큰을 파일로 전달 (broadcast extras 노출 방지)
         # logcat ActivityManager 로그에 토큰이 평문으로 기록되는 것을 방지
         token_path = f'/sdcard/Android/data/{self.AGENT_PACKAGE}/files/.scraping_token'
-        self._adb_shell(f'mkdir -p /sdcard/Android/data/{self.AGENT_PACKAGE}/files')
-        self._adb_shell(f"echo '{scraping_token}' > {token_path}")
+        token_dir = f'/sdcard/Android/data/{self.AGENT_PACKAGE}/files'
+        self._adb_shell(f'mkdir -p {shlex.quote(token_dir)}')
+        self._adb_shell(f"echo {shlex.quote(scraping_token)} > {shlex.quote(token_path)}")
 
         # Agent APK appends /scraping/recipes, /scraping/status to server_url.
         # Server routes are at /api/v1/collector/scraping/*, so we pass the
@@ -4416,9 +4417,9 @@ class AndroidCollector:
             f'am broadcast '
             f'-a com.aidf.agent.ACTION_START_SCRAPING '
             f'-n {self.AGENT_RECEIVER} '
-            f'--es server_url "{agent_server_url}" '
-            f'--es session_id "{session_id}" '
-            f'--es target_apps "{target_str}"'
+            f'--es server_url {shlex.quote(agent_server_url)} '
+            f'--es session_id {shlex.quote(session_id)} '
+            f'--es target_apps {shlex.quote(target_str)}'
         )
         output, rc = self._adb_shell(cmd)
 
@@ -4499,7 +4500,7 @@ class AndroidCollector:
         pulled = []
         try:
             # List result files
-            listing_out, _ = self._adb_shell(f'ls {self.AGENT_RESULT_DIR}/ 2>/dev/null')
+            listing_out, _ = self._adb_shell(f'ls {shlex.quote(self.AGENT_RESULT_DIR + "/")} 2>/dev/null')
             listing = listing_out.strip()
             if not listing:
                 return pulled
@@ -4532,7 +4533,7 @@ class AndroidCollector:
     def _cleanup_device_results(self):
         """Remove scraping results from device."""
         try:
-            output, rc = self._adb_shell(f'rm -rf {self.AGENT_RESULT_DIR}/*')
+            output, rc = self._adb_shell(f'rm -rf {shlex.quote(self.AGENT_RESULT_DIR)}/*')
             _debug_print('[SCRAPE] Device results cleaned up')
         except Exception as e:
             _debug_print(f'[SCRAPE] Cleanup error: {e}')

@@ -1,0 +1,248 @@
+name: Build & Release Collector
+
+on:
+  push:
+    tags:
+      - 'collector-v*'   # collector-v2.2.0 형식
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: '3.11'
+  GITHUB_REPO: ${{ github.repository }}
+
+jobs:
+  # =========================================================================
+  # Windows x64 — .exe (PyInstaller onefile)
+  # =========================================================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements/base.txt
+          pip install -r requirements/windows.txt
+          pip install pyinstaller
+
+      - name: Prepare config
+        shell: bash
+        run: cp config.example.json config.production.json
+
+      - name: Build EXE
+        run: python build.py --production --ci --skip-usb-check
+
+      - name: Rename with version
+        working-directory: dist
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-}"
+          mv IntelligenceCollector.exe "IntelligenceCollector-${VERSION}-windows-x64.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/IntelligenceCollector-*-windows-x64.exe
+
+  # =========================================================================
+  # Linux x64 — .tar.gz (PyInstaller onefile)
+  # =========================================================================
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libusb-1.0-0-dev libxcb-cursor0 libxcb-xinerama0 libgl1
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements/base.txt
+          pip install -r requirements/linux.txt
+          pip install pyinstaller
+
+      - name: Prepare config
+        run: cp config.example.json config.production.json
+
+      - name: Build Linux binary
+        run: python build.py --production --ci --skip-usb-check
+
+      - name: Package tar.gz
+        working-directory: dist
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-}"
+          chmod +x IntelligenceCollector
+          tar czf "IntelligenceCollector-${VERSION}-linux-x64.tar.gz" IntelligenceCollector
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: dist/IntelligenceCollector-*-linux-x64.tar.gz
+
+  # =========================================================================
+  # macOS ARM64 (Apple Silicon) — .dmg
+  # =========================================================================
+  build-macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          brew install libusb create-dmg || true
+          pip install -r requirements/base.txt
+          pip install -r requirements/macos.txt
+          pip install pyinstaller
+
+      - name: Prepare config
+        run: cp config.example.json config.production.json
+
+      - name: Build macOS binary
+        run: python build.py --production --ci --skip-usb-check
+
+      - name: Create DMG
+        working-directory: dist
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-}"
+          DMG_NAME="IntelligenceCollector-${VERSION}-macos-arm64.dmg"
+
+          if [ -d "IntelligenceCollector.app" ]; then
+            create-dmg \
+              --volname "Intelligence Collector" \
+              --window-size 600 400 \
+              --icon-size 100 \
+              --icon "IntelligenceCollector.app" 175 190 \
+              --app-drop-link 425 190 \
+              --no-internet-enable \
+              "${DMG_NAME}" \
+              "IntelligenceCollector.app" 2>/dev/null || \
+            hdiutil create -volname "IntelligenceCollector" \
+              -srcfolder IntelligenceCollector.app \
+              -ov -format UDZO \
+              "${DMG_NAME}"
+          else
+            # Fallback: tar.gz if .app bundle failed
+            chmod +x IntelligenceCollector
+            tar czf "IntelligenceCollector-${VERSION}-macos-arm64.tar.gz" IntelligenceCollector
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: |
+            dist/IntelligenceCollector-*-macos-arm64.dmg
+            dist/IntelligenceCollector-*-macos-arm64.tar.gz
+
+  # =========================================================================
+  # macOS x64 (Intel) — .dmg
+  # =========================================================================
+  build-macos-x64:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          brew install libusb create-dmg || true
+          pip install -r requirements/base.txt
+          pip install -r requirements/macos.txt
+          pip install pyinstaller
+
+      - name: Prepare config
+        run: cp config.example.json config.production.json
+
+      - name: Build macOS binary
+        run: python build.py --production --ci --skip-usb-check
+
+      - name: Create DMG
+        working-directory: dist
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-}"
+          DMG_NAME="IntelligenceCollector-${VERSION}-macos-x64.dmg"
+
+          if [ -d "IntelligenceCollector.app" ]; then
+            create-dmg \
+              --volname "Intelligence Collector" \
+              --window-size 600 400 \
+              --icon-size 100 \
+              --icon "IntelligenceCollector.app" 175 190 \
+              --app-drop-link 425 190 \
+              --no-internet-enable \
+              "${DMG_NAME}" \
+              "IntelligenceCollector.app" 2>/dev/null || \
+            hdiutil create -volname "IntelligenceCollector" \
+              -srcfolder IntelligenceCollector.app \
+              -ov -format UDZO \
+              "${DMG_NAME}"
+          else
+            chmod +x IntelligenceCollector
+            tar czf "IntelligenceCollector-${VERSION}-macos-x64.tar.gz" IntelligenceCollector
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64
+          path: |
+            dist/IntelligenceCollector-*-macos-x64.dmg
+            dist/IntelligenceCollector-*-macos-x64.tar.gz
+
+  # =========================================================================
+  # Release — SHA256 + GitHub Release 생성
+  # =========================================================================
+  release:
+    needs: [build-windows, build-linux, build-macos-arm64, build-macos-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release-assets
+          find . -type f \( -name "*.exe" -o -name "*.tar.gz" -o -name "*.dmg" \) | while read f; do
+            sha256sum "$f" | sed "s|  \./[^/]*/|  |" >> ../SHA256SUMS.txt
+          done
+          cat ../SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Intelligence Collector ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: |
+            release-assets/**/*.exe
+            release-assets/**/*.tar.gz
+            release-assets/**/*.dmg
+            SHA256SUMS.txt

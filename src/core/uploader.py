@@ -665,7 +665,6 @@ class R2DirectUploader:
         allowed_suffixes = (
             '.r2.cloudflarestorage.com',
             '.s3.amazonaws.com',
-            '.amazonaws.com',
         )
         allowed_hosts = ('127.0.0.1', 'localhost')
         if not parsed.hostname:

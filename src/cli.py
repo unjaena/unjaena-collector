@@ -88,14 +88,14 @@ class HeadlessCollector:
                 return False
             logger.info(f"[Stage 1/3] Collected {len(collected_files)} files")
 
-            # Stage 2: Encrypt
-            logger.info("[Stage 2/3] Encrypting files...")
-            encrypted_files = self._encrypt(collected_files)
-            logger.info(f"[Stage 2/3] Encrypted {len(encrypted_files)} files")
+            # Stage 2: Compute hashes for integrity verification
+            logger.info("[Stage 2/3] Computing file hashes...")
+            hashed_files = self._compute_hashes(collected_files)
+            logger.info(f"[Stage 2/3] Hashed {len(hashed_files)} files")
 
-            # Stage 3: Upload
+            # Stage 3: Upload (R2DirectUploader handles per-case AES-256-GCM encryption)
             logger.info("[Stage 3/3] Uploading to server...")
-            success = self._upload(encrypted_files)
+            success = self._upload(hashed_files)
             if success:
                 logger.info("[Stage 3/3] Upload complete!")
                 logger.info("=" * 60)
@@ -134,26 +134,29 @@ class HeadlessCollector:
 
         return collected
 
-    def _encrypt(self, files: List[str]) -> List[str]:
-        """Stage 2: Encrypt collected files."""
-        from core.file_encryptor import FileEncryptor
+    def _compute_hashes(self, files: List[str]) -> List[str]:
+        """Stage 2: Compute SHA-256 hashes for integrity verification.
 
-        encryptor = FileEncryptor()
-        encrypted = []
+        Note: Actual encryption (AES-256-GCM) is handled by R2DirectUploader
+        using per-case DEK from the server during upload (Stage 3).
+        """
+        from core.encryptor import FileHashCalculator
+
+        calculator = FileHashCalculator()
+        verified = []
 
         for i, filepath in enumerate(files, 1):
             if self._cancelled:
                 break
             if i % 50 == 0 or i == len(files):
-                logger.info(f"  Encrypting [{i}/{len(files)}]")
+                logger.info(f"  Hashing [{i}/{len(files)}]")
             try:
-                enc_path = encryptor.encrypt_file(filepath)
-                if enc_path:
-                    encrypted.append(enc_path)
+                calculator.calculate_file_hash(filepath)
+                verified.append(filepath)
             except Exception as e:
-                logger.warning(f"  Encrypt failed: {os.path.basename(filepath)}: {e}")
+                logger.warning(f"  Hash failed: {os.path.basename(filepath)}: {e}")
 
-        return encrypted
+        return verified
 
     def _upload(self, files: List[str]) -> bool:
         """Stage 3: Upload encrypted files to R2 via presigned URLs."""
@@ -269,7 +272,7 @@ def run_headless(args, config: dict) -> int:
 
     # Step 4: Run collection
     collector = HeadlessCollector(
-        server_url=(server_url if ("localhost" in (result.server_url or "") or "127.0.0.1" in (result.server_url or "")) else (result.server_url or server_url)),
+        server_url=server_url,  # [SECURITY] Always use user-provided URL, never trust server response
         session_id=result.session_id,
         collection_token=result.collection_token,
         case_id=result.case_id,

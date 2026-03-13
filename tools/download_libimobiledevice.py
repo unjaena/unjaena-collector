@@ -33,7 +33,7 @@ LIBIMOBILEDEVICE_URL = (
 
 # Expected SHA256 hash (for integrity verification)
 # Note: Update this if downloading a different version
-EXPECTED_SHA256 = None  # Will be populated after first download
+EXPECTED_SHA256 = None  # [SECURITY] Set after first verified download — see step [2/3] output
 
 # Tools directory (where this script is located)
 TOOLS_DIR = Path(__file__).parent
@@ -124,9 +124,10 @@ def download_libimobiledevice(force: bool = False) -> bool:
             return False
         print("      [OK] SHA256 verified")
     else:
-        print(f"\n[2/3] Skipping hash verification (hash not configured)")
         actual_hash = compute_sha256(zip_path)
+        print(f"\n[2/3] WARNING: No expected hash configured — integrity NOT verified!")
         print(f"      SHA256: {actual_hash}")
+        print(f"      ACTION: Set EXPECTED_SHA256 = \"{actual_hash}\" in this script after manual verification.")
 
     # Extract
     print(f"\n[3/3] Extracting...")

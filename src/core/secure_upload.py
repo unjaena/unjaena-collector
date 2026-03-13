@@ -673,6 +673,7 @@ def load_config_from_env() -> Dict[str, Any]:
     # [SECURITY] SSL verification can only be disabled in explicit dev mode
     # Release builds (PyInstaller) always enforce SSL — no bypass possible
     verify_ssl = True
+    dev_mode = False
     is_release = getattr(__import__('sys'), 'frozen', False)
 
     if is_release:
