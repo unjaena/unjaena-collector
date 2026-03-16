@@ -32,10 +32,10 @@ def _get_config_paths() -> list:
     """
     paths = []
 
-    # Location of executable when built with PyInstaller
+    # Location of bundled data when built with PyInstaller --onefile
     if getattr(sys, 'frozen', False):
-        exe_dir = os.path.dirname(sys.executable)
-        paths.append(os.path.join(exe_dir, 'config.json'))
+        meipass_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+        paths.append(os.path.join(meipass_dir, 'config.json'))
     else:
         # Development environment: prefer config.development.json
         src_dir = os.path.dirname(os.path.abspath(__file__))

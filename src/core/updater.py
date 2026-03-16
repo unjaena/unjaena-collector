@@ -23,17 +23,18 @@ RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases/latest"
 def get_current_version() -> str:
     """현재 앱 버전 반환"""
     try:
+        import os
         if getattr(sys, 'frozen', False):
-            import os
-            config_path = os.path.join(os.path.dirname(sys.executable), 'config.json')
+            # PyInstaller --onefile: bundled files are in sys._MEIPASS, not next to exe
+            base_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+            config_path = os.path.join(base_dir, 'config.json')
         else:
-            import os
             src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             collector_dir = os.path.dirname(src_dir)
             config_path = os.path.join(collector_dir, 'config.json')
 
         if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
+            with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f).get('version', '0.0.0')
     except Exception:
         pass
