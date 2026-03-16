@@ -2008,11 +2008,21 @@ class CollectorWindow(QMainWindow):
                 self.worker._pw_event.set()
             return
 
-        from gui.ios_password_dialog import show_ios_backup_password_dialog
-        result = show_ios_backup_password_dialog(
-            error_msg=error_msg if error_msg else "",
-            parent=self
+        from gui.ios_password_dialog import (
+            show_ios_backup_password_dialog,
+            show_ios_encryption_setup_dialog,
         )
+
+        if error_msg == "ENCRYPTION_SETUP":
+            # Encryption OFF → ask user to set a temporary password
+            result = show_ios_encryption_setup_dialog(parent=self)
+        else:
+            # Encryption ON → ask user for existing password
+            result = show_ios_backup_password_dialog(
+                error_msg=error_msg if error_msg else "",
+                parent=self
+            )
+
         if hasattr(self, 'worker') and self.worker:
             self.worker._pw_response = result.password if result.success else None
             if self.worker._pw_event:

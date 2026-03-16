@@ -124,52 +124,6 @@ def _sanitize_filename(filename: str) -> str:
     return sanitized
 
 
-# Session-scoped HMAC key: generated once per process, never persisted to disk.
-# The key is only used locally to derive iOS backup passwords — it is never
-# transmitted to the server (uploads use a server-provided DEK).
-_session_hmac_key: Optional[bytes] = None
-
-
-def _get_hmac_key() -> bytes:
-    """
-    Get HMAC key for forensic backup password derivation.
-
-    The key exists only in memory for the duration of the collection session.
-    It is never written to disk or transmitted to the server.
-
-    Priority:
-      1. Environment variable COLLECTOR_HMAC_KEY (for CI / production)
-      2. Per-session random key (generated once, lives in memory only)
-    """
-    global _session_hmac_key
-
-    # 1. Environment variable (for CI / managed deployments)
-    env_key = os.environ.get('COLLECTOR_HMAC_KEY')
-    if env_key:
-        return env_key.encode()
-
-    # 2. Per-session key (generated once per process)
-    if _session_hmac_key is None:
-        import secrets
-        _session_hmac_key = secrets.token_hex(32).encode()
-    return _session_hmac_key
-
-
-def _derive_forensic_password(udid: str) -> str:
-    """
-    Derive a deterministic forensic backup password from device UDID.
-
-    Uses HMAC-SHA256 so the same UDID always produces the same password.
-    This allows recovery after crash: re-derive the password to restore
-    the device's encryption state.
-
-    The HMAC key is loaded from environment variable or config file,
-    never hardcoded in source code (open-source safe).
-    """
-    import hmac
-    key = _get_hmac_key()
-    digest = hmac.new(key, udid.encode(), hashlib.sha256).hexdigest()
-    return f"f0r_{digest[:20]}"
 
 
 # Check for pymobiledevice3
@@ -2158,58 +2112,51 @@ class iOSDeviceConnector:
             will_encrypt = backup_service.will_encrypt
             logger.info(f"[iOS] Mobilebackup2Service created, will_encrypt={will_encrypt}")
 
-            forensic_pw = _derive_forensic_password(self.udid)
-
             # =============================================================
-            # Scenario A: Encryption OFF → enable with forensic password
+            # Encryption handling — user provides password for all scenarios.
+            # No auto-generated keys: user always knows the password,
+            # so they can recover if the collector crashes mid-collection.
             # =============================================================
             if not will_encrypt:
+                # Encryption OFF → ask user for a temporary password to enable it.
+                # Encrypted backups contain more forensic data (HealthKit, WiFi, etc.)
                 if progress_callback:
-                    progress_callback("Enabling backup encryption for forensic completeness...")
+                    progress_callback("Backup encryption required for complete forensic data...")
 
-                if self._change_password_with_timeout(str(backup_dir), "", forensic_pw):
-                    self._encryption_action = 'we_enabled'
-                    self._forensic_backup_password = forensic_pw
-                    logger.info("[iOS] Backup encryption enabled (was OFF)")
+                user_pw = self._request_encryption_password(str(backup_dir), progress_callback)
+                if user_pw:
+                    if self._change_password_with_timeout(str(backup_dir), "", user_pw):
+                        self._encryption_action = 'we_enabled'
+                        self._forensic_backup_password = user_pw
+                        logger.info("[iOS] Backup encryption enabled with user password")
+                    else:
+                        logger.warning("[iOS] Failed to enable encryption, proceeding unencrypted")
+                        self._encryption_action = None
+                        self._forensic_backup_password = None
                 else:
-                    # Timeout or failure — proceed unencrypted
-                    logger.warning("[iOS] Failed to enable encryption, proceeding unencrypted")
+                    # User skipped → proceed unencrypted
+                    logger.info("[iOS] User skipped encryption, proceeding unencrypted")
                     self._encryption_action = None
                     self._forensic_backup_password = None
-
-            # =============================================================
-            # Scenario B/C: Encryption already ON
-            # =============================================================
             else:
-                # Try forensic password first (crash recovery / our previous encryption)
-                if progress_callback:
-                    progress_callback("Verifying backup encryption password...")
-
-                if self._change_password_with_timeout(str(backup_dir), forensic_pw, forensic_pw):
-                    # Scenario B: our forensic password works
+                # Encryption already ON → ask user for existing password
+                logger.info("[iOS] Encryption already ON — requesting existing password")
+                user_pw = self._request_user_password(str(backup_dir), progress_callback)
+                if user_pw:
                     self._encryption_action = 'was_already_on'
-                    self._forensic_backup_password = forensic_pw
-                    logger.info("[iOS] Forensic password verified — our previous encryption")
+                    self._forensic_backup_password = user_pw
                 else:
-                    # Scenario C: unknown user password — ask via callback
-                    logger.info("[iOS] Forensic password rejected — requesting user password")
-                    user_pw = self._request_user_password(str(backup_dir), progress_callback)
-                    if user_pw:
-                        self._encryption_action = 'was_already_on'
-                        self._forensic_backup_password = user_pw
-                    else:
-                        # User cancelled or doesn't know
-                        self._backup_failed_reason = (
-                            "Backup password unknown — cannot proceed.\n"
-                            "Reset via: Settings > General > Transfer or Reset iPhone "
-                            "> Reset > Reset All Settings (data preserved)"
-                        )
-                        yield '', {
-                            'artifact_type': 'mobile_ios_device_backup',
-                            'status': 'error',
-                            'error': self._backup_failed_reason,
-                        }
-                        return
+                    self._backup_failed_reason = (
+                        "Backup password unknown — cannot proceed.\n"
+                        "Reset via: Settings > General > Transfer or Reset iPhone "
+                        "> Reset > Reset All Settings (data preserved)"
+                    )
+                    yield '', {
+                        'artifact_type': 'mobile_ios_device_backup',
+                        'status': 'error',
+                        'error': self._backup_failed_reason,
+                    }
+                    return
 
             # Create fresh service for backup (change_password closes the session)
             logger.info("[iOS] Creating fresh Mobilebackup2Service for backup...")
@@ -2301,6 +2248,30 @@ class iOSDeviceConnector:
 
             error_msg = "Incorrect password. Please try again."
             logger.info("[iOS] User password rejected, requesting again")
+
+    def _request_encryption_password(
+        self,
+        backup_dir: str,
+        progress_callback: Optional[Callable[[str], None]] = None
+    ) -> Optional[str]:
+        """
+        Request user to set a temporary encryption password (encryption OFF case).
+
+        The user enters a password to enable backup encryption for this session.
+        After collection, the collector restores encryption to OFF using this password.
+        If crash occurs, the user knows the password and can manage it themselves.
+
+        Returns password or None if user chose to skip (proceed unencrypted).
+        """
+        if not self._password_callback:
+            logger.warning("[iOS] No password callback set — cannot request encryption password")
+            return None
+
+        # Use password callback with a message indicating this is for new encryption
+        password = self._password_callback(
+            "ENCRYPTION_SETUP"  # Special marker for GUI to show appropriate dialog
+        )
+        return password if password else None
 
     # =========================================================================
     # [2026-01-31] Unified collect() method - supports all artifact types

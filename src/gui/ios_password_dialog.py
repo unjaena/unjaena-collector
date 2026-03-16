@@ -619,6 +619,224 @@ class iOSBackupPasswordDialog(QDialog):
         """
 
 
+class iOSEncryptionSetupDialog(QDialog):
+    """
+    Dialog for setting a temporary encryption password on an iOS device.
+
+    Shown when backup encryption is OFF. The user enters a temporary password
+    to enable encryption for complete forensic data. After collection,
+    encryption is restored to OFF using this same password.
+    If a crash occurs, the user knows the password and can manage it themselves.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.result = iOSPasswordDialogResult()
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setWindowTitle("iOS Backup Encryption Setup")
+        self.setMinimumSize(500, 380)
+        self.setModal(True)
+        self.setStyleSheet(self._get_stylesheet())
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # Header
+        header = QLabel("Backup Encryption Setup")
+        header.setObjectName("header")
+        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(header)
+
+        # Info banner
+        info_frame = QFrame()
+        info_frame.setObjectName("infoFrame")
+        info_layout = QVBoxLayout(info_frame)
+        info_label = QLabel(
+            "Encrypted backups contain more forensic data\n"
+            "(HealthKit, WiFi passwords, saved accounts, etc.)\n\n"
+            "Enter a temporary password to enable backup encryption.\n"
+            "This password will be used to restore the device after collection.\n"
+            "The password is used locally only and is never transmitted."
+        )
+        info_label.setObjectName("infoText")
+        info_label.setWordWrap(True)
+        info_layout.addWidget(info_label)
+        layout.addWidget(info_frame)
+
+        # Password input area
+        input_frame = QFrame()
+        input_frame.setObjectName("inputFrame")
+        input_layout = QVBoxLayout(input_frame)
+
+        input_layout.addWidget(QLabel("Temporary Encryption Password:"))
+
+        pw_row = QHBoxLayout()
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("Enter a temporary password")
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_input.returnPressed.connect(self._on_ok)
+        pw_row.addWidget(self.password_input)
+
+        self.show_pw_btn = QPushButton("Show")
+        self.show_pw_btn.setFixedWidth(60)
+        self.show_pw_btn.setCheckable(True)
+        self.show_pw_btn.toggled.connect(self._toggle_password_visibility)
+        pw_row.addWidget(self.show_pw_btn)
+
+        input_layout.addLayout(pw_row)
+
+        # Note
+        note_label = QLabel(
+            "Remember this password — if the collector crashes during collection,\n"
+            "you can use it in iTunes/Finder to manage backup encryption."
+        )
+        note_label.setObjectName("noteLabel")
+        note_label.setWordWrap(True)
+        input_layout.addWidget(note_label)
+
+        # Error label
+        self.error_label = QLabel("")
+        self.error_label.setObjectName("errorLabel")
+        self.error_label.hide()
+        input_layout.addWidget(self.error_label)
+
+        layout.addWidget(input_frame)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        self.skip_btn = QPushButton("Skip (Collect Without Encryption)")
+        self.skip_btn.clicked.connect(self._on_skip)
+        self.skip_btn.setMinimumWidth(220)
+        button_layout.addWidget(self.skip_btn)
+
+        self.ok_btn = QPushButton("Enable Encryption")
+        self.ok_btn.setObjectName("unlockButton")
+        self.ok_btn.clicked.connect(self._on_ok)
+        self.ok_btn.setMinimumWidth(140)
+        button_layout.addWidget(self.ok_btn)
+
+        layout.addLayout(button_layout)
+        self.password_input.setFocus()
+
+    def _toggle_password_visibility(self, checked: bool):
+        if checked:
+            self.password_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.show_pw_btn.setText("Hide")
+        else:
+            self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.show_pw_btn.setText("Show")
+
+    def _on_ok(self):
+        password = self.password_input.text()
+        if not password:
+            self.error_label.setText("Please enter a password.")
+            self.error_label.show()
+            return
+
+        self.error_label.hide()
+        self.result.success = True
+        self.result.password = password
+        self.password_input.clear()
+        self.accept()
+
+    def _on_skip(self):
+        self.result.success = False
+        self.result.skip = True
+        self.accept()
+
+    def _get_stylesheet(self) -> str:
+        return f"""
+            QDialog {{
+                background-color: {COLORS['bg_primary']};
+            }}
+            #header {{
+                font-size: 16px;
+                font-weight: bold;
+                color: {COLORS['info']};
+                padding: 4px;
+            }}
+            #infoFrame {{
+                background-color: {COLORS['info_bg']};
+                border: 1px solid {COLORS['info']};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+            #infoText {{
+                color: {COLORS['text_primary']};
+                font-size: 11px;
+            }}
+            #inputFrame {{
+                background-color: {COLORS['bg_secondary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+            QLineEdit {{
+                background-color: {COLORS['bg_tertiary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 4px;
+                color: {COLORS['text_primary']};
+                padding: 6px;
+                font-size: 11px;
+            }}
+            QLineEdit::placeholder {{
+                color: {COLORS['text_tertiary']};
+            }}
+            QLabel {{
+                color: {COLORS['text_primary']};
+                font-size: 11px;
+            }}
+            #noteLabel {{
+                color: {COLORS['warning']};
+                font-size: 9px;
+                font-style: italic;
+                padding: 2px 0;
+            }}
+            #errorLabel {{
+                color: {COLORS['error']};
+                font-size: 10px;
+                padding: 4px;
+                background-color: {COLORS['error_bg']};
+                border-radius: 4px;
+            }}
+            QPushButton {{
+                background-color: {COLORS['bg_tertiary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 4px;
+                color: {COLORS['text_primary']};
+                padding: 6px 12px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['bg_hover']};
+                border-color: {COLORS['border_default']};
+            }}
+            #unlockButton {{
+                background-color: {COLORS['brand_primary']};
+                border: none;
+                color: {COLORS['bg_primary']};
+                font-weight: bold;
+            }}
+            #unlockButton:hover {{
+                background-color: {COLORS['brand_accent']};
+            }}
+        """
+
+
+def show_ios_encryption_setup_dialog(parent=None) -> iOSPasswordDialogResult:
+    """Display iOS encryption setup dialog for devices without backup encryption."""
+    dialog = iOSEncryptionSetupDialog(parent=parent)
+    result_code = dialog.exec()
+    if result_code == QDialog.DialogCode.Accepted:
+        return dialog.result
+    return iOSPasswordDialogResult(success=False, skip=False)
+
+
 def show_ios_backup_password_dialog(
     error_msg: str = "",
     parent=None
