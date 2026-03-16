@@ -742,48 +742,64 @@ def diagnose_device_prerequisites() -> dict:
     }
 
     # iOS: check pymobiledevice3 availability
+    # Use broad Exception catch — PyInstaller bundles may throw non-ImportError
+    # (e.g., AttributeError from missing dynamic submodules)
     try:
         from collectors.ios_collector import PYMOBILEDEVICE3_AVAILABLE
         result['ios']['library_available'] = PYMOBILEDEVICE3_AVAILABLE
-    except ImportError:
-        pass
+    except Exception:
+        # Fallback: try importing pymobiledevice3 directly
+        try:
+            import pymobiledevice3
+            result['ios']['library_available'] = True
+        except Exception:
+            pass
 
     # iOS: check Apple Mobile Device Support driver (Windows)
-    # Supports both traditional iTunes and Microsoft Store "Apple Devices" app
+    # Isolated from library check — driver detection must always run
     if sys.platform == 'win32':
-        import winreg
-        # Registry keys: iTunes (desktop) and Apple Devices (UWP/Store)
-        apple_keys = [
-            r"SOFTWARE\Apple Inc.\Apple Mobile Device Support",
-            r"SOFTWARE\Apple Computer, Inc.\Apple Mobile Device Support",
-            r"SOFTWARE\Apple Inc.\Apple Devices",
-        ]
-        for key_path in apple_keys:
-            try:
-                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path):
-                    result['ios']['driver_installed'] = True
-                    break
-            except OSError:
-                continue
+        try:
+            import winreg
+            # Registry keys: iTunes (desktop) and Apple Devices (UWP/Store)
+            # Check both native and WOW6432Node paths for 32/64-bit compatibility
+            apple_keys = [
+                r"SOFTWARE\Apple Inc.\Apple Mobile Device Support",
+                r"SOFTWARE\Apple Computer, Inc.\Apple Mobile Device Support",
+                r"SOFTWARE\Apple Inc.\Apple Devices",
+                r"SOFTWARE\Wow6432Node\Apple Inc.\Apple Mobile Device Support",
+                r"SOFTWARE\Wow6432Node\Apple Inc.\Apple Devices",
+            ]
+            for key_path in apple_keys:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path):
+                        result['ios']['driver_installed'] = True
+                        break
+                except OSError:
+                    continue
 
-        # Fallback: check if Apple Mobile Device Service is registered
-        if not result['ios']['driver_installed']:
-            try:
-                svc_key = r"SYSTEM\CurrentControlSet\Services\Apple Mobile Device Service"
-                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, svc_key):
-                    result['ios']['driver_installed'] = True
-            except OSError:
-                pass
+            # Fallback: check if Apple Mobile Device Service is registered
+            if not result['ios']['driver_installed']:
+                try:
+                    svc_key = r"SYSTEM\CurrentControlSet\Services\Apple Mobile Device Service"
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, svc_key):
+                        result['ios']['driver_installed'] = True
+                except OSError:
+                    pass
+        except Exception:
+            pass
     else:
         # macOS/Linux: usbmuxd is typically pre-installed or comes with libimobiledevice
-        import shutil
-        result['ios']['driver_installed'] = shutil.which('usbmuxd') is not None
+        try:
+            import shutil
+            result['ios']['driver_installed'] = shutil.which('usbmuxd') is not None
+        except Exception:
+            pass
 
     # Android: check ADB availability
     try:
         from collectors.android_collector import ADB_AVAILABLE
         result['android']['adb_available'] = ADB_AVAILABLE
-    except ImportError:
+    except Exception:
         pass
 
     return result
