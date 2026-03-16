@@ -84,6 +84,11 @@ def check_for_update() -> Optional[dict]:
             'published_at': '2026-03-10T...',
         }
     """
+    # Skip update check when running from source — developers have the latest code
+    if not getattr(sys, 'frozen', False):
+        logger.debug("[Updater] Skipping: running from source")
+        return None
+
     try:
         current = get_current_version()
         current_tuple = _parse_version(current)

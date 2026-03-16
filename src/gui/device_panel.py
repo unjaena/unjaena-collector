@@ -105,11 +105,7 @@ class DeviceListPanel(QWidget):
         """Build beginner-friendly mobile connection guide."""
         try:
             diag = diagnose_device_prerequisites()
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(
-                f"Device prerequisites check failed: {e}"
-            )
+        except Exception:
             diag = {
                 'ios': {'driver_installed': False, 'library_available': False},
                 'android': {'adb_available': False},
