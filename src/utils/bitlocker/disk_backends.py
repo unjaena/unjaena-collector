@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class PhysicalDiskBackend(UnifiedDiskReader):
-    """
+    r"""
     Windows physical disk backend
     Direct access to raw sectors via \\.\PhysicalDrive{N}
     Requires administrator privileges
