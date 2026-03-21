@@ -262,7 +262,7 @@ class ConsentDialog(QDialog):
     def _apply_fallback_template(self):
         """Apply offline fallback template"""
         self.template_id = None
-        self.template_version = "offline-2.1"
+        self.template_version = "offline-2.2"
         self.template_content = self._get_consent_html()
 
         # Header text (by language)
@@ -555,13 +555,13 @@ class ConsentDialog(QDialog):
         th = self._consent_th_style()
         return self._consent_html_wrapper(f"""
         <div style="margin-bottom:12px; padding:8px; background:{COLORS['bg_secondary']}; border-radius:4px; font-size:11px; color:{COLORS['text_secondary']};">
-            Version: v2.1 | Effective: 2026-03-16 | unJaena AI</div>
+            Version: v2.2 | Effective: 2026-03-21 | unJaena AI</div>
         <h3 style="color: {COLORS['brand_primary']}; border-bottom: 2px solid {COLORS['brand_primary']}; padding-bottom: 8px;">
             1. Personal Information Collection and Use Consent</h3>
         <table style="{self._consent_table_style()}">
             <tr><th style="{th}; width:25%;">Item</th><th style="{th}">Description</th></tr>
             <tr><td style="{td}"><b>Collection Purpose</b></td><td style="{td}">Digital intelligence analysis, security incident investigation, evidence acquisition, AI-based anomaly detection</td></tr>
-            <tr><td style="{td}"><b>Collection Items</b></td><td style="{td}"><b>[System]</b> Prefetch, Amcache, UserAssist, Event logs, Registry, MFT, USN Journal<br><b>[User Activity]</b> Browser history, USB history, Recycle Bin, Shortcuts, Jump lists<br><b>[Documents/Email]</b> Office documents, PDF, HWP, Email (pst/ost/eml/msg)</td></tr>
+            <tr><td style="{td}"><b>Collection Items</b></td><td style="{td}"><b>[Windows]</b> Registry, Event logs, Prefetch, Amcache, UserAssist, MFT, USN Journal, $LogFile, SRUM, Jump lists, Shortcuts, Recycle Bin, Browser history/cookies, USB history, Scheduled tasks, WMI, PowerShell history, Remote access logs (TeamViewer/AnyDesk), pagefile.sys, hiberfil.sys<br><b>[Android]</b> SMS/MMS, Call logs, Contacts, Calendar, Media files (photos/videos), WiFi settings, Location history, Installed apps, System logs, Messenger data (KakaoTalk, WhatsApp, Telegram, LINE, etc.)<br><b>[iOS]</b> iMessage/SMS, Call history, Contacts, Safari/Chrome history, Location data, System logs, Messenger data, Backup metadata, Device information<br><b>[Linux]</b> System/Auth/Kernel logs, Shell history, Crontab, SSH keys, Network config, Package history, Docker config<br><b>[macOS]</b> Unified logs, Launch agents/daemons, Browser history, Keychain metadata, FSEvents, Spotlight, TCC permissions, KnowledgeC<br><b>[Memory]</b> Physical RAM acquisition (WinPmem), Process memory of running applications<br><b>[Documents/Email]</b> Office documents, PDF, HWP, Email (pst/ost/eml/msg), Images/Videos with metadata</td></tr>
             <tr><td style="{td}"><b>Retention Period</b></td><td style="{td}"><b>30 days</b> after case closure (automatically deleted). Retention may be extended using credits via the web platform.</td></tr>
             <tr><td style="{td}"><b>Processing Method</b></td><td style="{td}">SHA-256 hash verification, TLS 1.3 encryption, AES-256-GCM storage, Evidence Integrity Tracking. While we apply industry-leading security measures, absolute security over internet transmission is technically impossible.</td></tr>
             <tr><td style="{td}"><b>Right to Refuse</b></td><td style="{td}">You have the right to refuse consent. If you refuse, data collection and analysis services cannot be provided.</td></tr>
@@ -626,13 +626,13 @@ class ConsentDialog(QDialog):
         th = self._consent_th_style()
         return self._consent_html_wrapper(f"""
         <div style="margin-bottom:12px; padding:8px; background:{COLORS['bg_secondary']}; border-radius:4px; font-size:11px; color:{COLORS['text_secondary']};">
-            버전: v2.1 | 시행일: 2026-03-16 | unJaena AI</div>
+            버전: v2.2 | 시행일: 2026-03-21 | unJaena AI</div>
         <h3 style="color: {COLORS['brand_primary']}; border-bottom: 2px solid {COLORS['brand_primary']}; padding-bottom: 8px;">
             1. 개인정보 수집·이용 동의</h3>
         <table style="{self._consent_table_style()}">
             <tr><th style="{th}; width:25%;">항목</th><th style="{th}">내용</th></tr>
             <tr><td style="{td}"><b>수집 목적</b></td><td style="{td}">디지털 인텔리전스 분석, 보안 사고 조사, 증거 확보, AI 기반 이상 탐지</td></tr>
-            <tr><td style="{td}"><b>수집 항목</b></td><td style="{td}"><b>[시스템]</b> Prefetch, Amcache, UserAssist, 이벤트 로그, 레지스트리, MFT, USN Journal<br><b>[사용자 활동]</b> 브라우저 기록, USB 연결 기록, 휴지통, 바로가기, 점프 목록<br><b>[문서/이메일]</b> Office 문서, PDF, HWP, 이메일 (pst/ost/eml/msg)</td></tr>
+            <tr><td style="{td}"><b>수집 항목</b></td><td style="{td}"><b>[Windows]</b> 레지스트리, 이벤트 로그, Prefetch, Amcache, UserAssist, MFT, USN Journal, $LogFile, SRUM, 점프 목록, 바로가기, 휴지통, 브라우저 기록/쿠키, USB 기록, 예약 작업, WMI, PowerShell 기록, 원격접속 로그(TeamViewer/AnyDesk), pagefile.sys, hiberfil.sys<br><b>[Android]</b> SMS/MMS, 통화 기록, 연락처, 캘린더, 미디어 파일(사진/영상), WiFi 설정, 위치 기록, 설치된 앱, 시스템 로그, 메신저 데이터(카카오톡, WhatsApp, Telegram, LINE 등)<br><b>[iOS]</b> iMessage/SMS, 통화 기록, 연락처, Safari/Chrome 기록, 위치 데이터, 시스템 로그, 메신저 데이터, 백업 메타데이터, 기기 정보<br><b>[Linux]</b> 시스템/인증/커널 로그, 쉘 히스토리, Crontab, SSH 키, 네트워크 설정, 패키지 이력, Docker 설정<br><b>[macOS]</b> 통합 로그, Launch Agent/Daemon, 브라우저 기록, Keychain 메타데이터, FSEvents, Spotlight, TCC 권한, KnowledgeC<br><b>[메모리]</b> 물리 메모리 수집(RAM 덤프), 실행 중인 앱 프로세스 메모리<br><b>[문서/이메일]</b> Office 문서, PDF, HWP, 이메일(pst/ost/eml/msg), 이미지/영상 및 메타데이터</td></tr>
             <tr><td style="{td}"><b>보관 기간</b></td><td style="{td}"><b>30일</b> (케이스 종료 후 자동 삭제). 웹 플랫폼에서 크레딧을 사용하여 보관 기간을 연장할 수 있습니다.</td></tr>
             <tr><td style="{td}"><b>처리 방법</b></td><td style="{td}">SHA-256 해시 검증, TLS 1.3 암호화 통신, AES-256-GCM 암호화 저장, 증거 무결성 추적(Evidence Integrity Tracking). 업계 최고 수준의 보안 조치를 적용하고 있으나, 인터넷 전송 환경에서 절대적인 보안은 기술적으로 불가능합니다.</td></tr>
             <tr><td style="{td}"><b>동의 거부권</b></td><td style="{td}">귀하는 동의를 거부할 권리가 있습니다. 동의를 거부하실 경우 데이터 수집 및 분석 서비스 이용이 불가합니다.</td></tr>
@@ -697,13 +697,13 @@ class ConsentDialog(QDialog):
         th = self._consent_th_style()
         return self._consent_html_wrapper(f"""
         <div style="margin-bottom:12px; padding:8px; background:{COLORS['bg_secondary']}; border-radius:4px; font-size:11px; color:{COLORS['text_secondary']};">
-            バージョン: v2.1 | 施行日: 2026-03-16 | unJaena AI</div>
+            バージョン: v2.2 | 施行日: 2026-03-21 | unJaena AI</div>
         <h3 style="color: {COLORS['brand_primary']}; border-bottom: 2px solid {COLORS['brand_primary']}; padding-bottom: 8px;">
             1. 個人情報の収集・利用に関する同意</h3>
         <table style="{self._consent_table_style()}">
             <tr><th style="{th}; width:25%;">項目</th><th style="{th}">内容</th></tr>
             <tr><td style="{td}"><b>収集目的</b></td><td style="{td}">デジタルインテリジェンス分析、セキュリティインシデント調査、証拠取得、AI異常検知</td></tr>
-            <tr><td style="{td}"><b>収集項目</b></td><td style="{td}"><b>[システム]</b> Prefetch、Amcache、UserAssist、イベントログ、レジストリ、MFT、USN Journal<br><b>[ユーザー活動]</b> ブラウザ履歴、USB接続履歴、ごみ箱、ショートカット、ジャンプリスト<br><b>[文書/メール]</b> Office文書、PDF、HWP、メール（pst/ost/eml/msg）</td></tr>
+            <tr><td style="{td}"><b>収集項目</b></td><td style="{td}"><b>[Windows]</b> レジストリ、イベントログ、Prefetch、Amcache、UserAssist、MFT、USN Journal、$LogFile、SRUM、ジャンプリスト、ショートカット、ごみ箱、ブラウザ履歴/Cookie、USB履歴、タスクスケジューラ、WMI、PowerShell履歴、リモートアクセスログ（TeamViewer/AnyDesk）、pagefile.sys、hiberfil.sys<br><b>[Android]</b> SMS/MMS、通話履歴、連絡先、カレンダー、メディアファイル（写真/動画）、WiFi設定、位置情報、インストール済みアプリ、システムログ、メッセンジャーデータ（KakaoTalk、WhatsApp、Telegram、LINE等）<br><b>[iOS]</b> iMessage/SMS、通話履歴、連絡先、Safari/Chrome履歴、位置データ、システムログ、メッセンジャーデータ、バックアップメタデータ、デバイス情報<br><b>[Linux]</b> システム/認証/カーネルログ、シェル履歴、Crontab、SSHキー、ネットワーク設定、パッケージ履歴、Docker設定<br><b>[macOS]</b> 統合ログ、Launch Agent/Daemon、ブラウザ履歴、Keychainメタデータ、FSEvents、Spotlight、TCC権限、KnowledgeC<br><b>[メモリ]</b> 物理メモリ取得（RAMダンプ）、実行中アプリのプロセスメモリ<br><b>[文書/メール]</b> Office文書、PDF、HWP、メール（pst/ost/eml/msg）、画像/動画及びメタデータ</td></tr>
             <tr><td style="{td}"><b>保存期間</b></td><td style="{td}"><b>30日間</b>（ケース終了後自動削除）。Webプラットフォームでクレジットを使用して保存期間を延長できます。</td></tr>
             <tr><td style="{td}"><b>処理方法</b></td><td style="{td}">SHA-256ハッシュ検証、TLS 1.3暗号化通信、AES-256-GCM暗号化保存、証拠完全性追跡（Evidence Integrity Tracking）。業界最高水準のセキュリティ対策を講じていますが、インターネット通信における絶対的なセキュリティは技術的に不可能です。</td></tr>
             <tr><td style="{td}"><b>同意拒否権</b></td><td style="{td}">同意を拒否する権利があります。拒否された場合、データ収集・分析サービスをご利用いただけません。</td></tr>
@@ -768,13 +768,13 @@ class ConsentDialog(QDialog):
         th = self._consent_th_style()
         return self._consent_html_wrapper(f"""
         <div style="margin-bottom:12px; padding:8px; background:{COLORS['bg_secondary']}; border-radius:4px; font-size:11px; color:{COLORS['text_secondary']};">
-            版本: v2.1 | 生效日期: 2026-03-16 | unJaena AI</div>
+            版本: v2.2 | 生效日期: 2026-03-21 | unJaena AI</div>
         <h3 style="color: {COLORS['brand_primary']}; border-bottom: 2px solid {COLORS['brand_primary']}; padding-bottom: 8px;">
             1. 个人信息收集和使用同意</h3>
         <table style="{self._consent_table_style()}">
             <tr><th style="{th}; width:25%;">项目</th><th style="{th}">说明</th></tr>
             <tr><td style="{td}"><b>收集目的</b></td><td style="{td}">数字智能分析、安全事件调查、证据获取、基于AI的异常检测</td></tr>
-            <tr><td style="{td}"><b>收集项目</b></td><td style="{td}"><b>[系统]</b> Prefetch、Amcache、UserAssist、事件日志、注册表、MFT、USN Journal<br><b>[用户活动]</b> 浏览器历史、USB连接记录、回收站、快捷方式、跳转列表<br><b>[文档/邮件]</b> Office文档、PDF、HWP、邮件（pst/ost/eml/msg）</td></tr>
+            <tr><td style="{td}"><b>收集项目</b></td><td style="{td}"><b>[Windows]</b> 注册表、事件日志、Prefetch、Amcache、UserAssist、MFT、USN Journal、$LogFile、SRUM、跳转列表、快捷方式、回收站、浏览器历史/Cookie、USB记录、计划任务、WMI、PowerShell历史、远程访问日志（TeamViewer/AnyDesk）、pagefile.sys、hiberfil.sys<br><b>[Android]</b> SMS/MMS、通话记录、联系人、日历、媒体文件（照片/视频）、WiFi设置、位置记录、已安装应用、系统日志、即时通讯数据（KakaoTalk、WhatsApp、Telegram、LINE等）<br><b>[iOS]</b> iMessage/SMS、通话记录、联系人、Safari/Chrome历史、位置数据、系统日志、即时通讯数据、备份元数据、设备信息<br><b>[Linux]</b> 系统/认证/内核日志、Shell历史、Crontab、SSH密钥、网络配置、软件包历史、Docker配置<br><b>[macOS]</b> 统一日志、Launch Agent/Daemon、浏览器历史、Keychain元数据、FSEvents、Spotlight、TCC权限、KnowledgeC<br><b>[内存]</b> 物理内存获取（RAM转储）、运行中应用的进程内存<br><b>[文档/邮件]</b> Office文档、PDF、HWP、邮件（pst/ost/eml/msg）、图片/视频及元数据</td></tr>
             <tr><td style="{td}"><b>保留期限</b></td><td style="{td}"><b>30天</b>（案件结束后自动删除）。可通过Web平台使用积分延长保留期限。</td></tr>
             <tr><td style="{td}"><b>处理方法</b></td><td style="{td}">SHA-256哈希验证、TLS 1.3加密通信、AES-256-GCM加密存储、证据完整性追踪（Evidence Integrity Tracking）。我们采用业界领先的安全措施，但互联网传输环境下的绝对安全在技术上是不可能的。</td></tr>
             <tr><td style="{td}"><b>拒绝同意权</b></td><td style="{td}">您有权拒绝同意。拒绝后将无法使用数据收集和分析服务。</td></tr>
