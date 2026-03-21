@@ -798,6 +798,7 @@ class R2DirectUploader:
             "artifact_type": artifact_type,
             "parts": parts,
             "is_encrypted": is_encrypted,
+            "consent_record": self.consent_record,
         }
 
         max_retries = 5
@@ -845,7 +846,6 @@ class R2DirectUploader:
         try:
             endpoint = "/api/v1/collector/r2/abort-upload"
             headers = self._get_auth_headers("POST", endpoint)
-            headers['Content-Type'] = 'application/json'
 
             requests.post(
                 f"{self.server_url}{endpoint}",
@@ -921,28 +921,45 @@ class R2DirectUploader:
             encrypted_path = None
 
             if encryption_key_hex:
-                try:
-                    from core.secure_upload import AESGCMCipher
-                    cipher = AESGCMCipher(bytes.fromhex(encryption_key_hex))
-                    with open(file_path, 'rb') as f:
-                        plaintext = f.read()
-                    aad = file_hash.encode('utf-8')  # AAD = 평문 SHA-256
-                    encrypted_data = cipher.encrypt(plaintext, aad)
-                    del plaintext
-
-                    # 암호화된 임시 파일 생성
-                    encrypted_path = file_path + '.enc'
-                    with open(encrypted_path, 'wb') as f:
-                        f.write(encrypted_data)
-                    del encrypted_data
-
-                    is_encrypted = True
-                    logger.info(f"[R2] File encrypted: {file_name} ({os.path.getsize(encrypted_path):,} bytes)")
-                except Exception as enc_err:
-                    logger.error(f"[R2] Encryption failed, uploading plaintext: {enc_err}")
-                    is_encrypted = False
-                finally:
+                # AES-GCM requires full plaintext in memory; skip for large files to avoid OOM
+                MAX_ENCRYPT_SIZE = 500 * 1024 * 1024  # 500MB
+                if file_size > MAX_ENCRYPT_SIZE:
+                    logger.warning(
+                        f"[R2] File too large for in-memory encryption ({file_size / (1024**2):.0f}MB > "
+                        f"{MAX_ENCRYPT_SIZE / (1024**2):.0f}MB), uploading without encryption. "
+                        f"⚠️ Evidence will be protected by TLS in transit and R2 server-side encryption at rest."
+                    )
+                    if self._progress_callback:
+                        self._progress_callback(
+                            f"⚠️ {file_name}: 대용량 파일({file_size / (1024**2):.0f}MB) — "
+                            f"클라이언트 암호화 생략, 서버측 암호화로 보호됨"
+                        )
                     del encryption_key_hex
+                else:
+                    try:
+                        from core.secure_upload import AESGCMCipher
+                        cipher = AESGCMCipher(bytes.fromhex(encryption_key_hex))
+                        with open(file_path, 'rb') as f:
+                            plaintext = f.read()
+                        aad = file_hash.encode('utf-8')
+                        encrypted_data = cipher.encrypt(plaintext, aad)
+                        del plaintext
+
+                        encrypted_path = file_path + '.enc'
+                        with open(encrypted_path, 'wb') as f:
+                            f.write(encrypted_data)
+                        del encrypted_data
+
+                        is_encrypted = True
+                        logger.info(f"[R2] File encrypted: {file_name} ({os.path.getsize(encrypted_path):,} bytes)")
+                    except Exception as enc_err:
+                        logger.error(f"[R2] Encryption failed — aborting upload for evidence safety: {enc_err}")
+                        return UploadResult.from_error(
+                            file_name=file_name,
+                            error=f"Encryption failed: {enc_err}. Upload aborted to prevent plaintext evidence exposure."
+                        )
+                    finally:
+                        del encryption_key_hex
 
             upload_path = encrypted_path if is_encrypted else file_path
 

@@ -1729,14 +1729,30 @@ class iOSDeviceConnector:
         self._CHANGE_PASSWORD_TIMEOUT = 15
 
     def _clear_password(self):
-        """Zero-out and release the forensic backup password from memory."""
+        """Zero-out and release the forensic backup password from memory.
+
+        Note: Python str objects are immutable and cannot be reliably wiped.
+        We convert to bytearray, overwrite in-place, then delete all references.
+        The original str may persist in memory until GC reclaims it, but this
+        minimizes the exposure window.
+        """
         pw = self._forensic_backup_password
-        if pw and isinstance(pw, str):
-            try:
-                # Best-effort: overwrite CPython string internal buffer
-                ctypes.memset(ctypes.c_char_p(pw.encode('utf-8')), 0, len(pw))
-            except Exception:
-                pass
+        if pw:
+            if isinstance(pw, bytearray):
+                # bytearray is mutable — can be zeroed in-place
+                for i in range(len(pw)):
+                    pw[i] = 0
+            elif isinstance(pw, str):
+                # str is immutable — best effort: create bytearray copy, zero it,
+                # and ensure the str reference is dropped for GC
+                try:
+                    pw_bytes = bytearray(pw.encode('utf-8'))
+                    for i in range(len(pw_bytes)):
+                        pw_bytes[i] = 0
+                    del pw_bytes
+                except Exception:
+                    pass
+            del pw
         self._forensic_backup_password = None
 
     @staticmethod

@@ -13,6 +13,7 @@ Collection methods:
 Note: MFT-based collection requires administrator privileges
 """
 import os
+import sys
 import glob
 import shutil
 import hashlib

