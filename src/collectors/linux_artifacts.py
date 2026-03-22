@@ -173,14 +173,38 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
 
     'linux_lastlog': {
-        'paths': [
-            '/var/log/lastlog',
-            '/var/log/wtmp',             # Login session records
-            '/var/run/utmp',             # Currently logged-in users
-        ],
-        'description': 'Login session records',
+        'paths': ['/var/log/lastlog'],
+        'description': 'Last login time per user (binary)',
         'forensic_value': 'high',
         'category': 'authentication',
+        'os_type': 'linux',
+    },
+    'linux_wtmp': {
+        'paths': ['/var/log/wtmp', '/var/log/wtmp.*'],
+        'description': 'Login/logout session history (binary)',
+        'forensic_value': 'critical',
+        'category': 'authentication',
+        'os_type': 'linux',
+    },
+    'linux_btmp': {
+        'paths': ['/var/log/btmp', '/var/log/btmp.*'],
+        'description': 'Failed login attempts (binary)',
+        'forensic_value': 'critical',
+        'category': 'authentication',
+        'os_type': 'linux',
+    },
+    'linux_utmp': {
+        'paths': ['/var/run/utmp', '/run/utmp'],
+        'description': 'Currently logged-in users (binary)',
+        'forensic_value': 'critical',
+        'category': 'authentication',
+        'os_type': 'linux',
+    },
+    'linux_rc_local': {
+        'paths': ['/etc/rc.local', '/etc/rc.d/rc.local'],
+        'description': 'Legacy startup script (persistence)',
+        'forensic_value': 'high',
+        'category': 'persistence',
         'os_type': 'linux',
     },
 

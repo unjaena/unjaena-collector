@@ -408,6 +408,27 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'os_type': 'macos',
         'path_optional': True,
     },
+    'macos_ssh_authorized_keys': {
+        'paths': ['/Users/*/.ssh/authorized_keys', '/var/root/.ssh/authorized_keys'],
+        'description': 'Authorized SSH public keys (persistence)',
+        'forensic_value': 'critical',
+        'category': 'network',
+        'os_type': 'macos',
+    },
+    'macos_ssh_known_hosts': {
+        'paths': ['/Users/*/.ssh/known_hosts', '/var/root/.ssh/known_hosts'],
+        'description': 'Previously connected SSH servers',
+        'forensic_value': 'high',
+        'category': 'network',
+        'os_type': 'macos',
+    },
+    'macos_at_jobs': {
+        'paths': ['/var/at/tabs/*', '/private/var/at/tabs/*'],
+        'description': 'Scheduled at(1) jobs (persistence)',
+        'forensic_value': 'high',
+        'category': 'persistence',
+        'os_type': 'macos',
+    },
 
     # ==========================================================================
     # Browser Artifacts
