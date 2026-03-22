@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 class DeviceType(Enum):
     """Device type"""
     WINDOWS_PHYSICAL_DISK = auto()
-    WINDOWS_PARTITION = auto()
     E01_IMAGE = auto()
     RAW_IMAGE = auto()
     VMDK_IMAGE = auto()
@@ -100,7 +99,7 @@ class UnifiedDeviceInfo:
     @property
     def is_mobile(self) -> bool:
         """Check if mobile device"""
-        return self.device_type in (DeviceType.ANDROID_DEVICE, DeviceType.IOS_BACKUP)
+        return self.device_type in (DeviceType.ANDROID_DEVICE, DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE)
 
     @property
     def is_image(self) -> bool:

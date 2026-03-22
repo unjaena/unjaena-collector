@@ -1302,16 +1302,13 @@ class ADBDeviceMonitor:
                     devices = system_devices
                 else:
                     # Enrich libusb devices with system adb info
-                    # Replace incomplete entries with system adb data
+                    # Replace incomplete entries with matching system adb data
                     enriched = []
                     system_serials = {d.serial: d for d in system_devices}
                     for dev in devices:
                         if dev.model == 'Unknown' and dev.android_version == 'Unknown':
-                            # Find matching system adb device by any serial overlap
-                            replacement = None
-                            for sys_dev in system_devices:
-                                replacement = sys_dev
-                                break  # Use first system device as replacement
+                            # Find matching system adb device by serial
+                            replacement = system_serials.get(dev.serial)
                             if replacement:
                                 enriched.append(replacement)
                                 continue

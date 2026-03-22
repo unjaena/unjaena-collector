@@ -382,7 +382,12 @@ class MultiDeviceCollector(QObject):
                 logger.info("Using legacy ArtifactCollector (BaseMFTCollector not available)")
                 return ArtifactCollector(output_dir)
 
-        elif device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE):
+        elif device.device_type in (
+            DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
+            DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
+            DeviceType.VHDX_IMAGE, DeviceType.QCOW2_IMAGE,
+            DeviceType.VDI_IMAGE,
+        ):
             from collectors.e01_artifact_collector import E01ArtifactCollector
             file_path = device.metadata.get('file_path')
             if not file_path:

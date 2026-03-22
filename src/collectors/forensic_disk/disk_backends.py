@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 
 # Debug output control
 _DEBUG_OUTPUT = False
-def _debug_print(msg): 
-    if _DEBUG_OUTPUT: _debug_print(msg)
+def _debug_print(msg):
+    if _DEBUG_OUTPUT: print(f"[DiskBackend] {msg}")
 
 
 # ==============================================================================
