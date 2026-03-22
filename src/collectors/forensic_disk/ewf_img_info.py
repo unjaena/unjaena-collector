@@ -134,6 +134,13 @@ class BackendImgInfo(pytsk3.Img_Info if PYTSK3_AVAILABLE else object):
         fs_info = pytsk3.FS_Info(img_info, offset=partition_offset)
     """
 
+    # LRU block cache: reduces random I/O through virtual disk translation layers
+    # (VDI/VMDK/VHD). pytsk3 makes many small reads (4KB inode, 1KB superblock) that
+    # would each require VDI block mapping. Caching 1MB blocks (64 blocks = 64MB max)
+    # dramatically reduces actual disk I/O.
+    _CACHE_BLOCK_SIZE = 1024 * 1024  # 1MB per cache block
+    _CACHE_MAX_BLOCKS = 64           # 64MB max cache
+
     def __init__(self, backend):
         """
         Args:
@@ -144,24 +151,72 @@ class BackendImgInfo(pytsk3.Img_Info if PYTSK3_AVAILABLE else object):
             raise ImportError("pytsk3 is required for BackendImgInfo")
 
         self._backend = backend
+        self._cache = {}        # block_index -> bytes
+        self._cache_order = []  # LRU order (oldest first)
         super(BackendImgInfo, self).__init__(url="", type=pytsk3.TSK_IMG_TYPE_EXTERNAL)
 
     def close(self):
-        """No-op: backend lifecycle is managed by the caller."""
-        pass
+        """Release cache memory. Backend lifecycle managed by caller."""
+        self._cache.clear()
+        self._cache_order.clear()
+
+    def _read_cached_block(self, block_idx: int) -> bytes:
+        """Read a 1MB block, using cache if available."""
+        if block_idx in self._cache:
+            # Move to end (most recently used)
+            try:
+                self._cache_order.remove(block_idx)
+            except ValueError:
+                pass
+            self._cache_order.append(block_idx)
+            return self._cache[block_idx]
+
+        # Read from backend
+        offset = block_idx * self._CACHE_BLOCK_SIZE
+        disk_size = self._backend.get_size()
+        read_size = min(self._CACHE_BLOCK_SIZE, disk_size - offset)
+        if read_size <= 0:
+            return b''
+
+        data = self._backend.read(offset, read_size)
+
+        # Evict oldest if cache full
+        while len(self._cache) >= self._CACHE_MAX_BLOCKS:
+            oldest = self._cache_order.pop(0)
+            self._cache.pop(oldest, None)
+
+        self._cache[block_idx] = data
+        self._cache_order.append(block_idx)
+        return data
 
     def read(self, offset: int, size: int) -> bytes:
         """
-        Read data via the backend
-
-        Args:
-            offset: Starting offset (bytes)
-            size: Number of bytes to read
-
-        Returns:
-            Data bytes
+        Read data via the backend with 1MB block caching.
+        Small reads (typical from pytsk3) are served from cache when possible.
         """
-        return self._backend.read(offset, size)
+        # For very large reads (>4MB), bypass cache to avoid thrashing
+        if size > 4 * self._CACHE_BLOCK_SIZE:
+            return self._backend.read(offset, size)
+
+        result = bytearray()
+        remaining = size
+        pos = offset
+
+        while remaining > 0:
+            block_idx = pos // self._CACHE_BLOCK_SIZE
+            block_offset = pos % self._CACHE_BLOCK_SIZE
+            block_data = self._read_cached_block(block_idx)
+
+            if not block_data:
+                break
+
+            available = len(block_data) - block_offset
+            chunk_size = min(remaining, available)
+            result.extend(block_data[block_offset:block_offset + chunk_size])
+            pos += chunk_size
+            remaining -= chunk_size
+
+        return bytes(result)
 
     def get_size(self) -> int:
         """Return total image/disk size via the backend"""

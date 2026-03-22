@@ -1601,11 +1601,33 @@ class ForensicDiskAccessor:
             result['errors'].append((0, f"root: {e}"))
 
         # If include_deleted, also try to recover orphan files via inode scan
+        # SAFETY: Skip orphan scan for virtual disk backends (VDI/VMDK/VHD/VHDX/QCOW2)
+        # because random I/O through the disk translation layer can exhaust Windows
+        # filesystem cache and cause system freeze on large images (17GB+ VDI files).
+        # Deleted files found during the directory walk are still included.
         if include_deleted:
-            orphans = self._tsk_scan_orphan_files(
-                result, entry_count, max_entries
-            )
-            entry_count += orphans
+            _skip_orphan = False
+            try:
+                from collectors.forensic_disk.disk_backends import (
+                    VMDKDiskBackend, VHDDiskBackend, VHDXDiskBackend,
+                    QCOW2DiskBackend, VDIDiskBackend
+                )
+                _virtual_backends = (VMDKDiskBackend, VHDDiskBackend, VHDXDiskBackend,
+                                     QCOW2DiskBackend, VDIDiskBackend)
+                if isinstance(self._backend, _virtual_backends):
+                    _skip_orphan = True
+                    logger.info(
+                        f"[{self._tsk_fs_type}] Skipping orphan inode scan on virtual disk "
+                        f"(prevents system freeze from random I/O on large images)"
+                    )
+            except ImportError:
+                pass
+
+            if not _skip_orphan:
+                orphans = self._tsk_scan_orphan_files(
+                    result, entry_count, max_entries
+                )
+                entry_count += orphans
 
         logger.info(
             f"[{self._tsk_fs_type}] pytsk3 scan complete: "

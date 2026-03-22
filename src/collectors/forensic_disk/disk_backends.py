@@ -382,12 +382,26 @@ class VMDKDiskBackend(UnifiedDiskReader):
         except Exception as e:
             raise DiskError(f"Failed to open VMDK: {e}")
 
+    _MAX_READ_CHUNK = 1024 * 1024  # 1MB
+
     def read(self, offset: int, size: int) -> bytes:
         if not self._is_open:
             raise DiskError("VMDK not open")
         try:
-            self._vmdk.seek(offset)
-            return self._vmdk.read(size)
+            if size <= self._MAX_READ_CHUNK:
+                self._vmdk.seek(offset)
+                return self._vmdk.read(size)
+            else:
+                result = bytearray()
+                pos = offset
+                remaining = size
+                while remaining > 0:
+                    chunk = min(remaining, self._MAX_READ_CHUNK)
+                    self._vmdk.seek(pos)
+                    result.extend(self._vmdk.read(chunk))
+                    pos += chunk
+                    remaining -= chunk
+                return bytes(result)
         except Exception as e:
             raise DiskReadError(f"VMDK read failed at offset {offset}: {e}")
 
@@ -437,12 +451,26 @@ class VHDDiskBackend(UnifiedDiskReader):
         except Exception as e:
             raise DiskError(f"Failed to open VHD: {e}")
 
+    _MAX_READ_CHUNK = 1024 * 1024  # 1MB
+
     def read(self, offset: int, size: int) -> bytes:
         if not self._is_open:
             raise DiskError("VHD not open")
         try:
-            self._vhd.seek(offset)
-            return self._vhd.read(size)
+            if size <= self._MAX_READ_CHUNK:
+                self._vhd.seek(offset)
+                return self._vhd.read(size)
+            else:
+                result = bytearray()
+                pos = offset
+                remaining = size
+                while remaining > 0:
+                    chunk = min(remaining, self._MAX_READ_CHUNK)
+                    self._vhd.seek(pos)
+                    result.extend(self._vhd.read(chunk))
+                    pos += chunk
+                    remaining -= chunk
+                return bytes(result)
         except Exception as e:
             raise DiskReadError(f"VHD read failed at offset {offset}: {e}")
 
@@ -492,12 +520,26 @@ class VHDXDiskBackend(UnifiedDiskReader):
         except Exception as e:
             raise DiskError(f"Failed to open VHDX: {e}")
 
+    _MAX_READ_CHUNK = 1024 * 1024  # 1MB
+
     def read(self, offset: int, size: int) -> bytes:
         if not self._is_open:
             raise DiskError("VHDX not open")
         try:
-            self._vhdx.seek(offset)
-            return self._vhdx.read(size)
+            if size <= self._MAX_READ_CHUNK:
+                self._vhdx.seek(offset)
+                return self._vhdx.read(size)
+            else:
+                result = bytearray()
+                pos = offset
+                remaining = size
+                while remaining > 0:
+                    chunk = min(remaining, self._MAX_READ_CHUNK)
+                    self._vhdx.seek(pos)
+                    result.extend(self._vhdx.read(chunk))
+                    pos += chunk
+                    remaining -= chunk
+                return bytes(result)
         except Exception as e:
             raise DiskReadError(f"VHDX read failed at offset {offset}: {e}")
 
@@ -547,12 +589,26 @@ class QCOW2DiskBackend(UnifiedDiskReader):
         except Exception as e:
             raise DiskError(f"Failed to open QCOW2: {e}")
 
+    _MAX_READ_CHUNK = 1024 * 1024  # 1MB
+
     def read(self, offset: int, size: int) -> bytes:
         if not self._is_open:
             raise DiskError("QCOW2 not open")
         try:
-            self._qcow2.seek(offset)
-            return self._qcow2.read(size)
+            if size <= self._MAX_READ_CHUNK:
+                self._qcow2.seek(offset)
+                return self._qcow2.read(size)
+            else:
+                result = bytearray()
+                pos = offset
+                remaining = size
+                while remaining > 0:
+                    chunk = min(remaining, self._MAX_READ_CHUNK)
+                    self._qcow2.seek(pos)
+                    result.extend(self._qcow2.read(chunk))
+                    pos += chunk
+                    remaining -= chunk
+                return bytes(result)
         except Exception as e:
             raise DiskReadError(f"QCOW2 read failed at offset {offset}: {e}")
 
@@ -602,12 +658,31 @@ class VDIDiskBackend(UnifiedDiskReader):
         except Exception as e:
             raise DiskError(f"Failed to open VDI: {e}")
 
+    # Max single read size to prevent dissect VDIStream._read() bug from
+    # allocating huge zero buffers (e.g. 60GB for readall on unallocated blocks).
+    _MAX_READ_CHUNK = 1024 * 1024  # 1MB
+
     def read(self, offset: int, size: int) -> bytes:
         if not self._is_open:
             raise DiskError("VDI not open")
         try:
-            self._vdi.seek(offset)
-            return self._vdi.read(size)
+            # Guard against dissect VDIStream._read() bug: reads spanning multiple
+            # blocks may allocate b"\x00" * size for unallocated regions.
+            # Chunk large reads to prevent multi-GB memory allocation.
+            if size <= self._MAX_READ_CHUNK:
+                self._vdi.seek(offset)
+                return self._vdi.read(size)
+            else:
+                result = bytearray()
+                pos = offset
+                remaining = size
+                while remaining > 0:
+                    chunk = min(remaining, self._MAX_READ_CHUNK)
+                    self._vdi.seek(pos)
+                    result.extend(self._vdi.read(chunk))
+                    pos += chunk
+                    remaining -= chunk
+                return bytes(result)
         except Exception as e:
             raise DiskReadError(f"VDI read failed at offset {offset}: {e}")
 
