@@ -1617,6 +1617,17 @@ class ForensicDiskAccessor:
 
         return result
 
+    # Maximum inodes to probe during orphan scan.  On filesystems like
+    # ext4, inode tables are pre-allocated for the full virtual disk size
+    # (e.g. ~3.9M inodes for a 60 GB disk).  Scanning all of them through
+    # a virtual-disk translation layer (VDI/VMDK/VHD) produces millions of
+    # small random I/O operations that can saturate the Windows file-system
+    # cache (especially when the image file exceeds available RAM) and
+    # cause a full system freeze or crash.  Cap the scan to a sane upper
+    # bound that still catches most real orphan files.
+    _ORPHAN_SCAN_MAX_INODES = 100_000
+    _ORPHAN_SCAN_MAX_RESULTS = 5_000
+
     def _tsk_scan_orphan_files(
         self,
         result: Dict[str, Any],
@@ -1629,6 +1640,12 @@ class ForensicDiskAccessor:
 
         This catches files whose parent directory entry has been removed
         but whose inode metadata is still intact (unallocated but readable).
+
+        Safety limits (prevent system crash on large virtual disks):
+        - Scans at most _ORPHAN_SCAN_MAX_INODES inodes (default 100K)
+        - Collects at most _ORPHAN_SCAN_MAX_RESULTS orphan entries (default 5K)
+        - Uses a total-scanned counter (not just consecutive errors) to
+          guarantee termination even when the inode table is fully populated
 
         Returns the number of orphan entries found.
         """
@@ -1646,16 +1663,47 @@ class ForensicDiskAccessor:
             # Conservative default — scan first 100k inodes
             last_inum = 100_000
 
+        # Hard cap: never scan more than _ORPHAN_SCAN_MAX_INODES unseen
+        # inodes regardless of filesystem size.  This prevents the
+        # pathological case where a 60 GB+ ext4 image has millions of
+        # pre-allocated inode table entries that each trigger a disk read
+        # through the virtual-disk translation layer.
+        scan_cap = self._ORPHAN_SCAN_MAX_INODES
+        max_orphan_results = self._ORPHAN_SCAN_MAX_RESULTS
+
         limit = max_entries or float('inf')
         orphan_count = 0
+        scanned_count = 0  # total unseen inodes actually probed
         consecutive_errors = 0
         max_consecutive = 500
 
-        for inum in range(2, min(last_inum + 1, 5_000_000)):
+        upper = min(last_inum + 1, 5_000_000)
+
+        logger.info(
+            f"[{self._tsk_fs_type}] Orphan scan: inode range 2..{upper - 1:,}, "
+            f"seen={len(seen_inodes):,}, scan cap={scan_cap:,}"
+        )
+
+        for inum in range(2, upper):
             if current_count + orphan_count >= limit:
+                break
+            if orphan_count >= max_orphan_results:
+                logger.info(
+                    f"[{self._tsk_fs_type}] Orphan scan hit result cap "
+                    f"({max_orphan_results:,}), stopping"
+                )
                 break
             if inum in seen_inodes:
                 continue
+
+            # Count every inode we actually probe (not in seen_inodes)
+            scanned_count += 1
+            if scanned_count > scan_cap:
+                logger.info(
+                    f"[{self._tsk_fs_type}] Orphan scan hit inode cap "
+                    f"({scan_cap:,} probed), stopping"
+                )
+                break
 
             try:
                 f = self._tsk_fs.open_meta(inode=inum)
@@ -1705,7 +1753,10 @@ class ForensicDiskAccessor:
                 continue
 
         if orphan_count > 0:
-            logger.info(f"[{self._tsk_fs_type}] Found {orphan_count} orphan/deleted inodes")
+            logger.info(
+                f"[{self._tsk_fs_type}] Found {orphan_count} orphan/deleted inodes "
+                f"(probed {scanned_count:,} of {upper - 2:,} possible)"
+            )
 
         return orphan_count
 
