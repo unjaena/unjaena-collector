@@ -328,7 +328,7 @@ MACOS_ARTIFACT_TYPES = {
     # ==========================================================================
     # SSH (P1)
     # ==========================================================================
-    'macos_ssh_authorized_keys': {
+    'macos_ssh': {
         'name': 'SSH Authorized Keys',
         'description': 'Authorized public keys for SSH access',
         'paths': [
@@ -339,7 +339,7 @@ MACOS_ARTIFACT_TYPES = {
         'mitre_attack': 'T1098.004',
         'kill_chain_phase': 'persistence',
     },
-    'macos_ssh_known_hosts': {
+    'macos_ssh': {
         'name': 'SSH Known Hosts',
         'description': 'Previously connected SSH servers',
         'paths': [
@@ -444,7 +444,7 @@ MACOS_ARTIFACT_TYPES = {
     # ==========================================================================
     # Application Support Databases (P2)
     # ==========================================================================
-    'macos_dock_plist': {
+    'macos_finder_plist': {
         'name': 'Dock Configuration',
         'description': 'Dock items and recent applications',
         'paths': [

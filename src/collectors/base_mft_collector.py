@@ -836,11 +836,13 @@ class BaseMFTCollector(ABC):
             logger.error("Accessor not initialized")
             return
 
-        if artifact_type not in ARTIFACT_MFT_FILTERS:
+        # Check all filter sets: Windows + Linux + macOS
+        all_filters = {**ARTIFACT_MFT_FILTERS, **LINUX_ARTIFACT_FILTERS, **MACOS_ARTIFACT_FILTERS}
+        if artifact_type not in all_filters:
             logger.debug(f"Skipping unsupported artifact type: {artifact_type}")
             return
 
-        mft_filter = dict(ARTIFACT_MFT_FILTERS[artifact_type])  # shallow copy to allow override
+        mft_filter = dict(all_filters[artifact_type])  # shallow copy to allow override
         # UI include_deleted override
         if 'include_deleted' in kwargs:
             mft_filter['include_deleted'] = kwargs['include_deleted']
@@ -855,8 +857,13 @@ class BaseMFTCollector(ABC):
         artifact_dir = self.output_dir / artifact_type
         artifact_dir.mkdir(exist_ok=True)
 
-        # Handle special artifacts ($MFT, $LogFile, $UsnJrnl)
+        # Handle special artifacts ($MFT, $LogFile, $UsnJrnl) — NTFS only
         if 'special' in mft_filter:
+            # Skip NTFS-specific special artifacts on non-NTFS filesystems
+            os_type = mft_filter.get('os_type', 'windows')
+            if os_type != 'windows':
+                logger.debug(f"[{source}] Skipping NTFS special artifact {artifact_type} on {os_type}")
+                return
             logger.info(f"[{source}] Detected special artifact: {mft_filter.get('special')}")
             yield from self._collect_special_artifact(
                 artifact_type, mft_filter, artifact_dir, progress_callback
@@ -909,6 +916,40 @@ class BaseMFTCollector(ABC):
         path_patterns = mft_filter.get('path_patterns', [])
         name_pattern = mft_filter.get('name_pattern')
         path_optional = mft_filter.get('path_optional', False)  # Collect by filename only even without path
+
+        # Convert Linux/macOS 'paths' list into path_patterns + target_files
+        # 'paths' entries are absolute paths like '/var/log/auth.log' or
+        # glob patterns like '/home/*/.bash_history', '/etc/cron.d/*'
+        artifact_paths = mft_filter.get('paths', [])
+        if artifact_paths:
+            target_files = set(target_files) if target_files else set()
+            path_patterns = list(path_patterns)
+            for p in artifact_paths:
+                # Strip leading slash for matching against MFT paths
+                p_stripped = p.lstrip('/')
+                # Convert glob wildcards to regex
+                # e.g. '/home/*/.bash_history' -> dir='home/[^/]+', file='.bash_history'
+                if '/' in p_stripped:
+                    dir_part, file_part = p_stripped.rsplit('/', 1)
+                else:
+                    dir_part, file_part = '', p_stripped
+                if dir_part:
+                    # Convert glob * to regex [^/]+ (match within single directory)
+                    dir_regex = re.escape(dir_part).replace(r'\*', '[^/]+')
+                    path_patterns.append(dir_regex + '/')
+                if file_part and file_part != '*':
+                    if '*' in file_part:
+                        # Glob pattern in filename -> name_pattern
+                        # e.g. '*.tracev3' -> '.*\.tracev3'
+                        file_regex = re.escape(file_part).replace(r'\*', '.*')
+                        if not name_pattern:
+                            name_pattern = file_regex
+                        else:
+                            name_pattern = f'({name_pattern}|{file_regex})'
+                    else:
+                        target_files.add(file_part.lower())
+            if artifact_paths and not path_optional:
+                path_optional = mft_filter.get('path_optional', bool(target_files))
 
         # Compile path patterns
         compiled_patterns = []
