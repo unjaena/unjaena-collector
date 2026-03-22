@@ -1547,20 +1547,37 @@ class ForensicDiskAccessor:
             'errors': []
         }
 
+        import time as _time
+
         entry_count = 0
         limit = max_entries or float('inf')
+        _scan_start = _time.monotonic()
+        _SCAN_TIMEOUT = 600  # 10 minutes max for directory walk
+        _IO_THROTTLE_INTERVAL = 5000  # yield CPU every N entries
 
         def _walk(directory, parent_path: str, parent_inode: int):
             nonlocal entry_count
 
+            # Timeout check
+            if _time.monotonic() - _scan_start > _SCAN_TIMEOUT:
+                logger.warning(f"[{self._tsk_fs_type}] Scan timeout ({_SCAN_TIMEOUT}s) — partial results returned")
+                return
+
             try:
-                entries = list(directory)
+                # Lazy iteration — do NOT materialize list(directory)
+                # list() creates all pytsk3.File C objects at once, preventing GC
+                dir_iter = iter(directory)
             except Exception as e:
                 result['errors'].append((parent_inode, f"readdir: {e}"))
                 return
 
-            for f_entry in entries:
+            for f_entry in dir_iter:
                 if entry_count >= limit:
+                    return
+
+                # Timeout check every 1000 entries
+                if entry_count % 1000 == 0 and _time.monotonic() - _scan_start > _SCAN_TIMEOUT:
+                    logger.warning(f"[{self._tsk_fs_type}] Scan timeout ({_SCAN_TIMEOUT}s) at {entry_count:,} entries")
                     return
 
                 catalog = self._tsk_file_entry_to_catalog(
@@ -1588,9 +1605,12 @@ class ForensicDiskAccessor:
                 else:
                     result['active_files'].append(catalog)
 
-                # Progress callback
-                if progress_callback and entry_count % 1000 == 0:
-                    progress_callback(entry_count, max_entries or entry_count)
+                # Progress callback + I/O throttle
+                if entry_count % _IO_THROTTLE_INTERVAL == 0:
+                    if progress_callback:
+                        progress_callback(entry_count, max_entries or entry_count)
+                    # Brief yield to prevent USB/disk I/O queue saturation
+                    _time.sleep(0.01)
 
         # Start walk from root directory
         try:

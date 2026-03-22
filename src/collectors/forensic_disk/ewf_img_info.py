@@ -139,7 +139,7 @@ class BackendImgInfo(pytsk3.Img_Info if PYTSK3_AVAILABLE else object):
     # would each require VDI block mapping. Caching 1MB blocks (64 blocks = 64MB max)
     # dramatically reduces actual disk I/O.
     _CACHE_BLOCK_SIZE = 1024 * 1024  # 1MB per cache block
-    _CACHE_MAX_BLOCKS = 64           # 64MB max cache
+    _CACHE_MAX_BLOCKS = 256          # 256MB max cache (prevents USB I/O saturation on large VDI/VMDK)
 
     def __init__(self, backend):
         """
