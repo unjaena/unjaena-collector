@@ -18,7 +18,6 @@ from core.device_manager import (
     UnifiedDeviceManager,
     UnifiedDeviceInfo,
     DeviceType,
-    DeviceStatus
 )
 from core.device_enumerators import diagnose_device_prerequisites
 from gui.styles import COLORS

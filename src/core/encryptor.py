@@ -8,6 +8,7 @@ Security:
     - Compliant with NIST recommended hash algorithms
 """
 import hashlib
+import shutil
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Tuple
@@ -104,9 +105,6 @@ class FileEncryptor:
         """
         [DEPRECATED] Returns hash result (no transformation applied).
         """
-        from dataclasses import dataclass
-        import shutil
-
         @dataclass
         class EncryptionResult:
             encrypted_path: str

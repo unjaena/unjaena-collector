@@ -18,7 +18,7 @@ import logging
 import hashlib
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from datetime import datetime
 
 from .device_manager import (
@@ -109,7 +109,6 @@ class WindowsDiskEnumerator(BaseDeviceEnumerator):
             return []
 
         devices = []
-        import re
 
         try:
             # [2026-02-15] Build disk → drive letter mapping via WMI

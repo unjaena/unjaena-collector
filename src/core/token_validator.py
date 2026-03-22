@@ -5,14 +5,14 @@ Validates session tokens with the forensics server.
 P1 Security Enhancement: One-time token validation and hardware binding
 P2-2: User-friendly error message support
 """
-import os
-import sys
-import requests
 import hashlib
-import time
 import logging
-from typing import Optional, Set, Union
+import os
+import time
+from typing import Optional, Set
 from dataclasses import dataclass
+
+import requests
 
 from utils.hardware_id import get_hardware_id, get_system_info, get_hardware_components
 from utils.error_messages import translate_error
@@ -166,7 +166,7 @@ class TokenValidator:
                 resp_status = data.get('status', '')
                 if resp_status and resp_status in ('denied', 'error', 'failed'):
                     error_msg = data.get('error', '') or data.get('message', '') or data.get('detail', '')
-                    logging.getLogger(__name__).warning(
+                    logger.warning(
                         f"[TokenValidator] Server returned 200 with denied status: {resp_status}, msg={error_msg[:200] if error_msg else 'N/A'}"
                     )
                     return ValidationResult(
@@ -219,8 +219,7 @@ class TokenValidator:
                     user_message = "Unable to process the request."
 
                 # Debug log (not exposed to user)
-                import logging
-                logging.getLogger(__name__).warning(
+                logger.warning(
                     f"[TokenValidator] Server error: status={status_code}, detail={str(error_detail)[:200] if error_detail else 'N/A'}"
                 )
 
@@ -231,7 +230,7 @@ class TokenValidator:
 
         except requests.exceptions.ConnectionError as e:
             # [Security Logging] Record connection error details
-            logging.getLogger(__name__).error(
+            logger.error(
                 f"[TokenValidator] Connection error: server={self.server_url}, error={e}"
             )
             # P2-2: User-friendly error message
@@ -242,7 +241,7 @@ class TokenValidator:
             )
         except requests.exceptions.Timeout:
             # [Security Logging] Record timeout
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 f"[TokenValidator] Connection timeout: server={self.server_url}"
             )
             # P2-2: User-friendly error message

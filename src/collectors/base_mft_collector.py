@@ -34,7 +34,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional, Generator, Tuple, Set
+from typing import Dict, List, Any, Optional, Generator, Tuple
 
 # Import OS-specific artifact definitions
 try:

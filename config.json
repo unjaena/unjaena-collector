@@ -1,8 +1,6 @@
 {
-    "server_url": "https://btb91itnsaquzl-80.proxy.runpod.net",
-    "ws_url": "wss://btb91itnsaquzl-80.proxy.runpod.net",
-    "dev_mode": false,
-    "allow_insecure": false,
-    "version": "2.4.0",
-    "app_name": "Digital Intelligence Collector"
+    "server_url": "",
+    "ws_url": "",
+    "version": "2.5.0",
+    "app_name": "unJaena Collector"
 }

@@ -30,7 +30,7 @@ import hashlib
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import Generator, Dict, Any, Optional, List, Tuple, Union
+from typing import Generator, Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)

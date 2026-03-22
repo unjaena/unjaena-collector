@@ -11,7 +11,7 @@ Security:
     - Password cleared from dialog after acceptance
     - Actual verification happens in collection thread (single PBKDF2)
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from PyQt6.QtWidgets import (

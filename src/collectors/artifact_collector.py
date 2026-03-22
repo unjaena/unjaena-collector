@@ -7,17 +7,19 @@ falling back to legacy methods when MFT is unavailable.
 
 Collection methods:
 - BaseMFTCollector: Unified MFT-based collection (shared for E01/Local)
-- MFT-based: Raw disk access via pytsk3 (recommended)
+- ForensicDiskAccessor: Pure Python raw disk access (recommended)
 - Legacy: glob.glob + shutil.copy2 (fallback)
 
 Note: MFT-based collection requires administrator privileges
 """
 import os
+import re
 import sys
 import glob
 import shutil
 import hashlib
 import logging
+import fnmatch
 from pathlib import Path
 from datetime import datetime
 from typing import Generator, Tuple, Dict, Any, Optional, List
@@ -72,7 +74,7 @@ try:
     from collectors.android_collector import (
         AndroidCollector, ANDROID_ARTIFACT_TYPES,
         ADBDeviceMonitor, DeviceInfo,
-        check_adb_available, ADB_AVAILABLE
+        ADB_AVAILABLE,
     )
 except ImportError:
     ADB_AVAILABLE = False
@@ -85,7 +87,7 @@ except ImportError:
 try:
     from collectors.ios_collector import (
         iOSCollector, IOS_ARTIFACT_TYPES,
-        find_ios_backups, BackupInfo, BIPLIST_AVAILABLE
+        find_ios_backups,
     )
     IOS_AVAILABLE = True
 except ImportError:
@@ -93,7 +95,6 @@ except ImportError:
     IOS_ARTIFACT_TYPES = {}
     iOSCollector = None
     find_ios_backups = None
-    BackupInfo = None
 
 # Try to import Linux collector
 try:

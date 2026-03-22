@@ -5,22 +5,23 @@ Handles file uploads with WebSocket progress reporting.
 P2-2: User-friendly error message support
 R2: Direct upload to Cloudflare R2 via presigned URLs
 """
-import asyncio
 import hashlib
 import json
+import logging
+import os
+import re
+import ssl
+import time
+
 import aiohttp
+import requests
 import websockets
-import requests  # For synchronous upload
 from pathlib import Path
 from datetime import datetime
 from typing import Callable, Optional
 from dataclasses import dataclass
-import os
 
-from utils.error_messages import translate_error, UserFriendlyError
-
-import logging
-import re
+from utils.error_messages import translate_error
 
 logger = logging.getLogger(__name__)
 
@@ -136,8 +137,6 @@ class RealTimeUploader:
 
     async def connect_websocket(self):
         """Establish WebSocket connection for progress reporting."""
-        import ssl
-        import logging
 
         try:
             ws_endpoint = f"{self.ws_url}/ws/collection/{self.session_id}"
@@ -153,7 +152,7 @@ class RealTimeUploader:
                 ssl_context.check_hostname = True
                 ssl_context.verify_mode = ssl.CERT_REQUIRED
             elif not self._dev_mode:
-                logging.getLogger(__name__).warning(
+                logger.warning(
                     "[SECURITY] Unencrypted WebSocket (ws://) in non-dev mode"
                 )
 
@@ -162,13 +161,13 @@ class RealTimeUploader:
                 extra_headers=extra_headers,
                 ssl=ssl_context
             )
-            logging.getLogger(__name__).info(f"[WebSocket] Connected to {ws_endpoint[:50]}...")
+            logger.info(f"[WebSocket] Connected to {ws_endpoint[:50]}...")
         except ssl.SSLError as ssl_err:
-            logging.getLogger(__name__).error(f"[WebSocket] SSL error: {ssl_err}")
+            logger.error(f"[WebSocket] SSL error: {ssl_err}")
             print(f"WebSocket SSL authentication failed - please verify server certificate")
             self.ws = None
         except Exception as e:
-            logging.getLogger(__name__).warning(f"[WebSocket] Connection failed: {e}")
+            logger.warning(f"[WebSocket] Connection failed: {e}")
             print(f"WebSocket connection failed: {e}")
             self.ws = None
 
@@ -224,7 +223,6 @@ class RealTimeUploader:
             UploadResult with status
         """
         # M2 Security: File size validation (prevent storage exhaustion)
-        import os
         try:
             file_size = os.path.getsize(file_path)
         except OSError as e:
@@ -454,7 +452,6 @@ class SyncUploader:
                     if attempt == 1 and not hasattr(self, '_debug_logged'):
                         self._debug_logged = True
                         token_val = self.collection_token
-                        import hashlib
                         token_hash = hashlib.sha256(token_val.encode()).hexdigest()[:8] if token_val else 'None'
                         logger.debug(
                             f"[UPLOAD_DEBUG] session_id={self.session_id}, "
@@ -508,7 +505,6 @@ class SyncUploader:
 
             # Exponential backoff before retry (5s, 15s, 45s)
             if attempt < MAX_RETRIES:
-                import time
                 backoff = 5 * (3 ** (attempt - 1))
                 logger.info(f"[UPLOAD] Retrying in {backoff}s...")
                 time.sleep(backoff)
@@ -604,7 +600,6 @@ class R2DirectUploader:
 
     def _request_presigned_url(self, file_path: str, artifact_type: str, file_hash: str) -> dict:
         """서버에서 presigned URL 발급 요청 (최대 5회 재시도)"""
-        import time as _time
         file_size = os.path.getsize(file_path)
         file_name = Path(file_path).name
         endpoint = "/api/v1/collector/r2/presigned-url"
@@ -633,7 +628,7 @@ class R2DirectUploader:
                 if response.status_code == 429:
                     wait = attempt * 10
                     logger.warning(f"[R2] Presigned URL rate limited, retrying in {wait}s (attempt {attempt}/{max_retries})")
-                    _time.sleep(wait)
+                    time.sleep(wait)
                     continue
 
                 if response.status_code != 200:
@@ -644,14 +639,14 @@ class R2DirectUploader:
                 if attempt < max_retries:
                     wait = attempt * 5
                     logger.warning(f"[R2] Presigned URL attempt {attempt}/{max_retries} failed, retrying in {wait}s")
-                    _time.sleep(wait)
+                    time.sleep(wait)
                 else:
                     raise
             except Exception as e:
                 if attempt < max_retries:
                     wait = attempt * 5
                     logger.warning(f"[R2] Presigned URL attempt {attempt}/{max_retries} error: {e}, retrying in {wait}s")
-                    _time.sleep(wait)
+                    time.sleep(wait)
                 else:
                     raise
 
@@ -700,14 +695,13 @@ class R2DirectUploader:
                 if attempt < max_retries:
                     wait = attempt * 5
                     logger.warning(f"[R2] Upload attempt {attempt}/{max_retries} failed, retrying in {wait}s: {e}")
-                    import time; time.sleep(wait)
+                    time.sleep(wait)
                 else:
                     raise
 
     def _upload_multipart(self, file_path: str, presigned_info: dict) -> list:
         """Multipart 업로드 (>= 100MB): 파트 병렬 PUT (최대 4 동시)"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        import time as _time
 
         urls = presigned_info['upload_url']
         # [Security] Validate all part URLs before uploading
@@ -758,7 +752,7 @@ class R2DirectUploader:
                     if attempt < max_retries:
                         wait = attempt * 5
                         logger.warning(f"[R2] Part {part_number} attempt {attempt}/{max_retries} failed, retrying in {wait}s: {e}")
-                        _time.sleep(wait)
+                        time.sleep(wait)
                     else:
                         raise
 
@@ -786,7 +780,6 @@ class R2DirectUploader:
         is_encrypted: bool = False,
     ) -> dict:
         """서버에 업로드 완료 확인 요청 (최대 5회 재시도)"""
-        import time as _time
         endpoint = "/api/v1/collector/r2/upload-complete"
 
         payload = {
@@ -817,7 +810,7 @@ class R2DirectUploader:
                 if response.status_code == 429:
                     wait = attempt * 10
                     logger.warning(f"[R2] Upload confirm rate limited, retrying in {wait}s (attempt {attempt}/{max_retries})")
-                    _time.sleep(wait)
+                    time.sleep(wait)
                     continue
 
                 if response.status_code != 200:
@@ -828,14 +821,14 @@ class R2DirectUploader:
                 if attempt < max_retries:
                     wait = attempt * 5
                     logger.warning(f"[R2] Upload confirm attempt {attempt}/{max_retries} failed, retrying in {wait}s")
-                    _time.sleep(wait)
+                    time.sleep(wait)
                 else:
                     raise
             except Exception as e:
                 if attempt < max_retries:
                     wait = attempt * 5
                     logger.warning(f"[R2] Upload confirm attempt {attempt}/{max_retries} error: {e}, retrying in {wait}s")
-                    _time.sleep(wait)
+                    time.sleep(wait)
                 else:
                     raise
 

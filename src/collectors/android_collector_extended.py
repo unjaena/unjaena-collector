@@ -1652,7 +1652,7 @@ class AndroidCollector:
                     self.device_serial = self.device_info.serial
                     try:
                         self._device = self._connect_device_usb(self.device_serial)
-                        logger.info(f"[Android] Connected via libusb: {self.device_serial}")
+                        logger.info(f"[Android] Connected via libusb: {_mask_serial(self.device_serial)}")
                         return True
                     except RuntimeError as e:
                         logger.warning(f"[Android] libusb connection failed: {e}")
@@ -1716,7 +1716,7 @@ class AndroidCollector:
             if result.returncode == 0 and b'ok' in result.stdout:
                 self._device = None  # No libusb device, use system adb fallback
                 logger.info(
-                    f"[Android] Connected via system adb fallback: {self.device_serial} "
+                    f"[Android] Connected via system adb fallback: {_mask_serial(self.device_serial)} "
                     f"(adb={adb_path})"
                 )
                 return True

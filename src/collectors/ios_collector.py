@@ -42,14 +42,12 @@ License:
     - pymobiledevice3 is GPL-3.0 licensed
     - Decryption logic is NOT included here (server-only)
 """
-import ctypes
 import os
 import re
 import sqlite3
 import hashlib
 import shutil
 import plistlib
-import subprocess
 import threading
 import logging
 from pathlib import Path

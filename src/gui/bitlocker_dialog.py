@@ -12,10 +12,9 @@ import re
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFrame, QRadioButton, QButtonGroup,
-    QFileDialog, QMessageBox, QGroupBox, QScrollArea, QWidget
+    QFileDialog, QMessageBox, QGroupBox,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
 
 from gui.styles import COLORS
 
@@ -669,17 +668,8 @@ if __name__ == "__main__":
         'encryption_method': 'AES-256-XTS'
     }
 
-    result = show_bitlocker_dialog(
+    show_bitlocker_dialog(
         partition_info=test_info,
         pybde_available=True,
         config={'dev_mode': True}
     )
-
-    # Test result (debug - disabled)
-    # if result.success:
-    #     print(f"Unlock attempt: {result.key_type}")
-    # elif result.skip:
-    #     print("Skip selected")
-    # else:
-    #     print("Cancelled")
-    pass

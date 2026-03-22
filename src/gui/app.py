@@ -4,7 +4,6 @@ Main GUI Application
 PyQt6-based graphical interface for the forensic collector.
 Supports unified device management and parallel collection.
 """
-import asyncio
 import logging
 import requests
 from pathlib import Path
@@ -13,13 +12,13 @@ from typing import Dict, List, Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLabel, QProgressBar, QListWidget, QListWidgetItem,
+    QPushButton, QLabel, QProgressBar,
     QLineEdit, QCheckBox, QGroupBox, QMessageBox, QFrame, QTextEdit,
-    QStatusBar, QSplitter, QStackedWidget, QScrollArea, QTabWidget,
+    QStatusBar, QSplitter, QScrollArea, QTabWidget,
     QApplication
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QElapsedTimer
-from PyQt6.QtGui import QFont, QColor, QIcon
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont
 
 from core.token_validator import TokenValidator, ValidationResult
 from core.encryptor import FileHashCalculator
@@ -40,7 +39,7 @@ except ImportError:
 
 # Platform unified theme and new components
 from gui.styles import get_platform_stylesheet, COLORS
-from core.device_manager import UnifiedDeviceManager, DeviceType, DeviceStatus
+from core.device_manager import UnifiedDeviceManager, DeviceType
 from core.device_enumerators import create_default_enumerators
 from gui.device_panel import DeviceListPanel
 from gui.e01_dialog import E01SelectionDialog
@@ -642,10 +641,6 @@ class CollectorWindow(QMainWindow):
         self._collection_start_time = None
         self._heartbeat_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         self._heartbeat_idx = 0
-
-        # Collected files list (hidden — file names shown in log instead)
-        self.collected_list = QListWidget()
-        self.collected_list.setVisible(False)
 
         progress_outer_layout.addWidget(progress_content)
 
@@ -1306,116 +1301,6 @@ class CollectorWindow(QMainWindow):
         has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
 
         self.collect_btn.setEnabled(has_token and has_devices and has_artifacts)
-
-    def _get_stylesheet(self) -> str:
-        """Get application stylesheet"""
-        return """
-            QMainWindow {
-                background-color: #1a1a2e;
-            }
-            QWidget {
-                color: #eee;
-                font-size: 12px;
-            }
-            #header {
-                background-color: #16213e;
-                border-radius: 8px;
-                padding: 10px;
-            }
-            #title {
-                font-size: 18px;
-                font-weight: bold;
-                color: #4cc9f0;
-            }
-            #serverStatus {
-                color: #888;
-            }
-            QGroupBox {
-                border: 1px solid #333;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 10px;
-                background-color: #16213e;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-                color: #4cc9f0;
-            }
-            QLineEdit {
-                background-color: #0f3460;
-                border: 1px solid #333;
-                border-radius: 4px;
-                padding: 8px;
-                color: #fff;
-            }
-            QLineEdit:focus {
-                border-color: #4cc9f0;
-            }
-            QPushButton {
-                background-color: #0f3460;
-                border: 1px solid #333;
-                border-radius: 4px;
-                padding: 8px 16px;
-                color: #fff;
-            }
-            QPushButton:hover {
-                background-color: #1a4a7a;
-            }
-            QPushButton:disabled {
-                background-color: #333;
-                color: #666;
-            }
-            #primaryButton {
-                background-color: #4cc9f0;
-                color: #000;
-                font-weight: bold;
-            }
-            #primaryButton:hover {
-                background-color: #3db8df;
-            }
-            QProgressBar {
-                border: 1px solid #333;
-                border-radius: 4px;
-                background-color: #0f3460;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: #4cc9f0;
-                border-radius: 3px;
-            }
-            QCheckBox {
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-            }
-            QListWidget, QTextEdit {
-                background-color: #0f3460;
-                border: 1px solid #333;
-                border-radius: 4px;
-            }
-            QStatusBar {
-                background-color: #16213e;
-                color: #888;
-            }
-            #stagesFrame {
-                background-color: #0f3460;
-                border-radius: 6px;
-                padding: 8px;
-            }
-            #stageIndicator {
-                font-size: 14px;
-                min-width: 20px;
-            }
-            #timeEstimate {
-                color: #4cc9f0;
-                font-size: 11px;
-                min-width: 100px;
-            }
-        """
 
     def check_server_connection(self):
         """Check if server is reachable"""

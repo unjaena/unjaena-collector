@@ -13,14 +13,15 @@ Features:
 
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Callable
 from enum import Enum, auto
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from .device_manager import UnifiedDeviceInfo, DeviceType, DeviceStatus
+from .device_manager import UnifiedDeviceInfo, DeviceType
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +240,6 @@ class MultiDeviceCollector(QObject):
 
     def _wait_for_completion(self, futures: dict):
         """Wait for all tasks to complete"""
-        import time
 
         for future in as_completed(futures):
             device_id = futures[future]
@@ -282,8 +282,6 @@ class MultiDeviceCollector(QObject):
         Returns:
             Collection result
         """
-        import time
-
         device = task.device
         device_id = device.device_id
         start_time = time.time()
