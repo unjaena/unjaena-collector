@@ -435,7 +435,7 @@ LINUX_ARTIFACT_TYPES = {
         'mitre_attack': 'T1546.004',
         'kill_chain_phase': 'persistence',
     },
-    'linux_init_scripts': {
+    'linux_rc_local': {
         'name': 'rc.local Script',
         'description': 'Legacy startup script',
         'paths': [

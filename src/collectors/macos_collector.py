@@ -328,7 +328,7 @@ MACOS_ARTIFACT_TYPES = {
     # ==========================================================================
     # SSH (P1)
     # ==========================================================================
-    'macos_ssh': {
+    'macos_ssh_authorized_keys': {
         'name': 'SSH Authorized Keys',
         'description': 'Authorized public keys for SSH access',
         'paths': [
@@ -339,7 +339,7 @@ MACOS_ARTIFACT_TYPES = {
         'mitre_attack': 'T1098.004',
         'kill_chain_phase': 'persistence',
     },
-    'macos_ssh': {
+    'macos_ssh_known_hosts': {
         'name': 'SSH Known Hosts',
         'description': 'Previously connected SSH servers',
         'paths': [
