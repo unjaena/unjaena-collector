@@ -4167,6 +4167,9 @@ class ArtifactCollector:
         # Flag for compatibility
         self.use_mft = self.collection_mode in ('forensic_disk_accessor', 'mft')
 
+        # Cache for scan_all_files() results — avoids repeated full MFT scans
+        self._scan_cache = None
+
     def _get_physical_drive_number(self) -> Optional[int]:
         """Get physical drive number from volume letter"""
         try:
@@ -4306,6 +4309,9 @@ class ArtifactCollector:
 
     def close(self):
         """Clean up resources"""
+        # Release scan cache to free memory
+        self._scan_cache = None
+
         if self.forensic_disk_accessor:
             try:
                 self.forensic_disk_accessor.close()
@@ -4763,21 +4769,37 @@ class ArtifactCollector:
         """
         try:
             if method_name == 'collect_mft_raw':
-                # $MFT (inode 0)
+                # $MFT (inode 0) — streaming to avoid loading entire MFT into memory
                 _debug_print("[ForensicDisk] Collecting $MFT (inode 0)...")
-                data = self.forensic_disk_accessor.read_file_by_inode(0)
+                output_file = artifact_dir / '$MFT'
+                md5_hash = hashlib.md5()
+                sha256_hash = hashlib.sha256()
+                total_size = 0
 
-                if data:
-                    output_file = artifact_dir / '$MFT'
-                    output_file.write_bytes(data)
+                if hasattr(self.forensic_disk_accessor, 'stream_file_by_inode'):
+                    with open(output_file, 'wb') as f:
+                        for chunk in self.forensic_disk_accessor.stream_file_by_inode(0):
+                            if chunk:
+                                f.write(chunk)
+                                md5_hash.update(chunk)
+                                sha256_hash.update(chunk)
+                                total_size += len(chunk)
+                else:
+                    data = self.forensic_disk_accessor.read_file_by_inode(0)
+                    if data:
+                        output_file.write_bytes(data)
+                        md5_hash.update(data)
+                        sha256_hash.update(data)
+                        total_size = len(data)
 
+                if total_size > 0:
                     metadata = {
                         'artifact_type': artifact_type,
                         'name': '$MFT',
                         'original_path': '$MFT',
-                        'size': len(data),
-                        'hash_md5': hashlib.md5(data).hexdigest(),
-                        'hash_sha256': hashlib.sha256(data).hexdigest(),
+                        'size': total_size,
+                        'hash_md5': md5_hash.hexdigest(),
+                        'hash_sha256': sha256_hash.hexdigest(),
                         'collection_method': 'forensic_disk_accessor',
                         'mft_inode': 0,
                         'collected_at': datetime.now().isoformat(),
@@ -4786,6 +4808,10 @@ class ArtifactCollector:
                     yield str(output_file), metadata
                     if progress_callback:
                         progress_callback(str(output_file))
+                else:
+                    # Clean up empty file if created
+                    if output_file.exists():
+                        output_file.unlink()
 
             elif method_name == 'collect_usn_journal':
                 # $UsnJrnl:$J - $J ADS of $UsnJrnl file in $Extend folder
@@ -4838,21 +4864,37 @@ class ArtifactCollector:
                     _debug_print("[WARNING] $UsnJrnl:$J not found or empty (data is None or 0 bytes)")
 
             elif method_name == 'collect_logfile':
-                # $LogFile (inode 2)
+                # $LogFile (inode 2) — streaming to avoid loading entire LogFile into memory
                 _debug_print("[ForensicDisk] Collecting $LogFile (inode 2)...")
-                data = self.forensic_disk_accessor.read_file_by_inode(2)
+                output_file = artifact_dir / '$LogFile'
+                md5_hash = hashlib.md5()
+                sha256_hash = hashlib.sha256()
+                total_size = 0
 
-                if data:
-                    output_file = artifact_dir / '$LogFile'
-                    output_file.write_bytes(data)
+                if hasattr(self.forensic_disk_accessor, 'stream_file_by_inode'):
+                    with open(output_file, 'wb') as f:
+                        for chunk in self.forensic_disk_accessor.stream_file_by_inode(2):
+                            if chunk:
+                                f.write(chunk)
+                                md5_hash.update(chunk)
+                                sha256_hash.update(chunk)
+                                total_size += len(chunk)
+                else:
+                    data = self.forensic_disk_accessor.read_file_by_inode(2)
+                    if data:
+                        output_file.write_bytes(data)
+                        md5_hash.update(data)
+                        sha256_hash.update(data)
+                        total_size = len(data)
 
+                if total_size > 0:
                     metadata = {
                         'artifact_type': artifact_type,
                         'name': '$LogFile',
                         'original_path': '$LogFile',
-                        'size': len(data),
-                        'hash_md5': hashlib.md5(data).hexdigest(),
-                        'hash_sha256': hashlib.sha256(data).hexdigest(),
+                        'size': total_size,
+                        'hash_md5': md5_hash.hexdigest(),
+                        'hash_sha256': sha256_hash.hexdigest(),
                         'collection_method': 'forensic_disk_accessor',
                         'mft_inode': 2,
                         'collected_at': datetime.now().isoformat(),
@@ -4861,6 +4903,10 @@ class ArtifactCollector:
                     yield str(output_file), metadata
                     if progress_callback:
                         progress_callback(str(output_file))
+                else:
+                    # Clean up empty file if created
+                    if output_file.exists():
+                        output_file.unlink()
 
             elif method_name == 'collect_zone_identifier':
                 # Zone.Identifier ADS - download file source info
@@ -4872,9 +4918,10 @@ class ArtifactCollector:
                 collected_count = 0
                 checked_count = 0
 
-                # Full MFT scan (including ads_streams)
-                scan_result = self.forensic_disk_accessor.scan_all_files(include_deleted=False)
-                all_files = scan_result.get('active_files', [])
+                # Use cached scan result (active_files only for Zone.Identifier)
+                if self._scan_cache is None:
+                    self._scan_cache = self.forensic_disk_accessor.scan_all_files(include_deleted=True)
+                all_files = self._scan_cache.get('active_files', [])
                 _debug_print(f"[ForensicDisk] Scanning {len(all_files)} active files for Zone.Identifier...")
 
                 for entry in all_files:
@@ -5079,15 +5126,18 @@ class ArtifactCollector:
             else:
                 _debug_print(f"[ForensicDisk] Scanning for pattern: {base_path}/{pattern}")
 
-            scan_result = self.forensic_disk_accessor.scan_all_files(
-                include_deleted=include_deleted
-            )
+            # Use cached scan result to avoid repeated full MFT scans (OOM prevention)
+            if self._scan_cache is None:
+                self._scan_cache = self.forensic_disk_accessor.scan_all_files(
+                    include_deleted=True
+                )
+            scan_result = self._scan_cache
 
             # Normalize path
             base_normalized = base_path.replace('\\', '/').strip('/') if not full_disk_scan else ''
 
-            # Combine active files and deleted files
-            all_files = scan_result.get('active_files', [])
+            # Combine active files and deleted files (copy to avoid mutating cache)
+            all_files = list(scan_result.get('active_files', []))
             if include_deleted:
                 all_files.extend(scan_result.get('deleted_files', []))
 

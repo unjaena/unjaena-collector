@@ -1206,21 +1206,37 @@ class BaseMFTCollector(ABC):
 
         try:
             if special_method == 'collect_mft_raw':
-                # $MFT (inode 0)
+                # $MFT (inode 0) — streaming to avoid loading entire MFT into memory
                 logger.info(f"[{source}] Collecting $MFT (inode 0)...")
-                data = self._accessor.read_file_by_inode(0)
+                output_file = artifact_dir / '$MFT'
+                md5_hash = hashlib.md5()
+                sha256_hash = hashlib.sha256()
+                total_size = 0
 
-                if data:
-                    output_file = artifact_dir / '$MFT'
-                    output_file.write_bytes(data)
+                if hasattr(self._accessor, 'stream_file_by_inode'):
+                    with open(output_file, 'wb') as f:
+                        for chunk in self._accessor.stream_file_by_inode(0):
+                            if chunk:
+                                f.write(chunk)
+                                md5_hash.update(chunk)
+                                sha256_hash.update(chunk)
+                                total_size += len(chunk)
+                else:
+                    data = self._accessor.read_file_by_inode(0)
+                    if data:
+                        output_file.write_bytes(data)
+                        md5_hash.update(data)
+                        sha256_hash.update(data)
+                        total_size = len(data)
 
+                if total_size > 0:
                     metadata = {
                         'artifact_type': artifact_type,
                         'name': '$MFT',
                         'original_path': '$MFT',
-                        'size': len(data),
-                        'hash_md5': hashlib.md5(data).hexdigest(),
-                        'hash_sha256': hashlib.sha256(data).hexdigest(),
+                        'size': total_size,
+                        'hash_md5': md5_hash.hexdigest(),
+                        'hash_sha256': sha256_hash.hexdigest(),
                         'collection_method': 'mft_based',
                         'source': source,
                         'mft_inode': 0,
@@ -1230,23 +1246,43 @@ class BaseMFTCollector(ABC):
                     yield str(output_file), metadata
                     if progress_callback:
                         progress_callback(str(output_file))
+                else:
+                    # Clean up empty file if created
+                    if output_file.exists():
+                        output_file.unlink()
 
             elif special_method == 'collect_logfile':
-                # $LogFile (inode 2)
+                # $LogFile (inode 2) — streaming to avoid loading entire LogFile into memory
                 logger.info(f"[{source}] Collecting $LogFile (inode 2)...")
-                data = self._accessor.read_file_by_inode(2)
+                output_file = artifact_dir / '$LogFile'
+                md5_hash = hashlib.md5()
+                sha256_hash = hashlib.sha256()
+                total_size = 0
 
-                if data:
-                    output_file = artifact_dir / '$LogFile'
-                    output_file.write_bytes(data)
+                if hasattr(self._accessor, 'stream_file_by_inode'):
+                    with open(output_file, 'wb') as f:
+                        for chunk in self._accessor.stream_file_by_inode(2):
+                            if chunk:
+                                f.write(chunk)
+                                md5_hash.update(chunk)
+                                sha256_hash.update(chunk)
+                                total_size += len(chunk)
+                else:
+                    data = self._accessor.read_file_by_inode(2)
+                    if data:
+                        output_file.write_bytes(data)
+                        md5_hash.update(data)
+                        sha256_hash.update(data)
+                        total_size = len(data)
 
+                if total_size > 0:
                     metadata = {
                         'artifact_type': artifact_type,
                         'name': '$LogFile',
                         'original_path': '$LogFile',
-                        'size': len(data),
-                        'hash_md5': hashlib.md5(data).hexdigest(),
-                        'hash_sha256': hashlib.sha256(data).hexdigest(),
+                        'size': total_size,
+                        'hash_md5': md5_hash.hexdigest(),
+                        'hash_sha256': sha256_hash.hexdigest(),
                         'collection_method': 'mft_based',
                         'source': source,
                         'mft_inode': 2,
@@ -1256,6 +1292,10 @@ class BaseMFTCollector(ABC):
                     yield str(output_file), metadata
                     if progress_callback:
                         progress_callback(str(output_file))
+                else:
+                    # Clean up empty file if created
+                    if output_file.exists():
+                        output_file.unlink()
 
             elif special_method == 'collect_usn_journal':
                 # $UsnJrnl:$J
