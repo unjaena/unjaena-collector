@@ -2625,7 +2625,7 @@ ARTIFACT_TYPES = {
         'collector': 'collect_user_glob',
     },
     # =========================================================================
-    # User Files - Server-parseable extensions only (per server_parsing_service.py)
+    # User Files - Server-parseable extensions only (per server parser config)
     # =========================================================================
     'document': {
         'name': 'Documents',

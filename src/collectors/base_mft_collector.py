@@ -329,7 +329,7 @@ ARTIFACT_MFT_FILTERS = {
     },
 
     # =========================================================================
-    # User Files - Server-parseable extensions only (based on server_parsing_service.py)
+    # User Files - Server-parseable extensions only (based on server parser config)
     # =========================================================================
     'document': {
         'extensions': {
