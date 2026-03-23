@@ -85,13 +85,27 @@ _DISSECT_FS_MAP = {
     'XFS':   ('dissect.xfs',   'XFS'),
     'Btrfs': ('dissect.btrfs', 'Btrfs'),
     'UFS':   ('dissect.ffs',   'FFS'),
+    'APFS':  ('dissect.apfs',  'APFS'),
 }
+
+# HFS+ uses pyfshfs (libfshfs) — separate from dissect
+_HFS_FILESYSTEMS = frozenset({'HFS', 'HFS+', 'HFSX'})
+
+# Check pyfshfs availability
+try:
+    import pyfshfs
+    PYFSHFS_AVAILABLE = True
+except ImportError:
+    PYFSHFS_AVAILABLE = False
 
 # Filesystems that use native MFT-based extraction
 _NTFS_FILESYSTEMS = frozenset({'NTFS'})
 
 # Filesystems supported by dissect fallback
 _DISSECT_SUPPORTED_FILESYSTEMS = frozenset(_DISSECT_FS_MAP.keys())
+
+# All non-NTFS supported filesystems
+_ALL_SUPPORTED_FILESYSTEMS = _DISSECT_SUPPORTED_FILESYSTEMS | _HFS_FILESYSTEMS
 
 
 def _import_dissect_fs(fs_type: str):
@@ -264,8 +278,15 @@ def _node_filename(node, fs_type: str) -> str:
     - Btrfs: node.path (property) or obtained from iterdir tuple
     - FFS: node.name (str or None)
     - ExFAT: obtained from dict key during iteration
+    - HFS+/HFSX: node.name (str) via pyfshfs
     """
     try:
+        # HFS+/HFSX (pyfshfs): node.name is a str
+        if fs_type in _HFS_FILESYSTEMS:
+            if hasattr(node, 'name') and node.name is not None:
+                return str(node.name)
+            return ""
+
         # ExtFS, XFS
         if hasattr(node, 'filename') and node.filename is not None:
             return str(node.filename)
@@ -294,6 +315,15 @@ def _node_filename(node, fs_type: str) -> str:
 def _node_is_dir(node, fs_type: str) -> bool:
     """Check whether a dissect node represents a directory."""
     try:
+        # HFS+/HFSX (pyfshfs): check file_mode with S_ISDIR
+        if fs_type in _HFS_FILESYSTEMS:
+            if hasattr(node, 'file_mode') and node.file_mode is not None:
+                return stat.S_ISDIR(node.file_mode)
+            # Fallback: directories have sub_file_entries
+            if hasattr(node, 'number_of_sub_file_entries'):
+                return node.number_of_sub_file_entries > 0
+            return False
+
         # Btrfs / FFS have explicit is_dir()
         if hasattr(node, 'is_dir'):
             return node.is_dir()
@@ -318,8 +348,15 @@ def _node_inum(node, fs_type: str) -> int:
     - ExtFS/XFS/FFS/Btrfs: node.inum
     - FAT: node.cluster (FAT has no inodes; use start cluster as pseudo-inode)
     - ExFAT: node.cluster if available
+    - HFS+/HFSX: node.identifier (CNID, Catalog Node ID)
     """
     try:
+        # HFS+/HFSX (pyfshfs): use CNID (identifier)
+        if fs_type in _HFS_FILESYSTEMS:
+            if hasattr(node, 'identifier'):
+                return int(node.identifier)
+            return 0
+
         if hasattr(node, 'inum'):
             return int(node.inum)
 
@@ -377,6 +414,7 @@ def _node_is_deleted(node, fs_type: str) -> bool:
                 return node.inode.di_nlink == 0
             return False
 
+        # HFS+/HFSX: pyfshfs does not expose deleted entries
         # FAT/exFAT/XFS/Btrfs: dissect only yields live entries
         return False
     except Exception:
@@ -410,6 +448,17 @@ def _node_timestamps(node, fs_type: str) -> Tuple[int, int, int, int]:
     changed = 0
 
     try:
+        # HFS+/HFSX (pyfshfs): uses creation_time, modification_time, access_time
+        if fs_type in _HFS_FILESYSTEMS:
+            if hasattr(node, 'creation_time'):
+                created = _dt_to_int(node.creation_time)
+            if hasattr(node, 'modification_time'):
+                modified = _dt_to_int(node.modification_time)
+            if hasattr(node, 'access_time'):
+                accessed = _dt_to_int(node.access_time)
+            # HFS+ has no separate metadata-change time
+            return (created, modified, accessed, 0)
+
         # Created time (crtime / btime / ctime for FAT)
         if hasattr(node, 'crtime'):
             created = _dt_to_int(node.crtime)
@@ -1031,6 +1080,36 @@ class ForensicDiskAccessor:
                         fs_type=partition.filesystem
                     )
                     logger.warning(f"Falling back to basic extractor for {partition.filesystem}")
+        elif partition.filesystem in _HFS_FILESYSTEMS:
+            # HFS+/HFSX: use pyfshfs (libfshfs)
+            if not PYFSHFS_AVAILABLE:
+                self._extractor = None
+                logger.warning(
+                    f"HFS+ partition found but pyfshfs not installed. "
+                    f"Run: pip install libfshfs-python"
+                )
+            else:
+                try:
+                    self._dissect_fh = CachedBackendIO(
+                        self._backend,
+                        offset=partition.offset,
+                        size=partition.size
+                    )
+                    vol = pyfshfs.volume()
+                    vol.open_file_object(self._dissect_fh)
+                    self._dissect_fs = vol
+                    self._dissect_fs_type = partition.filesystem
+                    self._extractor = None
+                    logger.info(
+                        f"Selected partition {index}: {partition.filesystem} at offset {partition.offset} "
+                        f"(pyfshfs HFS+ extraction enabled)"
+                    )
+                except Exception as e:
+                    logger.error(f"pyfshfs failed to open HFS+ at partition {index}: {e}")
+                    self._dissect_fs = None
+                    self._dissect_fs_type = None
+                    self._extractor = None
+
         else:
             self._extractor = None
             logger.warning(f"Unsupported filesystem: {partition.filesystem}")
@@ -1276,7 +1355,10 @@ class ForensicDiskAccessor:
         if self._dissect_fs is not None:
             try:
                 dissect_path = self._normalize_dissect_path(path)
-                self._dissect_fs.get(dissect_path)
+                if self._dissect_fs_type in _HFS_FILESYSTEMS:
+                    self._dissect_fs.get_file_entry_by_path(dissect_path)
+                else:
+                    self._dissect_fs.get(dissect_path)
                 return True
             except Exception:
                 return False
@@ -1305,7 +1387,10 @@ class ForensicDiskAccessor:
         if self._dissect_fs is not None:
             try:
                 dissect_path = self._normalize_dissect_path(path)
-                node = self._dissect_fs.get(dissect_path)
+                if self._dissect_fs_type in _HFS_FILESYSTEMS:
+                    node = self._dissect_fs.get_file_entry_by_path(dissect_path)
+                else:
+                    node = self._dissect_fs.get(dissect_path)
                 return _node_is_dir(node, self._dissect_fs_type)
             except Exception:
                 return False
@@ -1878,6 +1963,19 @@ class ForensicDiskAccessor:
             return
 
         try:
+            # HFS+/HFSX (pyfshfs): iterate sub_file_entries
+            if fs_type in _HFS_FILESYSTEMS:
+                for i in range(node.number_of_sub_file_entries):
+                    try:
+                        child = node.get_sub_file_entry(i)
+                        fname = child.name if child.name else ""
+                        if fname in ('.', '..', '', './', '../'):
+                            continue
+                        yield (fname, child)
+                    except Exception:
+                        continue
+                return
+
             # Btrfs iterdir yields (name, child_node) tuples
             if fs_type == 'Btrfs':
                 for name, child_node in node.iterdir():
@@ -2021,7 +2119,10 @@ class ForensicDiskAccessor:
 
         # Start walk from root
         try:
-            root = self._dissect_fs.get("/")
+            if fs_type in _HFS_FILESYSTEMS:
+                root = self._dissect_fs.get_root_directory()
+            else:
+                root = self._dissect_fs.get("/")
             _walk(root, "", 0)
         except Exception as e:
             logger.error(f"[{fs_type}] Root directory open failed: {e}")
@@ -2355,7 +2456,10 @@ class ForensicDiskAccessor:
                 pass
 
         try:
-            root = self._dissect_fs.get("/")
+            if fs_type in _HFS_FILESYSTEMS:
+                root = self._dissect_fs.get_root_directory()
+            else:
+                root = self._dissect_fs.get("/")
             _walk(root, "", 0)
         except Exception as e:
             logger.debug(f"[{fs_type}] find_files_by_name failed: {e}")
@@ -2444,7 +2548,11 @@ class ForensicDiskAccessor:
             if fs_type == 'exFAT':
                 return self._dissect_list_exfat_directory(dissect_path)
 
-            node = self._dissect_fs.get(dissect_path)
+            # HFS+/HFSX: use get_file_entry_by_path
+            if fs_type in _HFS_FILESYSTEMS:
+                node = self._dissect_fs.get_file_entry_by_path(dissect_path)
+            else:
+                node = self._dissect_fs.get(dissect_path)
             parent_inode = _node_inum(node, fs_type)
             parent_path = dissect_path.rstrip('/')
 
@@ -2600,6 +2708,21 @@ class ForensicDiskAccessor:
         if fs_type == 'exFAT':
             return self._dissect_read_exfat_by_path(dissect_path, max_size)
 
+        # HFS+/HFSX: use pyfshfs get_file_entry_by_path + read_buffer_at_offset
+        if fs_type in _HFS_FILESYSTEMS:
+            try:
+                entry = self._dissect_fs.get_file_entry_by_path(dissect_path)
+                size = entry.size if entry.size else 0
+                if size == 0:
+                    return b''
+                read_size = min(size, max_size) if max_size else size
+                entry.seek(0)
+                return entry.read(read_size)
+            except Exception as e:
+                if 'unable to retrieve' in str(e).lower() or 'not found' in str(e).lower():
+                    raise FilesystemError(f"File not found: {path}")
+                raise FilesystemError(f"Failed to read file {path}: {e}")
+
         try:
             node = self._dissect_fs.get(dissect_path)
             return self._dissect_read_file_content(node, max_size)
@@ -2684,6 +2807,21 @@ class ForensicDiskAccessor:
         if fs_type == 'exFAT':
             raise FilesystemError("ExFAT does not support inode-based file access. Use path-based access.")
 
+        # HFS+/HFSX: use pyfshfs get_file_entry_by_identifier (CNID)
+        if fs_type in _HFS_FILESYSTEMS:
+            try:
+                entry = self._dissect_fs.get_file_entry_by_identifier(inode)
+                size = entry.size if entry.size else 0
+                if size == 0:
+                    return b''
+                read_size = min(size, max_size) if max_size else size
+                entry.seek(0)
+                return entry.read(read_size)
+            except Exception as e:
+                if 'unable to retrieve' in str(e).lower() or 'not found' in str(e).lower():
+                    raise FilesystemError(f"Inode not found: {inode}")
+                raise FilesystemError(f"Failed to read inode {inode}: {e}")
+
         try:
             node = self._dissect_fs.get(inode)
             return self._dissect_read_file_content(node, max_size)
@@ -2698,8 +2836,30 @@ class ForensicDiskAccessor:
         self, node, chunk_size: int = 64 * 1024 * 1024
     ) -> Generator[bytes, None, None]:
         """Stream file content in chunks from a dissect filesystem node."""
+        fs_type = self._dissect_fs_type
         size = _node_size(node)
         if size == 0:
+            return
+
+        # HFS+/HFSX (pyfshfs): use seek() + read() on the file_entry directly
+        if fs_type in _HFS_FILESYSTEMS:
+            try:
+                offset = 0
+                node.seek(0)
+                while offset < size:
+                    read_len = min(chunk_size, size - offset)
+                    try:
+                        chunk = node.read(read_len)
+                        if not chunk:
+                            break
+                        yield chunk
+                        offset += len(chunk)
+                    except Exception as e:
+                        logger.debug(f"HFS+ stream read error at offset {offset}: {e}")
+                        yield b'\x00' * read_len
+                        offset += read_len
+            except Exception as e:
+                logger.error(f"Failed to stream HFS+ file: {e}")
             return
 
         try:
@@ -2734,6 +2894,17 @@ class ForensicDiskAccessor:
                 yield data[i:i + chunk_size]
             return
 
+        # HFS+/HFSX: use pyfshfs get_file_entry_by_path
+        if fs_type in _HFS_FILESYSTEMS:
+            try:
+                entry = self._dissect_fs.get_file_entry_by_path(dissect_path)
+                yield from self._dissect_stream_file_content(entry, chunk_size)
+            except Exception as e:
+                if 'unable to retrieve' in str(e).lower() or 'not found' in str(e).lower():
+                    raise FilesystemError(f"File not found: {path}")
+                raise FilesystemError(f"Failed to stream file {path}: {e}")
+            return
+
         try:
             node = self._dissect_fs.get(dissect_path)
             yield from self._dissect_stream_file_content(node, chunk_size)
@@ -2746,6 +2917,17 @@ class ForensicDiskAccessor:
         """Stream file content by inode via dissect."""
         if self._dissect_fs_type == 'exFAT':
             raise FilesystemError("ExFAT does not support inode-based file access.")
+
+        # HFS+/HFSX: use pyfshfs get_file_entry_by_identifier (CNID)
+        if self._dissect_fs_type in _HFS_FILESYSTEMS:
+            try:
+                entry = self._dissect_fs.get_file_entry_by_identifier(inode)
+                yield from self._dissect_stream_file_content(entry, chunk_size)
+            except Exception as e:
+                if 'unable to retrieve' in str(e).lower() or 'not found' in str(e).lower():
+                    raise FilesystemError(f"Inode not found: {inode}")
+                raise FilesystemError(f"Failed to stream inode {inode}: {e}")
+            return
 
         try:
             node = self._dissect_fs.get(inode)
@@ -2766,6 +2948,42 @@ class ForensicDiskAccessor:
 
         if fs_type == 'exFAT':
             raise FilesystemError("ExFAT does not support inode-based metadata lookup.")
+
+        # HFS+/HFSX: use pyfshfs — accept both CNID (int) and path (str)
+        if fs_type in _HFS_FILESYSTEMS:
+            try:
+                if isinstance(inode, str):
+                    entry = self._dissect_fs.get_file_entry_by_path(inode)
+                else:
+                    entry = self._dissect_fs.get_file_entry_by_identifier(int(inode))
+            except Exception as e:
+                raise FilesystemError(f"Failed to open HFS+ entry {inode}: {e}")
+
+            is_dir = _node_is_dir(entry, fs_type)
+            size = entry.size if entry.size else 0
+            filename = entry.name if entry.name else f"cnid-{inode}"
+            created, modified, accessed, changed = _node_timestamps(entry, fs_type)
+            parent_id = entry.parent_identifier if hasattr(entry, 'parent_identifier') else 0
+
+            return FileMetadata(
+                inode=inode,
+                filename=filename,
+                full_path="",  # Not resolvable from CNID alone
+                size=size,
+                allocated_size=size,
+                is_directory=is_dir,
+                is_deleted=False,  # pyfshfs does not expose deleted entries
+                is_resident=False,
+                resident_data=b'',
+                data_runs=[],
+                ads_streams=[],
+                created_time=created,
+                modified_time=modified,
+                accessed_time=accessed,
+                mft_changed_time=changed,
+                parent_ref=parent_id,
+                flags=0
+            )
 
         try:
             node = self._dissect_fs.get(inode)

@@ -1535,7 +1535,12 @@ def create_disk_backend(source: str) -> UnifiedDiskReader:
     elif ext == '.vdi':
         return VDIDiskBackend(source)
     elif ext == '.dmg':
-        return DMGDiskBackend(source)
+        # Try UDIF first; fall back to RAW for uncompressed .dmg images
+        try:
+            return DMGDiskBackend(source)
+        except (DiskError, Exception) as e:
+            logger.info(f"DMG is not UDIF format ({e}), opening as RAW image")
+            return RAWImageBackend(source)
     else:
         return RAWImageBackend(source)
 
