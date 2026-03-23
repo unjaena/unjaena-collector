@@ -597,6 +597,8 @@ class ForensicDiskAccessor:
         catalog = disk.scan_all_files(include_deleted=True)
     """
 
+    _DEFAULT_MAX_SCAN_ENTRIES = 2_000_000  # 2M files max to prevent OOM
+
     def __init__(self, backend: UnifiedDiskReader):
         """
         Args:
@@ -2048,7 +2050,7 @@ class ForensicDiskAccessor:
         }
 
         entry_count = 0
-        limit = max_entries or float('inf')
+        limit = max_entries if max_entries is not None else self._DEFAULT_MAX_SCAN_ENTRIES
         _scan_start = _time.monotonic()
         _SCAN_TIMEOUT = 600  # 10 minutes max for directory walk
         _IO_THROTTLE_INTERVAL = 5000
@@ -2127,6 +2129,9 @@ class ForensicDiskAccessor:
         except Exception as e:
             logger.error(f"[{fs_type}] Root directory open failed: {e}")
             result['errors'].append((0, f"root: {e}"))
+
+        if entry_count >= limit:
+            logger.warning(f"Scan limit reached ({limit:,} entries). Some files may not be indexed.")
 
         # If include_deleted, try to recover orphan files via inode scan
         # SAFETY: Skip orphan scan for virtual disk backends
@@ -2832,6 +2837,67 @@ class ForensicDiskAccessor:
 
     # ---------- stream_file (dissect) ----------
 
+    def _open_exfat_stream(self, path: str):
+        """Open a RunlistStream file handle for an ExFAT file (no full-file load)."""
+        parts = [p for p in path.split('/') if p]
+        if not parts:
+            return None
+
+        try:
+            # Navigate dict tree to root contents
+            current_dict = None
+            root_files = self._dissect_fs.files
+            for key, value in root_files.items():
+                if isinstance(value, tuple) and len(value) == 2:
+                    _, root_contents = value
+                    if isinstance(root_contents, dict):
+                        current_dict = root_contents
+                        break
+
+            if current_dict is None:
+                return None
+
+            # Navigate to parent directory
+            for part in parts[:-1]:
+                found = False
+                for filename, value in current_dict.items():
+                    if filename.rstrip('/').lower() == part.lower():
+                        if isinstance(value, tuple) and len(value) == 2:
+                            _, sub_dict = value
+                            if isinstance(sub_dict, dict):
+                                current_dict = sub_dict
+                                found = True
+                                break
+                if not found:
+                    return None
+
+            # Find the target file
+            target = parts[-1]
+            for filename, value in current_dict.items():
+                if filename.rstrip('/').lower() == target.lower():
+                    if isinstance(value, tuple) and len(value) == 2:
+                        file_entry, _ = value
+                    else:
+                        file_entry = value
+
+                    size = 0
+                    if hasattr(file_entry, 'stream') and hasattr(file_entry.stream, 'data_length'):
+                        size = int(file_entry.stream.data_length)
+                    if size == 0:
+                        return None
+
+                    from dissect.fat.exfat import RunlistStream
+                    runlist = self._dissect_fs.runlist(file_entry)
+                    return RunlistStream(
+                        self._dissect_fh, runlist, size,
+                        self._dissect_fs.sector_size
+                    )
+
+            return None
+        except Exception as e:
+            logger.error(f"Failed to open ExFAT stream for {path}: {e}")
+            return None
+
     def _dissect_stream_file_content(
         self, node, chunk_size: int = 64 * 1024 * 1024
     ) -> Generator[bytes, None, None]:
@@ -2888,10 +2954,18 @@ class ForensicDiskAccessor:
         fs_type = self._dissect_fs_type
 
         if fs_type == 'exFAT':
-            # For ExFAT, read the whole file and yield in chunks
-            data = self._dissect_read_exfat_by_path(dissect_path)
-            for i in range(0, len(data), chunk_size):
-                yield data[i:i + chunk_size]
+            # Stream ExFAT via RunlistStream to avoid loading entire file into memory
+            fh = self._open_exfat_stream(dissect_path)
+            if fh is None:
+                return
+            try:
+                while True:
+                    chunk = fh.read(chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+            except Exception as e:
+                logger.error(f"ExFAT stream read error: {e}")
             return
 
         # HFS+/HFSX: use pyfshfs get_file_entry_by_path

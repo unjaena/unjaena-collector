@@ -731,6 +731,10 @@ class LinuxCollector:
             except Exception as e:
                 logger.error(f"[LinuxCollector] Failed to collect {artifact_type}: {e}")
 
+        # Release scan cache after all artifact types collected
+        if hasattr(self, 'release_scan_cache'):
+            self.release_scan_cache()
+
     def get_system_info(self) -> Dict[str, Any]:
         """
         Get Linux system information.

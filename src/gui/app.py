@@ -3309,6 +3309,10 @@ class CollectionWorker(QThread):
                                 self.log_message.emit(f"Collection failed [{device_name}] ({artifact_type}): {e}", True)
                                 logging.debug(f"Collection error for {artifact_type} on {device_name}: {e}")
 
+                    # Release scan cache before closing collector
+                    if hasattr(collector, 'release_scan_cache'):
+                        collector.release_scan_cache()
+
                     # Cleanup collector
                     if hasattr(collector, 'close'):
                         collector.close()
@@ -3397,6 +3401,10 @@ class CollectionWorker(QThread):
                         import logging
                         self.log_message.emit(f"Collection failed ({artifact_type}): {e}", True)
                         logging.debug(f"Collection error for {artifact_type}: {e}")
+
+                # Release scan cache after all artifact types collected
+                if hasattr(collector, 'release_scan_cache'):
+                    collector.release_scan_cache()
 
             if self._cancelled:
                 self.finished.emit(False, "Collection cancelled")

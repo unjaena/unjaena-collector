@@ -29,6 +29,7 @@ Usage:
 
 import re
 import hashlib
+import itertools
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -689,6 +690,8 @@ class BaseMFTCollector(ABC):
     - Includes system folders
     """
 
+    _DEFAULT_MAX_SCAN_ENTRIES = 2_000_000  # 2M files max to prevent OOM
+
     def __init__(self, output_dir: str):
         """
         Args:
@@ -740,6 +743,13 @@ class BaseMFTCollector(ABC):
         self._mft_cache = {'active_files': [], 'deleted_files': [], 'directories': []}
         self._extension_index = {}
 
+    def release_scan_cache(self):
+        """Release memory held by scan cache after collection is complete."""
+        self._mft_cache = {'active_files': [], 'deleted_files': [], 'directories': []}
+        self._extension_index.clear()
+        self._mft_indexed = False
+        logger.info("Scan cache released")
+
     def __enter__(self):
         return self
 
@@ -766,10 +776,10 @@ class BaseMFTCollector(ABC):
         logger.info(f"[{source}] Building MFT index (Digital Forensics: Complete collection)...")
 
         try:
-            # Full MFT scan - no limits, includes deleted files
+            # Full MFT scan - capped to prevent OOM, includes deleted files
             scan_result = self._accessor.scan_all_files(
                 include_deleted=True,
-                max_entries=None,
+                max_entries=self._DEFAULT_MAX_SCAN_ENTRIES,
             )
 
             self._mft_cache['active_files'] = scan_result.get('active_files', [])
@@ -794,7 +804,7 @@ class BaseMFTCollector(ABC):
         """Build extension-based index (for fast lookup)"""
         self._extension_index = {}
 
-        all_files = self._mft_cache['active_files'] + self._mft_cache['deleted_files']
+        all_files = itertools.chain(self._mft_cache['active_files'], self._mft_cache['deleted_files'])
 
         for entry in all_files:
             filename = entry.filename if hasattr(entry, 'filename') else str(entry)
@@ -903,10 +913,10 @@ class BaseMFTCollector(ABC):
         full_disk_scan = mft_filter.get('full_disk_scan', False)
         max_file_size = mft_filter.get('max_file_size', 0)  # 0 = unlimited
 
-        # Files to collect
-        files_to_check = list(self._mft_cache['active_files'])
+        # Files to collect — iterate cache directly, no copy
+        files_to_check = self._mft_cache['active_files']
         if include_deleted:
-            files_to_check.extend(self._mft_cache['deleted_files'])
+            files_to_check = itertools.chain(files_to_check, self._mft_cache['deleted_files'])
 
         # Filter conditions
         extensions = mft_filter.get('extensions', set())
