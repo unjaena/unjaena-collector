@@ -519,7 +519,7 @@ class ConsentDialog(QDialog):
              {'ko':'결제 처리', 'en':'Payment processing', 'ja':'決済処理', 'zh':'支付处理'},
              {'ko':'미국', 'en':'USA', 'ja':'米国', 'zh':'美国'},
              {'ko':'결제 정보', 'en':'Payment info', 'ja':'決済情報', 'zh':'支付信息'},
-             {'ko':'법정 보존 기간 (5년)', 'en':'Legal retention (5 years)', 'ja':'法定保存期間（5年）', 'zh':'法定保存期限（5年）'}),
+             {'ko':'법정 보존 기간 (7년)', 'en':'Legal retention (7 years)', 'ja':'法定保存期間（7年間）', 'zh':'法定保存期限（7年）'}),
         ]
         # Add retention period column header
         headers_ext = {
