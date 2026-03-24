@@ -925,8 +925,8 @@ class R2DirectUploader:
                     _pcb = getattr(self, '_progress_callback', None)
                     if _pcb:
                         _pcb(
-                            f"⚠️ {file_name}: 대용량 파일({file_size / (1024**2):.0f}MB) — "
-                            f"클라이언트 암호화 생략, 서버측 암호화로 보호됨"
+                            f"⚠️ {file_name}: Large file ({file_size / (1024**2):.0f}MB) — "
+                            f"client-side encryption skipped, protected by server-side encryption"
                         )
                     del encryption_key_hex
                 else:
