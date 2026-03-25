@@ -24,6 +24,12 @@ from pathlib import Path
 from datetime import datetime
 from typing import Generator, Tuple, Dict, Any, Optional, List
 
+# macOS artifact filters for auto-registration in ARTIFACT_TYPES
+try:
+    from collectors.macos_artifacts import MACOS_ARTIFACT_FILTERS as _MACOS_FILTERS
+except ImportError:
+    _MACOS_FILTERS = {}
+
 logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -3091,6 +3097,19 @@ ARTIFACT_TYPES = {
         'kill_chain_phase': 'credential_access',
         'collector': 'collect_macos',
     },
+
+    # =========================================================================
+    # macOS Extended Artifacts (from MACOS_ARTIFACT_FILTERS — auto-registered)
+    # =========================================================================
+    **{k: {'name': v.get('description', k), 'description': v.get('description', ''),
+           'category': 'macos', 'paths': [], 'forensic_value': v.get('forensic_value', 'medium'),
+           'collector': 'collect_macos'}
+       for k, v in _MACOS_FILTERS.items()
+       if k not in {
+           'macos_unified_log', 'macos_launch_agent', 'macos_launch_daemon',
+           'macos_zsh_history', 'macos_tcc_db', 'macos_knowledgec',
+           'macos_fseventsd', 'macos_safari_history', 'macos_keychain',
+       }},
 }
 
 # =============================================================================
