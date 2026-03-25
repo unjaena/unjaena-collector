@@ -625,6 +625,314 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'category': 'system_info',
         'os_type': 'macos',
     },
+
+    # ==========================================================================
+    # [2026-03-25] Additional macOS Artifacts (25 new types)
+    # ==========================================================================
+
+    # --- System Info ---
+
+    'macos_user_accounts': {
+        'paths': [
+            '/private/var/db/dslocal/nodes/Default/users/*.plist',
+            '/Library/Preferences/com.apple.loginwindow.plist',
+            '/Library/Preferences/com.apple.preferences.accounts.plist',
+        ],
+        'description': 'User account information (macOS)',
+        'forensic_value': 'critical',
+        'category': 'system_info',
+        'os_type': 'macos',
+    },
+
+    'macos_timezone': {
+        'paths': [
+            '/Library/Preferences/.GlobalPreferences.plist',
+            '/Library/Preferences/com.apple.timezone.auto.plist',
+        ],
+        'description': 'Timezone settings',
+        'forensic_value': 'medium',
+        'category': 'system_info',
+        'os_type': 'macos',
+        'note': 'AppleTimezone key in GlobalPreferences',
+    },
+
+    'macos_network_interfaces': {
+        'paths': [
+            '/Library/Preferences/SystemConfiguration/NetworkInterfaces.plist',
+            '/Library/Preferences/SystemConfiguration/preferences.plist',
+        ],
+        'description': 'Network interface configuration',
+        'forensic_value': 'medium',
+        'category': 'network',
+        'os_type': 'macos',
+    },
+
+    'macos_installed_apps': {
+        'paths': [
+            '/Applications/*/Contents/Info.plist',
+            '/Users/*/Applications/*/Contents/Info.plist',
+        ],
+        'description': 'Installed applications',
+        'forensic_value': 'medium',
+        'category': 'applications',
+        'os_type': 'macos',
+    },
+
+    'macos_app_updates': {
+        'paths': [
+            '/Library/Receipts/InstallHistory.plist',
+            '/var/log/install.log',
+        ],
+        'description': 'Application update history',
+        'forensic_value': 'medium',
+        'category': 'system_logs',
+        'os_type': 'macos',
+    },
+
+    # --- User Activity ---
+
+    'macos_command_history': {
+        'paths': [
+            '/Users/*/.python_history',
+            '/Users/*/.mysql_history',
+            '/Users/*/.psql_history',
+            '/Users/*/.node_repl_history',
+            '/Users/*/.irb_history',
+        ],
+        'description': 'Command history (Python, MySQL, PostgreSQL, Node, IRB)',
+        'forensic_value': 'high',
+        'category': 'user_activity',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
+
+    'macos_dsstore': {
+        'paths': [
+            '/Users/*/.DS_Store',
+            '/Users/*/Desktop/.DS_Store',
+            '/Users/*/Documents/.DS_Store',
+            '/Users/*/Downloads/.DS_Store',
+        ],
+        'description': '.DS_Store files (Finder folder access evidence)',
+        'forensic_value': 'medium',
+        'category': 'user_activity',
+        'os_type': 'macos',
+    },
+
+    'macos_dock': {
+        'paths': [
+            '/Users/*/Library/Preferences/com.apple.dock.plist',
+        ],
+        'description': 'Dock configuration',
+        'forensic_value': 'medium',
+        'category': 'user_activity',
+        'os_type': 'macos',
+    },
+
+    'macos_volume_mounts': {
+        'paths': [
+            '/Users/*/Library/Preferences/com.apple.finder.plist',
+            '/Users/*/Library/Preferences/com.apple.sidebarlists.plist',
+        ],
+        'description': 'Recently mounted volumes (FXRecentFolders)',
+        'forensic_value': 'high',
+        'category': 'user_activity',
+        'os_type': 'macos',
+        'note': 'FXRecentFolders key in Finder plist',
+    },
+
+    'macos_recent_apps': {
+        'paths': [
+            '/Users/*/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.RecentApplications.sfl2',
+        ],
+        'description': 'Recently launched applications',
+        'forensic_value': 'high',
+        'category': 'user_activity',
+        'os_type': 'macos',
+    },
+
+    'macos_recent_docs': {
+        'paths': [
+            '/Users/*/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.RecentDocuments.sfl2',
+            '/Users/*/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.RecentServers.sfl2',
+        ],
+        'description': 'Recently accessed documents and servers',
+        'forensic_value': 'high',
+        'category': 'user_activity',
+        'os_type': 'macos',
+    },
+
+    'macos_file_copy_move': {
+        'paths': [
+            '/Users/*/Library/Preferences/com.apple.finder.plist',
+            '/Users/*/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.RecentServers.sfl2',
+        ],
+        'description': 'File copy/move paths (Finder GoToField)',
+        'forensic_value': 'high',
+        'category': 'user_activity',
+        'os_type': 'macos',
+        'note': 'GoToField key in Finder plist',
+    },
+
+    # --- External Devices ---
+
+    'macos_ipod_devices': {
+        'paths': [
+            '/Users/*/Library/Preferences/com.apple.iPod.plist',
+            '/Users/*/Library/Preferences/com.apple.AMPDeviceDiscoveryAgent.plist',
+        ],
+        'description': 'Connected iPod/iOS device history',
+        'forensic_value': 'high',
+        'category': 'system_info',
+        'os_type': 'macos',
+    },
+
+    # --- Applications & Messaging ---
+
+    'macos_itunes_cloud': {
+        'paths': [
+            '/Users/*/Library/Application Support/iTunes/iTunesApplicationSupport/*',
+            '/Users/*/Library/Preferences/com.apple.iTunes.plist',
+        ],
+        'description': 'iTunes/Apple Music cloud data',
+        'forensic_value': 'medium',
+        'category': 'applications',
+        'os_type': 'macos',
+    },
+
+    'macos_notification': {
+        'paths': [
+            '/Users/*/Library/Group Containers/group.com.apple.usernoted/db2/db',
+            '/private/var/folders/*/*/com.apple.notificationcenterui/db2/db',
+        ],
+        'description': 'Notification Center database',
+        'forensic_value': 'high',
+        'category': 'applications',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
+
+    'macos_identity_services': {
+        'paths': [
+            '/Users/*/Library/Preferences/com.apple.identityservicesd.plist',
+            '/Users/*/Library/IdentityServices/*',
+        ],
+        'description': 'Identity Services daemon (IDS)',
+        'forensic_value': 'high',
+        'category': 'security',
+        'os_type': 'macos',
+    },
+
+    'macos_storage_byhost': {
+        'paths': [
+            '/Users/*/Library/Preferences/ByHost/*.plist',
+        ],
+        'description': 'Per-host storage preferences',
+        'forensic_value': 'medium',
+        'category': 'system_info',
+        'os_type': 'macos',
+    },
+
+    'macos_weather': {
+        'paths': [
+            '/Users/*/Library/Containers/com.apple.weather/Data/Library/Caches/*',
+            '/Users/*/Library/Preferences/com.apple.weather.plist',
+        ],
+        'description': 'Weather app location data',
+        'forensic_value': 'medium',
+        'category': 'applications',
+        'os_type': 'macos',
+    },
+
+    'macos_user_preferences': {
+        'paths': [
+            '/Users/*/Library/Preferences/com.apple.systempreferences.plist',
+            '/Users/*/Library/Preferences/.GlobalPreferences.plist',
+        ],
+        'description': 'User customization settings',
+        'forensic_value': 'medium',
+        'category': 'user_activity',
+        'os_type': 'macos',
+    },
+
+    'macos_icloud_accounts': {
+        'paths': [
+            '/Users/*/Library/Preferences/MobileMeAccounts.plist',
+            '/Users/*/Library/Application Support/iCloud/Accounts/*',
+        ],
+        'description': 'iCloud sync account information',
+        'forensic_value': 'critical',
+        'category': 'security',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
+
+    'macos_ichat': {
+        'paths': [
+            '/Users/*/Library/Preferences/com.apple.iChat.plist',
+        ],
+        'description': 'iChat/Messages legacy user data',
+        'forensic_value': 'medium',
+        'category': 'applications',
+        'os_type': 'macos',
+        'note': 'chat.db handled by macos_imessage; this covers iChat plist settings',
+    },
+
+    # --- Browser ---
+
+    'macos_safari_search': {
+        'paths': [
+            '/Users/*/Library/Safari/RecentlyClosedTabs.plist',
+            '/Users/*/Library/Safari/TopSites.plist',
+            '/Users/*/Library/Safari/SearchDescriptions.plist',
+            '/Users/*/Library/Suggestions/snippets.db',
+        ],
+        'description': 'Safari search history and suggestions',
+        'forensic_value': 'high',
+        'category': 'browser',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
+
+    # --- Contacts ---
+
+    'macos_blocked_contacts': {
+        'paths': [
+            '/Users/*/Library/Preferences/com.apple.cmfsyncagent.plist',
+            '/Users/*/Library/Application Support/AddressBook/AddressBook-v22.abcddb',
+        ],
+        'description': 'Blocked phone numbers/contacts',
+        'forensic_value': 'high',
+        'category': 'applications',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
+
+    # --- Korean Messenger (KakaoTalk) ---
+
+    'macos_kakaotalk_uid': {
+        'paths': [
+            '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/KakaoTalk/*',
+            '/Users/*/Library/Preferences/com.kakao.KakaoTalkMac.plist',
+        ],
+        'description': 'KakaoTalk user identifier',
+        'forensic_value': 'high',
+        'category': 'applications',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
+
+    'macos_kakaotalk_credentials': {
+        'paths': [
+            '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Cookies/Cookies.binarycookies',
+            '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/KakaoTalk/talk.db',
+        ],
+        'description': 'KakaoTalk login data and message database',
+        'forensic_value': 'critical',
+        'category': 'applications',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
 }
 
 
