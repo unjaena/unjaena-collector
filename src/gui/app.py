@@ -2958,20 +2958,25 @@ class CollectionWorker(QThread):
 
                 collector = E01ArtifactCollector(file_path, output_dir)
 
-                # Auto-select first NTFS partition
+                # Auto-select best partition by priority: NTFS > APFS > HFS+ > ext4 > largest
                 partitions = collector.list_partitions()
                 selected = False
-                for p in partitions:
-                    if getattr(p, 'filesystem', '').upper() == 'NTFS':
-                        if collector.select_partition(p.index):
-                            self.log_message.emit(f"Partition selected: {p.filesystem} ({getattr(p, 'size_display', '')})", False)
-                            selected = True
-                            break
+                priority_fs = ['NTFS', 'APFS', 'HFS+', 'HFSX', 'ext4', 'ext3', 'ext2', 'XFS', 'Btrfs']
+                for target_fs in priority_fs:
+                    for p in partitions:
+                        if getattr(p, 'filesystem', '').upper() == target_fs.upper():
+                            if collector.select_partition(p.index):
+                                self.log_message.emit(f"Partition selected: {p.filesystem} ({getattr(p, 'size_display', '')})", False)
+                                selected = True
+                                break
+                    if selected:
+                        break
 
                 if not selected and partitions:
-                    # Select first partition if no NTFS found
-                    collector.select_partition(partitions[0].index)
-                    self.log_message.emit(f"First partition selected: {getattr(partitions[0], 'filesystem', 'Unknown')}", False)
+                    # Select largest partition if no known FS found
+                    largest = max(partitions, key=lambda p: getattr(p, 'size', 0))
+                    collector.select_partition(largest.index)
+                    self.log_message.emit(f"Largest partition selected: {getattr(largest, 'filesystem', 'Unknown')} ({getattr(largest, 'size_display', '')})", False)
 
                 return collector
 
