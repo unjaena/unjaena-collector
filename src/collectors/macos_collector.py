@@ -36,6 +36,8 @@ from datetime import datetime
 from typing import Generator, Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 
+from collectors.macos_artifacts import MACOS_ARTIFACT_FILTERS
+
 logger = logging.getLogger(__name__)
 
 # Debug output control
@@ -528,6 +530,23 @@ MACOS_ARTIFACT_TYPES = {
         'kill_chain_phase': 'collection',
     },
 }
+
+# Auto-register remaining types from MACOS_ARTIFACT_FILTERS that are not
+# explicitly defined above. This ensures every GUI checkbox has a matching
+# collection entry without manual synchronization.
+_EXISTING_MACOS_KEYS = set(MACOS_ARTIFACT_TYPES.keys())
+MACOS_ARTIFACT_TYPES.update({
+    k: {
+        'name': v.get('description', k.replace('_', ' ').title()),
+        'description': v.get('description', ''),
+        'paths': v.get('paths', []),
+        'forensic_value': v.get('forensic_value', 'medium'),
+        'mitre_attack': 'T1005',
+        'kill_chain_phase': 'collection',
+    }
+    for k, v in MACOS_ARTIFACT_FILTERS.items()
+    if k not in _EXISTING_MACOS_KEYS
+})
 
 
 class macOSCollector:
