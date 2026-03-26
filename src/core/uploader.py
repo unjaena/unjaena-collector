@@ -777,7 +777,7 @@ class R2DirectUploader:
     def _confirm_upload(
         self, key: str, upload_id: str, file_hash: str,
         file_name: str, artifact_type: str, parts: list = None,
-        is_encrypted: bool = False,
+        is_encrypted: bool = False, original_path: str = "",
     ) -> dict:
         """서버에 업로드 완료 확인 요청 (최대 5회 재시도)"""
         endpoint = "/api/v1/collector/r2/upload-complete"
@@ -792,6 +792,7 @@ class R2DirectUploader:
             "parts": parts,
             "is_encrypted": is_encrypted,
             "consent_record": self.consent_record,
+            "original_path": original_path,
         }
 
         max_retries = 5
@@ -969,6 +970,7 @@ class R2DirectUploader:
                 os.remove(encrypted_path)
 
             # Step 3: 서버에 완료 확인
+            original_path = metadata.get('original_path', '') if metadata else ''
             confirm_result = self._confirm_upload(
                 key=key,
                 upload_id=upload_id,
@@ -977,6 +979,7 @@ class R2DirectUploader:
                 artifact_type=artifact_type,
                 parts=completed_parts,
                 is_encrypted=is_encrypted,
+                original_path=original_path,
             )
 
             logger.info(f"[R2] Upload complete: {file_name} → {key}")
