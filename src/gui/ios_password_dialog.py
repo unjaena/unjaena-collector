@@ -3,13 +3,13 @@
 iOS Encrypted Backup Password Dialog
 
 Simple password input dialog for encrypted iOS backups.
-No background verification - PBKDF2 key derivation is performed once
+No background verification - key derivation key derivation is performed once
 in the CollectionWorker thread during collection.
 
 Security:
     - Password used client-side only (zero-knowledge model)
     - Password cleared from dialog after acceptance
-    - Actual verification happens in collection thread (single PBKDF2)
+    - Actual verification happens in collection thread (single key derivation)
 """
 from dataclasses import dataclass
 from typing import Optional

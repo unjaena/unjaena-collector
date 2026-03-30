@@ -299,6 +299,8 @@ class DeviceListPanel(QWidget):
         """Device display label"""
         type_icons = {
             DeviceType.WINDOWS_PHYSICAL_DISK: "💿",
+            DeviceType.MACOS_LOCAL_SYSTEM: "🖥",
+            DeviceType.LINUX_LOCAL_SYSTEM: "🖥",
             DeviceType.E01_IMAGE: "📀",
             DeviceType.RAW_IMAGE: "📀",
             DeviceType.VMDK_IMAGE: "📀",
@@ -342,6 +344,16 @@ class DeviceListPanel(QWidget):
             root_tag = " [ROOT]" if rooted else ""
             ver_tag = f" [Android {android_ver}/SDK {sdk}]" if android_ver else ""
             label = f"{label}{ver_tag}{root_tag}"
+
+        if device.device_type == DeviceType.MACOS_LOCAL_SYSTEM:
+            is_root = device.metadata.get('is_root', False)
+            root_tag = " [root]" if is_root else " [non-root]"
+            label = f"{label}{root_tag}"
+
+        if device.device_type == DeviceType.LINUX_LOCAL_SYSTEM:
+            is_root = device.metadata.get('is_root', False)
+            root_tag = " [root]" if is_root else " [non-root]"
+            label = f"{label}{root_tag}"
 
         return f"{icon} {label}"
 
@@ -394,6 +406,27 @@ class DeviceListPanel(QWidget):
             lines.append("Available: " + ", ".join(available))
             if unavailable:
                 lines.append("Unavailable: " + ", ".join(unavailable))
+
+        if device.device_type == DeviceType.MACOS_LOCAL_SYSTEM:
+            m = device.metadata
+            is_root = m.get('is_root', False)
+            lines.append(f"macOS {m.get('macos_version', '?')}")
+            lines.append(f"Host: {m.get('hostname', '?')}")
+            if m.get('hw_model'):
+                lines.append(f"Model: {m['hw_model']}")
+            lines.append(f"Privileges: {'root' if is_root else 'non-root (limited)'}")
+            if not is_root:
+                lines.append("Tip: Run with sudo for full artifact access")
+
+        if device.device_type == DeviceType.LINUX_LOCAL_SYSTEM:
+            m = device.metadata
+            is_root = m.get('is_root', False)
+            lines.append(f"{m.get('distro', 'Linux')} {m.get('distro_version', '')}")
+            lines.append(f"Host: {m.get('hostname', '?')}")
+            lines.append(f"Kernel: {m.get('kernel', '?')}")
+            lines.append(f"Privileges: {'root' if is_root else 'non-root (limited)'}")
+            if not is_root:
+                lines.append("Tip: Run with sudo for full artifact access")
 
         if not device.is_selectable:
             lines.append(f"⚠ {device.selection_disabled_reason}")

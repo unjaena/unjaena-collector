@@ -1014,7 +1014,7 @@ class macOSCollector:
         Get writable memory regions of a process using vmmap.
 
         Filters for MALLOC, __DATA, and heap regions that are likely
-        to contain encryption keys.
+        to contain forensically relevant data.
 
         Args:
             pid: Process ID

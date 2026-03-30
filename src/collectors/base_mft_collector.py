@@ -616,7 +616,7 @@ ARTIFACT_MFT_FILTERS = {
         'path_pattern': r'appdata/local/line/data/',
         'extensions': {'.edb'},
         'include_deleted': False,
-        'description': 'LINE PC encrypted databases (*.edb)',
+        'description': 'LINE PC databases (*.edb)',
     },
     'windows_telegram': {
         'path_pattern': r'appdata/roaming/telegram desktop/tdata/',
@@ -625,19 +625,19 @@ ARTIFACT_MFT_FILTERS = {
                                '.tiff', '.heic', '.tgs', '.mp4', '.avi', '.mov', '.webm',
                                '.mp3', '.ogg', '.wav', '.html', '.css', '.js'},
         'include_deleted': False,
-        'description': 'Telegram Desktop tdata (keys + encrypted data)',
+        'description': 'Telegram Desktop application data',
     },
     'windows_wechat': {
         'path_patterns': [r'documents/xwechat_files/', r'documents/wechat files/'],
         'extensions': {'.db', '.db-wal', '.db-shm'},
         'include_deleted': False,
-        'description': 'WeChat Desktop encrypted databases (*.db)',
+        'description': 'WeChat Desktop databases (*.db)',
     },
     'windows_whatsapp': {
         'path_pattern': r'appdata/local/packages/5319275a.whatsappdesktop.*localstate/',
         'extensions': {'.db', '.db-wal', '.db-shm', '.dat', '.ldb', '.log'},
         'include_deleted': False,
-        'description': 'WhatsApp Desktop (SEE DBs, DPAPI keys, IndexedDB)',
+        'description': 'WhatsApp Desktop application data',
     },
     'windows_discord': {
         'path_patterns': [

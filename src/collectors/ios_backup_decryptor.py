@@ -7,11 +7,11 @@ as iOSBackupParser for encrypted iOS backups.
 
 Security model:
     - Password is used client-side only (zero-knowledge)
-    - EncryptedBackup created once per collection (single PBKDF2)
+    - EncryptedBackup created once per collection (single key derivation)
     - Password never stored beyond EncryptedBackup creation scope
     - Temp files cleaned up via close() + atexit fallback
 
-Key derivation: iOS 10.2+ PBKDF2-SHA256 10M iterations (~50-150s)
+Key derivation may take ~50-150s depending on iOS version and hardware
 
 Requirements:
     - iphone_backup_decrypt>=0.6.0 (MIT license)
@@ -252,12 +252,12 @@ class iOSEncryptedBackupParser:
 
 
 # ============================================================================
-# Factory function - creates EncryptedBackup (PBKDF2 key derivation)
+# Factory function - creates EncryptedBackup (key derivation)
 # ============================================================================
 
 def create_encrypted_backup(backup_path: str, password: str) -> tuple:
     """
-    Create an EncryptedBackup instance (performs PBKDF2 key derivation).
+    Create an EncryptedBackup instance (performs key derivation).
 
     This is the ONLY place where the password is consumed.
     Caller should discard the password after this call returns.

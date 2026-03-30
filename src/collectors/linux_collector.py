@@ -1010,6 +1010,333 @@ LINUX_ARTIFACT_TYPES = {
         'mitre_attack': 'T1072',
         'kill_chain_phase': 'execution',
     },
+
+    # ==========================================================================
+    # System Logs - Additional (P1)
+    # ==========================================================================
+    'linux_boot_log': {
+        'name': 'Boot Log',
+        'description': 'System boot messages',
+        'paths': [
+            '/var/log/boot.log',
+            '/var/log/boot.msg',              # SUSE
+        ],
+        'forensic_value': 'medium',
+        'mitre_attack': 'T1014',
+        'kill_chain_phase': 'defense_evasion',
+    },
+    'linux_daemon_log': {
+        'name': 'Daemon Log',
+        'description': 'Daemon service log',
+        'paths': [
+            '/var/log/daemon.log',
+        ],
+        'forensic_value': 'medium',
+        'mitre_attack': 'T1543',
+        'kill_chain_phase': 'persistence',
+    },
+    'linux_cron_log': {
+        'name': 'Cron Log',
+        'description': 'Cron job execution log',
+        'paths': [
+            '/var/log/cron',
+            '/var/log/cron.log',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1053.003',
+        'kill_chain_phase': 'persistence',
+    },
+    'linux_mail_log': {
+        'name': 'Mail Log',
+        'description': 'Mail server log',
+        'paths': [
+            '/var/log/mail.log',
+            '/var/log/maillog',
+        ],
+        'forensic_value': 'medium',
+        'mitre_attack': 'T1114',
+        'kill_chain_phase': 'collection',
+    },
+    'linux_dpkg_log': {
+        'name': 'DPKG Package Log',
+        'description': 'DPKG package installation log',
+        'paths': [
+            '/var/log/dpkg.log',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1072',
+        'kill_chain_phase': 'execution',
+    },
+
+    # ==========================================================================
+    # Security Logs - Additional (P0)
+    # ==========================================================================
+    'linux_audit_log': {
+        'name': 'Audit Log',
+        'description': 'Audit log (SELinux, security events)',
+        'paths': [
+            '/var/log/audit/audit.log',
+        ],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1070.002',
+        'kill_chain_phase': 'defense_evasion',
+    },
+    'linux_faillog': {
+        'name': 'Login Failure Records',
+        'description': 'Login failure records',
+        'paths': [
+            '/var/log/faillog',
+            '/var/log/btmp',                  # Failed login attempts
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1110',
+        'kill_chain_phase': 'credential_access',
+    },
+
+    # ==========================================================================
+    # User Activity - Additional (P1)
+    # ==========================================================================
+    'linux_bashrc': {
+        'name': 'Bash Configuration',
+        'description': 'Bash configuration files (aliases, environment variables)',
+        'paths': [
+            '/home/*/.bashrc',
+            '/home/*/.bash_profile',
+            '/home/*/.profile',
+            '/root/.bashrc',
+            '/etc/bash.bashrc',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1546.004',
+        'kill_chain_phase': 'persistence',
+    },
+    'linux_viminfo': {
+        'name': 'Vim Editor History',
+        'description': 'Vim editor history',
+        'paths': [
+            '/home/*/.viminfo',
+            '/root/.viminfo',
+        ],
+        'forensic_value': 'medium',
+        'mitre_attack': 'T1083',
+        'kill_chain_phase': 'discovery',
+    },
+    'linux_recent_files': {
+        'name': 'Recently Used Files',
+        'description': 'Recently used files (GNOME)',
+        'paths': [
+            '/home/*/.local/share/recently-used.xbel',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1083',
+        'kill_chain_phase': 'discovery',
+    },
+    'linux_trash': {
+        'name': 'Trash Contents',
+        'description': 'Trash contents and metadata',
+        'paths': [
+            '/home/*/.local/share/Trash/files/*',
+            '/home/*/.local/share/Trash/info/*',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1070.004',
+        'kill_chain_phase': 'defense_evasion',
+    },
+
+    # ==========================================================================
+    # Scheduled Tasks - Additional (P1)
+    # ==========================================================================
+    'linux_anacron': {
+        'name': 'Anacron Scheduled Tasks',
+        'description': 'Anacron scheduled tasks',
+        'paths': [
+            '/etc/anacrontab',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1053.003',
+        'kill_chain_phase': 'persistence',
+    },
+    'linux_at_jobs': {
+        'name': 'At Scheduled Jobs',
+        'description': 'at scheduled tasks',
+        'paths': [
+            '/var/spool/at/*',
+            '/var/spool/atjobs/*',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1053.002',
+        'kill_chain_phase': 'persistence',
+    },
+
+    # ==========================================================================
+    # Persistence Mechanisms - Additional (P0)
+    # ==========================================================================
+    'linux_autostart': {
+        'name': 'Auto-Start Items',
+        'description': 'Auto-start items (GUI desktop entries)',
+        'paths': [
+            '/etc/xdg/autostart/*.desktop',
+            '/home/*/.config/autostart/*.desktop',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1547.001',
+        'kill_chain_phase': 'persistence',
+    },
+    'linux_ld_preload': {
+        'name': 'LD Preload Configuration',
+        'description': 'Dynamic library preload settings',
+        'paths': [
+            '/etc/ld.so.preload',
+            '/etc/ld.so.conf',
+            '/etc/ld.so.conf.d/*',
+        ],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1574.006',
+        'kill_chain_phase': 'persistence',
+    },
+    'linux_modules': {
+        'name': 'Kernel Module Settings',
+        'description': 'Kernel module configuration',
+        'paths': [
+            '/etc/modules',
+            '/etc/modprobe.d/*',
+            '/etc/modules-load.d/*',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1547.006',
+        'kill_chain_phase': 'persistence',
+    },
+
+    # ==========================================================================
+    # Browser Artifacts (P1)
+    # ==========================================================================
+    'linux_firefox': {
+        'name': 'Firefox Browser Data',
+        'description': 'Firefox browser data',
+        'paths': [
+            '/home/*/.mozilla/firefox/*.default*/places.sqlite',
+            '/home/*/.mozilla/firefox/*.default*/cookies.sqlite',
+            '/home/*/.mozilla/firefox/*.default*/formhistory.sqlite',
+            '/home/*/.mozilla/firefox/*.default*/logins.json',
+            '/home/*/.mozilla/firefox/*.default*/key4.db',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1539',
+        'kill_chain_phase': 'credential_access',
+    },
+    'linux_chrome': {
+        'name': 'Chrome Browser Data',
+        'description': 'Chrome browser data',
+        'paths': [
+            '/home/*/.config/google-chrome/Default/History',
+            '/home/*/.config/google-chrome/Default/Cookies',
+            '/home/*/.config/google-chrome/Default/Login Data',
+            '/home/*/.config/google-chrome/Default/Bookmarks',
+            '/home/*/.config/google-chrome/Default/Web Data',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1539',
+        'kill_chain_phase': 'credential_access',
+    },
+    'linux_chromium': {
+        'name': 'Chromium Browser Data',
+        'description': 'Chromium browser data',
+        'paths': [
+            '/home/*/.config/chromium/Default/History',
+            '/home/*/.config/chromium/Default/Cookies',
+            '/home/*/.config/chromium/Default/Login Data',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1539',
+        'kill_chain_phase': 'credential_access',
+    },
+
+    # ==========================================================================
+    # Application Data - Additional (P1-P2)
+    # ==========================================================================
+    'linux_mysql': {
+        'name': 'MySQL Logs and History',
+        'description': 'MySQL logs and history',
+        'paths': [
+            '/var/log/mysql/error.log',
+            '/var/lib/mysql/*.err',
+            '/home/*/.mysql_history',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1505',
+        'kill_chain_phase': 'persistence',
+    },
+    'linux_postgresql': {
+        'name': 'PostgreSQL Logs and History',
+        'description': 'PostgreSQL logs and history',
+        'paths': [
+            '/var/log/postgresql/*.log',
+            '/home/*/.psql_history',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1505',
+        'kill_chain_phase': 'persistence',
+    },
+    'linux_git': {
+        'name': 'Git Configuration',
+        'description': 'Git settings and stored credentials',
+        'paths': [
+            '/home/*/.gitconfig',
+            '/home/*/.git-credentials',
+        ],
+        'forensic_value': 'medium',
+        'mitre_attack': 'T1552.001',
+        'kill_chain_phase': 'credential_access',
+    },
+
+    # ==========================================================================
+    # System Configuration - Additional (P2)
+    # ==========================================================================
+    'linux_os_release': {
+        'name': 'OS Version Information',
+        'description': 'OS version information',
+        'paths': [
+            '/etc/os-release',
+            '/etc/lsb-release',
+            '/etc/redhat-release',
+            '/etc/debian_version',
+        ],
+        'forensic_value': 'medium',
+        'mitre_attack': 'T1082',
+        'kill_chain_phase': 'discovery',
+    },
+    'linux_hostname': {
+        'name': 'Hostname and Machine ID',
+        'description': 'Hostname and machine ID',
+        'paths': [
+            '/etc/hostname',
+            '/etc/machine-id',
+        ],
+        'forensic_value': 'medium',
+        'mitre_attack': 'T1082',
+        'kill_chain_phase': 'discovery',
+    },
+    'linux_fstab': {
+        'name': 'File System Mount Settings',
+        'description': 'File system mount configuration',
+        'paths': [
+            '/etc/fstab',
+        ],
+        'forensic_value': 'medium',
+        'mitre_attack': 'T1082',
+        'kill_chain_phase': 'discovery',
+    },
+    'linux_timezone': {
+        'name': 'Timezone Settings',
+        'description': 'Timezone settings',
+        'paths': [
+            '/etc/timezone',
+            '/etc/localtime',
+        ],
+        'forensic_value': 'low',
+        'mitre_attack': 'T1070.006',
+        'kill_chain_phase': 'defense_evasion',
+    },
 }
 
 

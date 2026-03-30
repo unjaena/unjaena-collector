@@ -223,7 +223,7 @@ class ProcessMemoryDumper:
         output_path: str
     ) -> dict:
         """
-        경량 메모리 덤프 (recipe 탐색용)
+        Lightweight memory dump for forensic analysis
 
         MiniDumpWithPrivateReadWriteMemory를 사용하여
         힙, 스택 등 읽기/쓰기 가능한 메모리만 덤프

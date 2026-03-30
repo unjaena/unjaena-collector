@@ -680,7 +680,7 @@ class FileContentExtractor:
 
         Converts hundreds of thousands of per-entry I/O operations into
         a handful of large sequential reads. Critical for BitLocker
-        decrypted volumes where each I/O triggers AES decryption.
+        decrypted volumes where each I/O incurs overhead.
 
         Returns True if preloaded successfully.
         """

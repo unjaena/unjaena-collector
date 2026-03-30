@@ -473,7 +473,7 @@ IOS_ARTIFACT_TYPES = {
 
     'mobile_ios_wechat': {
         'name': 'WeChat Messages',
-        'description': 'WeChat messages (SQLCipher encrypted, 1.41B MAU)',
+        'description': 'WeChat message databases',
         'manifest_domain': 'AppDomain-com.tencent.xin',
         'manifest_paths': [
             'Documents/*/DB/MM.sqlite',
@@ -496,7 +496,7 @@ IOS_ARTIFACT_TYPES = {
     },
     'mobile_ios_signal': {
         'name': 'Signal Messages',
-        'description': 'Signal messages (SQLCipher + GRDB encrypted, 100M MAU)',
+        'description': 'Signal message databases',
         'manifest_domain': 'AppDomain-org.whispersystems.signal',
         'manifest_paths': [
             'grdb/signal.sqlite',
@@ -1320,6 +1320,13 @@ IOS_ARTIFACT_TYPES = {
         'name': 'Samsung Card',
         'description': 'Samsung Card payment and transaction data',
         'manifest_domain': 'AppDomain-com.samsungCard.samsungCard',
+        'manifest_paths': ['*.sqlite', '*.db'],
+        'pattern': True,
+    },
+    'mobile_ios_naver_app': {
+        'name': 'Naver',
+        'description': 'Naver app search history, bookmarks, and barcode scans',
+        'manifest_domain': 'AppDomain-com.nhncorp.NaverSearch',
         'manifest_paths': ['*.sqlite', '*.db'],
         'pattern': True,
     },
@@ -2567,7 +2574,7 @@ class iOSDeviceConnector:
         Initialize EncryptedBackup decryptor for encrypted iOS backups.
 
         Password must already be confirmed in create_backup() — this method
-        simply runs PBKDF2 key derivation with the known password.
+        simply runs key derivation key derivation with the known password.
 
         Returns True if decryptor was initialized successfully.
         """
@@ -2589,7 +2596,7 @@ class iOSDeviceConnector:
                     progress_callback("Encrypted backup decryptor ready")
                 return True
 
-            # Password was verified in create_backup() but PBKDF2 failed = internal error
+            # Password was verified in create_backup() but key derivation failed = internal error
             logger.error(f"[iOS] Decryptor init failed (internal error): {err}")
             self._backup_failed_reason = f"Decryptor initialization failed: {err}"
             if progress_callback:

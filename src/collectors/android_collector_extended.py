@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import hashlib
@@ -332,7 +333,7 @@ ANDROID_ARTIFACT_TYPES = {
 
     'mobile_android_kakaotalk': {
         'name': 'KakaoTalk',
-        'description': 'KakaoTalk messages (AES-128-CBC encrypted)',
+        'description': 'KakaoTalk message databases',
         'package': 'com.kakao.talk',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -359,7 +360,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_whatsapp': {
         'name': 'WhatsApp',
-        'description': 'WhatsApp messages (crypt14/crypt15 encrypted)',
+        'description': 'WhatsApp message databases',
         'package': 'com.whatsapp',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -410,7 +411,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_line': {
         'name': 'LINE',
-        'description': 'LINE messages (wxSQLite3 encrypted)',
+        'description': 'LINE message databases',
         'package': 'jp.naver.line.android',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -434,7 +435,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_signal': {
         'name': 'Signal',
-        'description': 'Signal messages (SQLCipher + AES-GCM encrypted)',
+        'description': 'Signal message databases',
         'package': 'org.thoughtcrime.securesms',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -477,7 +478,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_wechat': {
         'name': 'WeChat',
-        'description': 'WeChat messages (SQLCipher encrypted, 1.41B MAU)',
+        'description': 'WeChat message databases',
         'package': 'com.tencent.mm',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -2989,6 +2990,33 @@ class AndroidCollector:
                     phase3_collected = True
                     yield item
 
+            # 3f. APK Downgrade + ADB Backup
+            # Install older APK version (allowBackup=true) over current to enable backup
+            if not phase3_collected:
+                if progress_callback:
+                    progress_callback(f"[Phase 3f] Trying APK downgrade strategy for {package}")
+                for item in self._collect_via_apk_downgrade(
+                    artifact_type, package, db_paths, output_dir, progress_callback
+                ):
+                    phase3_collected = True
+                    yield item
+
+            # 3g. Frida Gadget injection (DESTRUCTIVE — requires explicit opt-in)
+            # Reinstalls app with Frida Gadget injected; copies private data to /sdcard.
+            # For apps with allowBackup=false this DESTROYS existing private data.
+            # Only runs when artifact config has 'allow_gadget_injection': True
+            if not phase3_collected and artifact_info.get('allow_gadget_injection', False):
+                if progress_callback:
+                    progress_callback(
+                        f"[Phase 3g] Frida Gadget injection for {package} "
+                        "(DESTRUCTIVE: will reinstall app)"
+                    )
+                for item in self._collect_via_gadget_injection(
+                    artifact_type, package, db_paths, output_dir, progress_callback
+                ):
+                    phase3_collected = True
+                    yield item
+
         # Summary log
         if progress_callback:
             progress_callback(
@@ -3610,26 +3638,26 @@ class AndroidCollector:
                     }
 
     def _check_backup_allowed(self, package: str) -> bool:
-        """Check if package allows ADB backup."""
-        # Query package info for allowBackup flag
-        cmd = f'dumpsys package {shlex.quote(package)} 2>/dev/null | grep -E "flags=|allowBackup"'
-        output, _ = self._adb_shell(cmd)
+        """
+        Check if package allows ADB backup.
+
+        Queries the package manager flags for ALLOW_BACKUP.  Returns False if
+        the flag is absent or if the package info cannot be obtained.
+        """
+        # Query package flags (fastest: single grep on dumpsys output)
+        cmd = f'dumpsys package {shlex.quote(package)} 2>/dev/null | grep -m 3 "flags="'
+        output, rc = self._adb_shell(cmd)
+
+        if rc != 0 or not output:
+            # Fallback: check pkgFlags line
+            cmd2 = f'dumpsys package {shlex.quote(package)} 2>/dev/null | grep -m 3 "pkgFlags="'
+            output, _ = self._adb_shell(cmd2)
 
         if not output:
             return False
 
-        # Check flags - ALLOW_BACKUP flag is 0x8000
-        if 'ALLOW_BACKUP' in output.upper():
-            return True
-
-        # Alternative check via aapt or package flags
-        flags_match = re.search(r'flags=\[\s*([^\]]+)\s*\]', output)
-        if flags_match and 'ALLOW_BACKUP' in flags_match.group(1).upper():
-            return True
-
-        # Default: many apps have allowBackup=true by default
-        # Try anyway if we can't definitively determine
-        return True
+        # ALLOW_BACKUP flag must be explicitly present in the flags list
+        return 'ALLOW_BACKUP' in output.upper()
 
     def _execute_adb_backup(self, package: str, output_path: str) -> bool:
         """Execute ADB backup command."""
@@ -3707,6 +3735,192 @@ class AndroidCollector:
         except Exception as e:
             logger.error(f"[ADB Backup] Extraction error: {e}")
             return False
+
+    # =========================================================================
+    # APK Downgrade + Backup Strategy
+    # =========================================================================
+
+    def _collect_via_apk_downgrade(
+        self,
+        artifact_type: str,
+        package: str,
+        db_paths: List[str],
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Attempt to enable ADB backup by installing an older APK version.
+
+        Some app versions had allowBackup=true before the developer disabled it.
+        Installing an older APK signed with the SAME certificate over the current
+        version preserves existing data and enables ADB backup.
+
+        Steps:
+        1. Check if a downgrade candidate exists (local cache or APKPure lookup)
+        2. Install older APK with -r -d (replace, allow downgrade)
+        3. Run ADB backup
+        4. Reinstall original (restore latest version, keeping data)
+
+        Notes:
+        - Requires an older APK with the same signing certificate
+        - Samsung devices may block downgrade installs; try with -t flag
+        - This is a standard technique used by commercial forensic tools
+        """
+        if progress_callback:
+            progress_callback(f"[APK Downgrade] Checking candidates for {package}")
+
+        # Check for locally cached downgrade APKs
+        downgrade_apk = self._find_downgrade_apk(package)
+        if not downgrade_apk:
+            logger.debug(f"[APK Downgrade] No downgrade candidate found for {package}")
+            return
+
+        logger.info(f"[APK Downgrade] Found candidate: {downgrade_apk}")
+        if progress_callback:
+            progress_callback(f"[APK Downgrade] Candidate: {downgrade_apk.name}")
+
+        # Install older APK over current (keep data, allow downgrade)
+        if progress_callback:
+            progress_callback(f"[APK Downgrade] Installing older version (-r -d)")
+
+        rc = self._run_system_adb_install(str(downgrade_apk), allow_downgrade=True)
+        if rc != 0:
+            # Try with -t (allow test packages) as fallback
+            rc = self._run_system_adb_install(str(downgrade_apk), allow_downgrade=True, test_pkg=True)
+        if rc != 0:
+            if progress_callback:
+                progress_callback(f"[APK Downgrade] Install failed — cert mismatch or blocked")
+            return
+
+        if progress_callback:
+            progress_callback(f"[APK Downgrade] Older version installed, attempting backup")
+
+        try:
+            # Run ADB backup now that allowBackup may be enabled
+            for item in self._collect_via_adb_backup(
+                artifact_type, package, db_paths, output_dir, progress_callback
+            ):
+                yield item
+        finally:
+            # Reinstall latest APK to restore the original version
+            original_apk = self._find_latest_device_apk(package)
+            if original_apk:
+                if progress_callback:
+                    progress_callback(f"[APK Downgrade] Restoring original APK")
+                self._run_system_adb_install(str(original_apk), allow_downgrade=False)
+
+    def _find_downgrade_apk(self, package: str) -> Optional[Path]:
+        """
+        Look for a locally cached downgrade APK candidate.
+
+        Searches in:
+        - <collector_root>/resources/apk_cache/<package>/
+        - User home / .forensic_collector / apk_cache / <package> /
+        """
+        search_dirs = [
+            Path(__file__).parent.parent.parent / "resources" / "apk_cache" / package,
+            Path.home() / ".forensic_collector" / "apk_cache" / package,
+        ]
+        for d in search_dirs:
+            if d.is_dir():
+                candidates = sorted(d.glob("*.apk"), key=lambda f: f.stat().st_mtime)
+                if candidates:
+                    return candidates[0]
+        return None
+
+    def _find_latest_device_apk(self, package: str) -> Optional[Path]:
+        """Pull the current APK from the device to a temp location (for restore)."""
+        out_raw, rc = self._adb_shell(f"pm path {shlex.quote(package)}")
+        if rc != 0 or not out_raw:
+            return None
+        m = re.search(r"package:(.+\.apk)", out_raw.strip())
+        if not m:
+            return None
+        remote_apk = m.group(1).strip()
+        tmp_path = Path(tempfile.mkdtemp()) / f"{package}_latest.apk"
+        ok = self._adb_pull(remote_apk, str(tmp_path))
+        return tmp_path if ok and tmp_path.exists() else None
+
+    def _run_system_adb_install(
+        self,
+        apk_path: str,
+        allow_downgrade: bool = False,
+        test_pkg: bool = False,
+    ) -> int:
+        """Run adb install with optional downgrade and test flags."""
+        args = ["install", "-r"]
+        if allow_downgrade:
+            args.append("-d")
+        if test_pkg:
+            args.append("-t")
+        args.append(apk_path)
+        _, rc = self._run_system_adb(args, timeout=120)
+        return rc
+
+    # =========================================================================
+    # Frida Gadget Injection (Non-Root, Destructive)
+    # =========================================================================
+
+    def _collect_via_gadget_injection(
+        self,
+        artifact_type: str,
+        package: str,
+        db_paths: List[str],
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Inject Frida Gadget into the target APK and extract app private data.
+
+        This method:
+        1. Pulls the APK from the device
+        2. Patches it with objection patchapk (injects libfrida-gadget.so)
+        3. Adds Gadget Script config for automated extraction
+        4. Uninstalls the original app (DESTROYS data for allowBackup=false!)
+        5. Installs the patched APK
+        6. Launches the app — Gadget copies databases to /sdcard
+        7. Pulls the data
+
+        Only runs when the artifact config has allow_gadget_injection=True.
+        Requires objection: pip install objection
+        """
+        try:
+            from collectors.android_frida_collector import AndroidGadgetCollector, gadget_available
+        except ImportError:
+            logger.debug("[Gadget] android_frida_collector not available")
+            return
+
+        if not gadget_available():
+            if progress_callback:
+                progress_callback("[Gadget] objection not installed (pip install objection)")
+            return
+
+        if progress_callback:
+            progress_callback(f"[Gadget] Starting Gadget injection for {package}")
+
+        def _pull_wrapper(remote: str, local: str) -> bool:
+            return self._adb_pull(remote, local)
+
+        def _push_wrapper(local: str, remote: str) -> bool:
+            _, rc = self._run_system_adb(["push", local, remote], timeout=60)
+            return rc == 0
+
+        gadget_col = AndroidGadgetCollector(
+            adb_shell_func=self._adb_shell,
+            adb_push_func=_push_wrapper,
+            adb_pull_func=_pull_wrapper,
+            output_dir=str(output_dir),
+            device_serial=self.device_serial,
+        )
+
+        yield from gadget_col.extract_via_gadget(
+            package=package,
+            artifact_type=artifact_type,
+            output_dir=output_dir,
+            progress_callback=progress_callback,
+            destructive=True,  # Already gated by allow_gadget_injection in caller
+            device_info=self.device_info,
+        )
 
     # =========================================================================
     # Content Provider Enumeration and Query
@@ -4928,6 +5142,117 @@ class AndroidCollector:
             })
 
         return artifacts
+
+    def scan_app_extractability(
+        self,
+        packages: Optional[List[str]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Scan installed apps and report which data extraction strategies apply.
+
+        For each app, checks:
+        - Is the app installed?
+        - Is ADB backup allowed (allowBackup=true)?
+        - Is run-as available (debuggable)?
+        - Is sdcard data present?
+        - What strategies can extract private databases?
+
+        Args:
+            packages: List of package names to check. If None, scans all
+                      packages registered in ANDROID_ARTIFACT_TYPES.
+            progress_callback: Optional progress messages.
+
+        Returns:
+            List of dicts: {package, installed, allow_backup, debuggable,
+            sdcard_present, strategies, recommended}
+        """
+        if not self.device_info:
+            return []
+
+        if packages is None:
+            packages = [
+                info.get('package', '')
+                for info in ANDROID_ARTIFACT_TYPES.values()
+                if info.get('package')
+            ]
+            packages = [p for p in packages if p]
+
+        results: List[Dict[str, Any]] = []
+        is_rooted = self.device_info.rooted
+
+        for pkg in packages:
+            if progress_callback:
+                progress_callback(f"[Scan] Checking {pkg} …")
+
+            entry: Dict[str, Any] = {
+                'package': pkg,
+                'installed': False,
+                'allow_backup': False,
+                'debuggable': False,
+                'sdcard_present': False,
+                'strategies': [],
+                'recommended': '',
+            }
+
+            # Check installed
+            out, rc = self._adb_shell(f"pm list packages {shlex.quote(pkg)} 2>/dev/null")
+            if rc != 0 or pkg not in (out or ''):
+                results.append(entry)
+                continue
+            entry['installed'] = True
+
+            # Check allowBackup
+            entry['allow_backup'] = self._check_backup_allowed(pkg)
+            if entry['allow_backup']:
+                entry['strategies'].append('adb_backup')
+
+            # Check debuggable
+            dbg_out, _ = self._adb_shell(
+                f"run-as {shlex.quote(pkg)} true 2>&1"
+            )
+            entry['debuggable'] = 'not debuggable' not in (dbg_out or '').lower() \
+                and 'unknown package' not in (dbg_out or '').lower()
+            if entry['debuggable']:
+                entry['strategies'].append('run_as')
+
+            # Check sdcard
+            known_sdcard = [
+                f'/sdcard/Android/data/{pkg}/',
+                f'/sdcard/Android/media/{pkg}/',
+            ]
+            for sp in known_sdcard:
+                chk, _ = self._adb_shell(f"ls {shlex.quote(sp)} 2>/dev/null | head -1")
+                if chk and chk.strip():
+                    entry['sdcard_present'] = True
+                    entry['strategies'].append('sdcard')
+                    break
+
+            # Root direct access
+            if is_rooted:
+                entry['strategies'].append('root_direct')
+
+            # Content provider (always attempted)
+            entry['strategies'].append('content_provider')
+
+            # Gadget injection always available (destructive)
+            entry['strategies'].append('gadget_injection (destructive)')
+
+            # Recommended
+            if is_rooted:
+                entry['recommended'] = 'root_direct'
+            elif entry['debuggable']:
+                entry['recommended'] = 'run_as'
+            elif entry['allow_backup']:
+                entry['recommended'] = 'adb_backup'
+            elif entry['sdcard_present']:
+                entry['recommended'] = 'sdcard'
+            else:
+                entry['recommended'] = 'gadget_injection (destructive) or physical acquisition'
+
+            results.append(entry)
+
+        return results
 
     # ==========================================================================
     # Screen Scraping (Non-Root Accessibility Service)

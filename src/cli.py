@@ -93,7 +93,7 @@ class HeadlessCollector:
             hashed_files = self._compute_hashes(collected_files)
             logger.info(f"[Stage 2/3] Hashed {len(hashed_files)} files")
 
-            # Stage 3: Upload (R2DirectUploader handles per-case AES-256-GCM encryption)
+            # Stage 3: Upload to server
             logger.info("[Stage 3/3] Uploading to server...")
             success = self._upload(hashed_files)
             if success:
@@ -113,32 +113,86 @@ class HeadlessCollector:
 
     def _collect(self) -> List[str]:
         """Stage 1: Collect artifacts to output directory."""
-        from collectors.artifact_collector import ArtifactCollector
-
         collected = []
-        collector = ArtifactCollector(output_dir=self.output_dir)
+
+        # Platform-aware collector selection
+        if sys.platform == 'darwin':
+            # macOS local live collection
+            from collectors.artifact_collector import LocalSystemCollector
+            collector = LocalSystemCollector(
+                self.output_dir, os_type='macos', target_root='/'
+            )
+            logger.info(f"  Platform: macOS local ({collector.get_collection_mode()})")
+            return self._collect_with_local_collector(collector)
+
+        elif sys.platform.startswith('linux'):
+            # Linux local live collection
+            from collectors.artifact_collector import LocalSystemCollector
+            collector = LocalSystemCollector(
+                self.output_dir, os_type='linux', target_root='/'
+            )
+            logger.info(f"  Platform: Linux local ({collector.get_collection_mode()})")
+            return self._collect_with_local_collector(collector)
+
+        else:
+            # Windows (existing behavior)
+            from collectors.artifact_collector import ArtifactCollector
+            collector = ArtifactCollector(output_dir=self.output_dir)
+
+            for i, artifact_type in enumerate(self.artifacts, 1):
+                if self._cancelled:
+                    break
+                logger.info(f"  [{i}/{len(self.artifacts)}] Collecting: {artifact_type}")
+                try:
+                    files = collector.collect(artifact_type)
+                    if files:
+                        collected.extend(files)
+                        logger.info(f"    -> {len(files)} files")
+                    else:
+                        logger.info(f"    -> 0 files (none found)")
+                except Exception as e:
+                    logger.warning(f"    -> Failed: {e}")
+
+            return collected
+
+    def _collect_with_local_collector(self, collector) -> List[str]:
+        """Collect artifacts using LocalSystemCollector (macOS/Linux)."""
+        collected = []
 
         for i, artifact_type in enumerate(self.artifacts, 1):
             if self._cancelled:
                 break
             logger.info(f"  [{i}/{len(self.artifacts)}] Collecting: {artifact_type}")
+            file_count = 0
             try:
-                files = collector.collect(artifact_type)
-                if files:
-                    collected.extend(files)
-                    logger.info(f"    -> {len(files)} files")
+                for file_path, metadata in collector.collect(artifact_type):
+                    if not file_path or metadata.get('status') in ('error', 'not_found'):
+                        error_msg = metadata.get('error', 'Unknown')
+                        if metadata.get('status') != 'not_found':
+                            logger.warning(f"    -> {artifact_type}: {error_msg}")
+                        continue
+                    collected.append(file_path)
+                    file_count += 1
+                if file_count > 0:
+                    logger.info(f"    -> {file_count} files")
                 else:
                     logger.info(f"    -> 0 files (none found)")
             except Exception as e:
                 logger.warning(f"    -> Failed: {e}")
+
+        # Report permission errors
+        if hasattr(collector, 'permission_error_count') and collector.permission_error_count > 0:
+            logger.warning(
+                f"  {collector.permission_error_count} files skipped "
+                f"(permission denied). Run with sudo for full access."
+            )
 
         return collected
 
     def _compute_hashes(self, files: List[str]) -> List[str]:
         """Stage 2: Compute SHA-256 hashes for integrity verification.
 
-        Note: Actual encryption (AES-256-GCM) is handled by R2DirectUploader
-        using per-case DEK from the server during upload (Stage 3).
+        Note: Upload security is handled by R2DirectUploader during Stage 3.
         """
         from core.encryptor import FileHashCalculator
 

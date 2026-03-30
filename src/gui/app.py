@@ -26,7 +26,8 @@ from core.uploader import R2DirectUploader
 from core.request_signer import RequestSigner
 from collectors.artifact_collector import (
     ArtifactCollector, ARTIFACT_TYPES,
-    LocalMFTCollector, BASE_MFT_AVAILABLE
+    LocalMFTCollector, BASE_MFT_AVAILABLE,
+    LocalSystemCollector,
 )
 
 # E01 collector requires pytsk3 — may be unavailable on Linux/macOS
@@ -1378,6 +1379,14 @@ class CollectorWindow(QMainWindow):
                 target_tab = tab_map['windows']
                 break
 
+            elif device.device_type == DeviceType.MACOS_LOCAL_SYSTEM:
+                target_tab = tab_map['macos']
+                break
+
+            elif device.device_type == DeviceType.LINUX_LOCAL_SYSTEM:
+                target_tab = tab_map['linux']
+                break
+
             elif device.device_type == DeviceType.ANDROID_DEVICE:
                 target_tab = tab_map['android']
                 break
@@ -1426,7 +1435,17 @@ class CollectorWindow(QMainWindow):
         macos_images = []
 
         for device in selected_devices:
-            if device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
+            # Local system devices
+            if device.device_type == DeviceType.LINUX_LOCAL_SYSTEM:
+                is_root = device.metadata.get('is_root', False)
+                root_tag = " [root]" if is_root else " [non-root]"
+                linux_images.append(f"Local system{root_tag}")
+            elif device.device_type == DeviceType.MACOS_LOCAL_SYSTEM:
+                is_root = device.metadata.get('is_root', False)
+                root_tag = " [root]" if is_root else " [non-root]"
+                macos_images.append(f"Local system{root_tag}")
+            # Disk images
+            elif device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
                                         DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
                                         DeviceType.VHDX_IMAGE, DeviceType.QCOW2_IMAGE,
                                         DeviceType.VDI_IMAGE, DeviceType.DMG_IMAGE):
@@ -1446,7 +1465,7 @@ class CollectorWindow(QMainWindow):
                 )
                 self.linux_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
             else:
-                self.linux_info_label.setText("Select a Linux disk image from device list")
+                self.linux_info_label.setText("Select a Linux disk image or local system from device list")
                 self.linux_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
 
         # Update macOS tab info
@@ -1457,7 +1476,7 @@ class CollectorWindow(QMainWindow):
                 )
                 self.macos_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
             else:
-                self.macos_info_label.setText("Select a macOS disk image from device list")
+                self.macos_info_label.setText("Select a macOS disk image or local system from device list")
                 self.macos_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
 
     def _update_collect_button_state(self):
@@ -2944,7 +2963,7 @@ class CollectionWorker(QThread):
         [2026-02-22] Start heartbeat thread to keep collection session alive.
 
         Periodically calls validate-session endpoint during long operations
-        (iOS backup creation, PBKDF2, extraction) to prevent Redis TTL expiry.
+        (iOS backup creation, key derivation, extraction) to prevent Redis TTL expiry.
         """
         import threading
 
@@ -3193,7 +3212,7 @@ class CollectionWorker(QThread):
 
                 encrypted_backup_obj = None
                 if is_encrypted and self.ios_backup_password and backup_path:
-                    # Create EncryptedBackup in collection thread (single PBKDF2)
+                    # Create EncryptedBackup in collection thread (single key derivation)
                     # This is the ONLY place where the password is consumed.
                     from collectors.ios_backup_decryptor import create_encrypted_backup
                     self.log_message.emit("Verifying iOS backup password (this may take 1-2 minutes)...", False)
@@ -3234,6 +3253,38 @@ class CollectionWorker(QThread):
 
                 udid_short = udid[:8] if len(udid) > 8 else udid
                 self.log_message.emit(f"iOS USB direct connection (UDID: {udid_short}...)", False)
+                return collector
+
+            # macOS local system
+            elif device_type == DeviceType.MACOS_LOCAL_SYSTEM:
+                target_root = device.metadata.get('target_root', '/')
+                is_root = device.metadata.get('is_root', False)
+                if not is_root:
+                    self.log_message.emit(
+                        "WARNING: Running without root privileges. "
+                        "Some artifacts (unified log, TCC.db, audit logs) may be inaccessible.",
+                        True
+                    )
+                collector = LocalSystemCollector(output_dir, os_type='macos', target_root=target_root)
+                self.log_message.emit(
+                    f"macOS local collection mode: {collector.get_collection_mode()}", False
+                )
+                return collector
+
+            # Linux local system
+            elif device_type == DeviceType.LINUX_LOCAL_SYSTEM:
+                target_root = device.metadata.get('target_root', '/')
+                is_root = device.metadata.get('is_root', False)
+                if not is_root:
+                    self.log_message.emit(
+                        "WARNING: Running without root privileges. "
+                        "Some artifacts (shadow, audit logs, journald) may be inaccessible.",
+                        True
+                    )
+                collector = LocalSystemCollector(output_dir, os_type='linux', target_root=target_root)
+                self.log_message.emit(
+                    f"Linux local collection mode: {collector.get_collection_mode()}", False
+                )
                 return collector
 
             else:
@@ -3486,6 +3537,14 @@ class CollectionWorker(QThread):
                     # Release scan cache before closing collector
                     if hasattr(collector, 'release_scan_cache'):
                         collector.release_scan_cache()
+
+                    # Report permission errors for local system collection
+                    if hasattr(collector, 'permission_error_count') and collector.permission_error_count > 0:
+                        self.log_message.emit(
+                            f"[{device_name}] {collector.permission_error_count} files skipped "
+                            f"(permission denied). Run with sudo/root for full access.",
+                            True
+                        )
 
                     # Cleanup collector
                     if hasattr(collector, 'close'):

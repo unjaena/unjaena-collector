@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 class DeviceType(Enum):
     """Device type"""
     WINDOWS_PHYSICAL_DISK = auto()
+    MACOS_LOCAL_SYSTEM = auto()        # Local macOS system (live collection)
+    LINUX_LOCAL_SYSTEM = auto()        # Local Linux system (live collection)
     E01_IMAGE = auto()
     RAW_IMAGE = auto()
     VMDK_IMAGE = auto()
@@ -121,8 +123,20 @@ class UnifiedDeviceInfo:
 
     @property
     def requires_admin(self) -> bool:
-        """Check if admin privileges required"""
-        return self.device_type == DeviceType.WINDOWS_PHYSICAL_DISK
+        """Check if admin/root privileges required for full access"""
+        return self.device_type in (
+            DeviceType.WINDOWS_PHYSICAL_DISK,
+            DeviceType.MACOS_LOCAL_SYSTEM,
+            DeviceType.LINUX_LOCAL_SYSTEM,
+        )
+
+    @property
+    def is_local_system(self) -> bool:
+        """Check if local system device (always present, not removable)"""
+        return self.device_type in (
+            DeviceType.MACOS_LOCAL_SYSTEM,
+            DeviceType.LINUX_LOCAL_SYSTEM,
+        )
 
 
 # =============================================================================

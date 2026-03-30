@@ -1716,7 +1716,7 @@ class ForensicDiskAccessor:
         logger.info(f"Scanning MFT: {total_mft_entries:,} entries (max)")
 
         # Preload entire $MFT into memory for fast scanning
-        # (critical for BitLocker decrypted volumes -- avoids per-entry AES decryption)
+        # (critical for BitLocker decrypted volumes -- reduces I/O overhead)
         mft_preloaded = self._extractor.preload_mft()
 
         # Traverse MFT entries

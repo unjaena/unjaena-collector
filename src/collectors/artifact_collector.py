@@ -3133,6 +3133,116 @@ except ImportError:
 # Dynamic base class determination
 _LocalMFTBase = BaseMFTCollector if (BASE_MFT_AVAILABLE and BaseMFTCollector) else object
 
+class LocalSystemCollector:
+    """
+    Local macOS/Linux live system collector.
+
+    Adapter that wraps macOSCollector or LinuxCollector to produce
+    the (file_path, metadata) 2-tuples expected by the GUI collection
+    worker, matching the LocalMFTCollector interface used for Windows.
+
+    Tracks PermissionError counts for UI feedback.
+    """
+
+    def __init__(self, output_dir: str, os_type: str, target_root: str = '/'):
+        """
+        Args:
+            output_dir: Output directory for collected files
+            os_type: 'macos' or 'linux'
+            target_root: Filesystem root (default: '/' for live collection)
+        """
+        self._output_dir = Path(output_dir)
+        self._os_type = os_type
+        self._target_root = target_root
+        self.permission_error_count = 0
+        self.permission_error_paths = []
+
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_collection_mode(self) -> str:
+        """Return collection mode description"""
+        root_tag = "root" if self._is_root() else "non-root"
+        return f"{self._os_type} local ({root_tag})"
+
+    def _is_root(self) -> bool:
+        try:
+            return os.geteuid() == 0
+        except AttributeError:
+            return False
+
+    def collect(self, artifact_type: str, **kwargs):
+        """
+        Collect artifacts and yield (file_path, metadata) 2-tuples.
+
+        Wraps the underlying platform collector's 3-tuple output,
+        writes content to disk, and yields the output path with metadata.
+        """
+        if self._os_type == 'macos':
+            if not MACOS_AVAILABLE or macOSCollector is None:
+                yield '', {
+                    'status': 'error',
+                    'error': 'macOS collector not available on this platform',
+                    'artifact_type': artifact_type,
+                }
+                return
+            CollectorClass = macOSCollector
+            method_label = 'macos_local_collector'
+        elif self._os_type == 'linux':
+            if not LINUX_AVAILABLE or LinuxCollector is None:
+                yield '', {
+                    'status': 'error',
+                    'error': 'Linux collector not available on this platform',
+                    'artifact_type': artifact_type,
+                }
+                return
+            CollectorClass = LinuxCollector
+            method_label = 'linux_local_collector'
+        else:
+            yield '', {
+                'status': 'error',
+                'error': f'Unknown OS type: {self._os_type}',
+                'artifact_type': artifact_type,
+            }
+            return
+
+        artifact_dir = self._output_dir / artifact_type
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            collector = CollectorClass(str(artifact_dir), target_root=self._target_root)
+
+            for relative_path, content, metadata in collector.collect(artifact_type):
+                try:
+                    output_path = artifact_dir / relative_path.replace('/', os.sep)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_bytes(content)
+
+                    file_metadata = {
+                        'artifact_type': artifact_type,
+                        'collection_method': method_label,
+                        'target_root': self._target_root,
+                        'collected_at': datetime.utcnow().isoformat(),
+                        'file_size': len(content),
+                        **metadata
+                    }
+
+                    yield str(output_path), file_metadata
+
+                except PermissionError as e:
+                    self.permission_error_count += 1
+                    self.permission_error_paths.append(str(e))
+
+        except PermissionError as e:
+            self.permission_error_count += 1
+            self.permission_error_paths.append(str(e))
+        except Exception as e:
+            _debug_print(f"[{self._os_type.upper()}] Collection failed for {artifact_type}: {e}")
+
+    def close(self):
+        """Cleanup (no-op for local collection)"""
+        pass
+
+
 class LocalMFTCollector(_LocalMFTBase):
     """
     Local disk MFT-based collector

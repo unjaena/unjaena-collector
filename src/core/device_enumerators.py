@@ -775,6 +775,208 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
 
 
 # =============================================================================
+# macOS Local System Enumerator
+# =============================================================================
+
+class macOSLocalEnumerator(BaseDeviceEnumerator):
+    """
+    Local macOS system enumerator for live forensic collection.
+
+    Detects the current macOS system and exposes it as a collectible device.
+    Runs only on macOS (sys.platform == 'darwin').
+    """
+
+    def is_available(self) -> bool:
+        return sys.platform == 'darwin'
+
+    def supports_realtime(self) -> bool:
+        return False  # Local system is always present
+
+    def enumerate(self) -> List[UnifiedDeviceInfo]:
+        if sys.platform != 'darwin':
+            return []
+
+        try:
+            import platform
+            import shutil
+            import os
+
+            # Validate macOS filesystem layout
+            required_dirs = ['/System', '/Library', '/Users']
+            if not all(Path(d).is_dir() for d in required_dirs):
+                return []
+
+            # Read macOS version from SystemVersion.plist
+            macos_version = ''
+            product_name = 'macOS'
+            try:
+                import plistlib
+                sv_path = Path('/System/Library/CoreServices/SystemVersion.plist')
+                if sv_path.exists():
+                    with open(sv_path, 'rb') as f:
+                        sv = plistlib.load(f)
+                    macos_version = sv.get('ProductVersion', '')
+                    product_name = sv.get('ProductName', 'macOS')
+            except Exception:
+                pass
+
+            # System info
+            hostname = platform.node() or 'localhost'
+            is_root = os.geteuid() == 0
+
+            # Disk size
+            disk = shutil.disk_usage('/')
+            total_bytes = disk.total
+
+            # Display name
+            hw_model = ''
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['sysctl', '-n', 'hw.model'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    hw_model = result.stdout.strip()
+            except Exception:
+                pass
+
+            display_parts = [hw_model or hostname]
+            if macos_version:
+                display_parts.append(f"{product_name} {macos_version}")
+            display_name = ' - '.join(display_parts)
+
+            device = UnifiedDeviceInfo(
+                device_id='local_macos_system',
+                device_type=DeviceType.MACOS_LOCAL_SYSTEM,
+                display_name=display_name,
+                status=DeviceStatus.READY,
+                size_bytes=total_bytes,
+                connection_time=datetime.now(),
+                metadata={
+                    'target_root': '/',
+                    'macos_version': macos_version,
+                    'hostname': hostname,
+                    'is_root': is_root,
+                    'detected_os': 'macos',
+                    'hw_model': hw_model,
+                },
+                is_selectable=True,
+            )
+
+            if not is_root:
+                logger.warning(
+                    "macOS local collection: running without root. "
+                    "Some artifacts (unified log, TCC.db, audit logs) will be inaccessible."
+                )
+
+            return [device]
+
+        except Exception as e:
+            logger.error(f"macOS local enumeration failed: {e}")
+            return []
+
+
+# =============================================================================
+# Linux Local System Enumerator
+# =============================================================================
+
+class LinuxLocalEnumerator(BaseDeviceEnumerator):
+    """
+    Local Linux system enumerator for live forensic collection.
+
+    Detects the current Linux system and exposes it as a collectible device.
+    Runs only on Linux (sys.platform == 'linux').
+    """
+
+    def is_available(self) -> bool:
+        return sys.platform.startswith('linux')
+
+    def supports_realtime(self) -> bool:
+        return False  # Local system is always present
+
+    def enumerate(self) -> List[UnifiedDeviceInfo]:
+        if not sys.platform.startswith('linux'):
+            return []
+
+        try:
+            import platform
+            import shutil
+            import os
+
+            # Validate Linux filesystem layout
+            required_dirs = ['/etc', '/var', '/usr']
+            if not all(Path(d).is_dir() for d in required_dirs):
+                return []
+
+            # Read distro info from /etc/os-release
+            distro = 'Linux'
+            distro_version = ''
+            distro_id = ''
+            try:
+                os_release = Path('/etc/os-release')
+                if os_release.exists():
+                    data = {}
+                    for line in os_release.read_text().splitlines():
+                        if '=' in line:
+                            key, _, val = line.partition('=')
+                            data[key.strip()] = val.strip().strip('"')
+                    distro = data.get('NAME', data.get('PRETTY_NAME', 'Linux'))
+                    distro_version = data.get('VERSION_ID', '')
+                    distro_id = data.get('ID', '')
+            except Exception:
+                pass
+
+            # System info
+            hostname = platform.node() or 'localhost'
+            is_root = os.geteuid() == 0
+            kernel = platform.release()
+
+            # Disk size
+            disk = shutil.disk_usage('/')
+            total_bytes = disk.total
+
+            # Display name
+            display_parts = [hostname]
+            ver_str = f"{distro} {distro_version}".strip()
+            if ver_str:
+                display_parts.append(ver_str)
+            display_name = ' - '.join(display_parts)
+
+            device = UnifiedDeviceInfo(
+                device_id='local_linux_system',
+                device_type=DeviceType.LINUX_LOCAL_SYSTEM,
+                display_name=display_name,
+                status=DeviceStatus.READY,
+                size_bytes=total_bytes,
+                connection_time=datetime.now(),
+                metadata={
+                    'target_root': '/',
+                    'distro': distro,
+                    'distro_version': distro_version,
+                    'distro_id': distro_id,
+                    'hostname': hostname,
+                    'kernel': kernel,
+                    'is_root': is_root,
+                    'detected_os': 'linux',
+                },
+                is_selectable=True,
+            )
+
+            if not is_root:
+                logger.warning(
+                    "Linux local collection: running without root. "
+                    "Some artifacts (shadow, audit logs, journald) will be inaccessible."
+                )
+
+            return [device]
+
+        except Exception as e:
+            logger.error(f"Linux local enumeration failed: {e}")
+            return []
+
+
+# =============================================================================
 # Factory Function
 # =============================================================================
 
@@ -792,6 +994,18 @@ def create_default_enumerators() -> Dict[str, BaseDeviceEnumerator]:
         windows = WindowsDiskEnumerator()
         if windows.is_available():
             enumerators['windows'] = windows
+
+    # macOS local system (macOS only)
+    if sys.platform == 'darwin':
+        macos_local = macOSLocalEnumerator()
+        if macos_local.is_available():
+            enumerators['macos_local'] = macos_local
+
+    # Linux local system (Linux only)
+    if sys.platform.startswith('linux'):
+        linux_local = LinuxLocalEnumerator()
+        if linux_local.is_available():
+            enumerators['linux_local'] = linux_local
 
     # Android
     android = AndroidDeviceEnumerator()

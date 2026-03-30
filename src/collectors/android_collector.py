@@ -333,7 +333,7 @@ ANDROID_ARTIFACT_TYPES = {
 
     'mobile_android_kakaotalk': {
         'name': 'KakaoTalk',
-        'description': 'KakaoTalk messages (AES-128-CBC encrypted)',
+        'description': 'KakaoTalk message databases',
         'package': 'com.kakao.talk',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -360,7 +360,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_whatsapp': {
         'name': 'WhatsApp',
-        'description': 'WhatsApp messages (crypt14/crypt15 encrypted)',
+        'description': 'WhatsApp message databases',
         'package': 'com.whatsapp',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -411,7 +411,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_line': {
         'name': 'LINE',
-        'description': 'LINE messages (wxSQLite3 encrypted)',
+        'description': 'LINE message databases',
         'package': 'jp.naver.line.android',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -435,7 +435,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_signal': {
         'name': 'Signal',
-        'description': 'Signal messages (SQLCipher + AES-GCM encrypted)',
+        'description': 'Signal message databases',
         'package': 'org.thoughtcrime.securesms',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -478,7 +478,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_wechat': {
         'name': 'WeChat',
-        'description': 'WeChat messages (SQLCipher encrypted, 1.41B MAU)',
+        'description': 'WeChat message databases',
         'package': 'com.tencent.mm',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
