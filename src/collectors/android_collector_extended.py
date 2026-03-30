@@ -1033,6 +1033,43 @@ ANDROID_ARTIFACT_TYPES = {
         'collection_method': 'screen_scrape',
         'forensic_value': 'critical',
     },
+
+    # ==========================================================================
+    # Partition Images (Root-Only Physical Imaging)
+    # ==========================================================================
+
+    'mobile_android_partition_userdata': {
+        'name': 'Userdata Partition Image',
+        'description': 'Raw userdata partition forensic image (root required)',
+        'collection_method': 'partition_image',
+        'requires_root': True,
+        'partition_name': 'userdata',
+        'forensic_value': 'high',
+    },
+    'mobile_android_partition_system': {
+        'name': 'System Partition Image',
+        'description': 'Raw system partition forensic image (root required)',
+        'collection_method': 'partition_image',
+        'requires_root': True,
+        'partition_name': 'system',
+        'forensic_value': 'medium',
+    },
+    'mobile_android_partition_boot': {
+        'name': 'Boot Partition Image',
+        'description': 'Raw boot partition forensic image (root required)',
+        'collection_method': 'partition_image',
+        'requires_root': True,
+        'partition_name': 'boot',
+        'forensic_value': 'medium',
+    },
+    'mobile_android_partition_recovery': {
+        'name': 'Recovery Partition Image',
+        'description': 'Raw recovery partition forensic image (root required)',
+        'collection_method': 'partition_image',
+        'requires_root': True,
+        'partition_name': 'recovery',
+        'forensic_value': 'low',
+    },
 }
 
 
@@ -1952,6 +1989,11 @@ class AndroidCollector:
 
         elif collection_method == 'screen_scrape':
             yield from self._collect_screen_scrape(
+                artifact_type, artifact_info, artifact_dir, progress_callback
+            )
+
+        elif collection_method == 'partition_image':
+            yield from self._collect_partition_image(
                 artifact_type, artifact_info, artifact_dir, progress_callback
             )
 
@@ -5587,6 +5629,212 @@ class AndroidCollector:
             _debug_print(f'[SCRAPE] Pull error: {e}')
 
         return pulled
+
+    def _collect_partition_image(
+        self,
+        artifact_type: str,
+        artifact_info: Dict[str, Any],
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """
+        Collect raw partition image when device is rooted.
+
+        Uses dd via ADB shell to read block device.
+        Requires root access (su).
+        """
+        partition_name = artifact_info.get('partition_name', 'userdata')
+
+        if progress_callback:
+            progress_callback(f"[Partition] Locating {partition_name} block device...")
+
+        # Find block device path
+        block_path = self._find_partition_block_device(partition_name)
+        if not block_path:
+            logger.warning(f"[Partition] Could not find block device for {partition_name}")
+            yield '', {
+                'artifact_type': artifact_type,
+                'status': 'error',
+                'error': f'Block device not found for partition: {partition_name}',
+            }
+            return
+
+        # Get partition size
+        partition_size = self._get_block_device_size(block_path)
+        size_display = f"{partition_size / (1024**3):.1f}GB" if partition_size > 0 else "unknown"
+
+        if progress_callback:
+            progress_callback(f"[Partition] Imaging {partition_name} ({size_display}) via dd...")
+
+        # Output file
+        output_file = output_dir / f'{partition_name}.img'
+
+        # Stream dd output via ADB and save locally
+        success = self._dd_partition_to_file(block_path, output_file, partition_size, progress_callback)
+
+        if not success or not output_file.exists():
+            yield '', {
+                'artifact_type': artifact_type,
+                'status': 'error',
+                'error': f'Partition imaging failed for {partition_name}',
+            }
+            return
+
+        # Compute hash
+        sha256 = hashlib.sha256()
+        actual_size = output_file.stat().st_size
+        with open(output_file, 'rb') as f:
+            for chunk in iter(lambda: f.read(65536), b''):
+                sha256.update(chunk)
+
+        if progress_callback:
+            progress_callback(f"[Partition] {partition_name}.img collected ({actual_size / (1024**3):.1f}GB)")
+
+        yield str(output_file), {
+            'artifact_type': artifact_type,
+            'original_path': block_path,
+            'filename': output_file.name,
+            'size': actual_size,
+            'sha256': sha256.hexdigest(),
+            'collection_method': 'dd_partition_image',
+            'partition_name': partition_name,
+            'block_device': block_path,
+            'device': self.device_info.serial,
+        }
+
+    def _find_partition_block_device(self, partition_name: str) -> Optional[str]:
+        """Find block device path for a named partition."""
+        # Try by-name symlink first (most reliable)
+        by_name_paths = [
+            f'/dev/block/by-name/{partition_name}',
+            f'/dev/block/bootdevice/by-name/{partition_name}',
+        ]
+
+        for path in by_name_paths:
+            out, rc = self._adb_shell(f'su -c "test -b {shlex.quote(path)} && echo EXISTS"')
+            if rc == 0 and 'EXISTS' in out:
+                # Resolve symlink to actual block device
+                real, _ = self._adb_shell(f'su -c "readlink -f {shlex.quote(path)}"')
+                real = real.strip()
+                if real:
+                    return real
+                return path
+
+        # Fallback: search platform-specific paths
+        search_dirs = [
+            '/dev/block/platform',
+            '/dev/block',
+        ]
+        for d in search_dirs:
+            out, _ = self._adb_shell(
+                f'su -c "find {shlex.quote(d)} -name {shlex.quote(partition_name)} -o '
+                f'-name {shlex.quote(partition_name + "*")} 2>/dev/null | head -3"'
+            )
+            for line in out.strip().splitlines():
+                line = line.strip()
+                if line and partition_name in line:
+                    return line
+
+        return None
+
+    def _get_block_device_size(self, block_path: str) -> int:
+        """Get size of block device in bytes."""
+        # Try blockdev
+        out, rc = self._adb_shell(f'su -c "blockdev --getsize64 {shlex.quote(block_path)}"')
+        if rc == 0 and out.strip().isdigit():
+            return int(out.strip())
+
+        # Try /sys/block
+        dev_name = block_path.split('/')[-1]
+        out, rc = self._adb_shell(f'cat /sys/block/{shlex.quote(dev_name)}/size 2>/dev/null')
+        if rc == 0 and out.strip().isdigit():
+            return int(out.strip()) * 512  # 512-byte sectors
+
+        return 0
+
+    def _dd_partition_to_file(
+        self,
+        block_path: str,
+        output_file: Path,
+        partition_size: int,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> bool:
+        """Stream dd output from device to local file via ADB."""
+        try:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Use system adb for streaming (adb-shell USB transport is not suitable for large binary streams)
+            adb_bin = self._find_system_adb()
+            if not adb_bin:
+                # Fallback: use adb_pull on a temp file (less efficient)
+                return self._dd_via_temp_file(block_path, output_file, progress_callback)
+
+            serial_args = ['-s', self.device_info.serial] if self.device_info.serial else []
+
+            cmd = (
+                [adb_bin] + serial_args +
+                ['shell', f'su -c "dd if={shlex.quote(block_path)} bs=4096 2>/dev/null"']
+            )
+
+            bytes_written = 0
+            with open(output_file, 'wb') as f:
+                proc = subprocess.Popen(
+                    cmd, stdout=f, stderr=subprocess.PIPE,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                # Wait with timeout (large partitions take a long time)
+                # userdata can be 32GB+ - allow up to 4 hours
+                try:
+                    _, stderr = proc.communicate(timeout=14400)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    logger.error("[Partition] dd timed out after 4 hours")
+                    return False
+
+            if proc.returncode != 0:
+                logger.error(f"[Partition] dd failed: {stderr.decode(errors='replace')[:200]}")
+
+            bytes_written = output_file.stat().st_size
+
+            if bytes_written < 512:
+                logger.error(f"[Partition] Output too small: {bytes_written} bytes")
+                return False
+
+            if progress_callback:
+                progress_callback(f"[Partition] Written {bytes_written / (1024**3):.2f}GB")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"[Partition] dd error: {e}")
+            return False
+
+    def _dd_via_temp_file(
+        self,
+        block_path: str,
+        output_file: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> bool:
+        """Fallback: dd to temp file on device, then pull."""
+        tmp_path = '/data/local/tmp/_forensic_partition_tmp.img'
+
+        if progress_callback:
+            progress_callback("[Partition] Imaging to device temp (fallback method)...")
+
+        # DD to temp (only for small partitions - boot/recovery)
+        _, rc = self._adb_shell(
+            f'su -c "dd if={shlex.quote(block_path)} of={tmp_path} bs=4096 2>/dev/null"',
+        )
+        if rc != 0:
+            return False
+
+        # Pull to local
+        success = self._adb_pull(tmp_path, str(output_file))
+
+        # Cleanup temp
+        self._adb_shell(f'su -c "rm -f {tmp_path}"')
+
+        return success
 
     def _cleanup_device_results(self):
         """Remove scraping results from device."""

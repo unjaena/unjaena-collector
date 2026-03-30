@@ -39,6 +39,10 @@ class DeviceType(Enum):
     VDI_IMAGE = auto()
     DMG_IMAGE = auto()
     ANDROID_DEVICE = auto()
+    ANDROID_WIFI = auto()              # Android device via WiFi ADB
+    ANDROID_EDL = auto()               # Android device in EDL mode
+    ANDROID_MTK_BROM = auto()          # Android device in MTK BROM mode
+    ANDROID_FASTBOOT = auto()          # Android device in fastboot mode
     IOS_BACKUP = auto()
     IOS_DEVICE = auto()  # iOS device via USB direct connection
 
@@ -100,7 +104,10 @@ class UnifiedDeviceInfo:
     @property
     def is_mobile(self) -> bool:
         """Check if mobile device"""
-        return self.device_type in (DeviceType.ANDROID_DEVICE, DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE)
+        return self.device_type in (
+            DeviceType.ANDROID_DEVICE, DeviceType.ANDROID_WIFI,
+            DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE
+        )
 
     @property
     def is_image(self) -> bool:

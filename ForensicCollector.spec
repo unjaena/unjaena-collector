@@ -96,6 +96,15 @@ common_hidden_imports = [
     'adb_shell.handle',
     'adb_shell.transport',
 
+    # --- Android extended collectors ---
+    'frida',               # wxWindows/LGPL — process memory collection
+    'zeroconf',            # LGPL — mDNS/DNS-SD for WiFi ADB discovery
+    'collectors.android_wifi_collector',
+    'collectors.android_frida_collector',
+    'collectors.android_fastboot_collector',
+    'collectors.android_edl_collector',
+    'collectors.android_mtk_collector',
+
     # --- USB: libusb (LGPL-2.1) ---
     'usb1',
     'libusb1',
@@ -212,7 +221,9 @@ collect_packages = [
     'pycrashreport',       # GPL-3.0 — iOS crash report parsing
     'pygnuutils',          # GPL-3.0 — GNU utility wrappers
     'adb_shell',           # Apache-2.0 — Android ADB communication
-    'dissect.fve',         # AGPL-3.0 — BitLocker/LUKS decryption (pure Python)
+    'frida',               # wxWindows/LGPL — process memory collection (deep import chain)
+    'zeroconf',            # LGPL — mDNS/DNS-SD discovery (data files required)
+    'dissect.fve',         # AGPL-3.0 — BitLocker/LUKS volume support (pure Python)
     'dissect.hypervisor',  # AGPL-3.0 — VMDK/VHD/VHDX/QCOW2/VDI disk images
     'dissect.cstruct',     # AGPL-3.0 — Binary structure parsing (dissect dependency)
     'dissect.util',        # AGPL-3.0 — Utility functions (dissect dependency)

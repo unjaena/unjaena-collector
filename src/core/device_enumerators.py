@@ -436,6 +436,118 @@ class iOSDeviceEnumerator(BaseDeviceEnumerator):
 
 
 # =============================================================================
+# Android WiFi Device Enumerator
+# =============================================================================
+
+class AndroidWiFiDeviceEnumerator(BaseDeviceEnumerator):
+    """
+    Android device enumerator for WiFi ADB connections.
+    Discovers Android devices accessible via ADB over TCP/IP.
+    """
+
+    def __init__(self):
+        self._available = False
+        try:
+            from collectors.android_wifi_collector import wifi_adb_available
+            self._available = wifi_adb_available()
+        except ImportError:
+            pass
+
+    def is_available(self) -> bool:
+        return self._available
+
+    def supports_realtime(self) -> bool:
+        return False  # Requires explicit scan
+
+    def enumerate(self) -> List[UnifiedDeviceInfo]:
+        # Return empty list - WiFi devices are added manually by user
+        # (scan initiated from GUI, not auto-detected)
+        return []
+
+
+# =============================================================================
+# Android Hardware-Level Enumerator (EDL / MTK BROM)
+# =============================================================================
+
+class AndroidHardwareEnumerator(BaseDeviceEnumerator):
+    """
+    Android hardware-level device enumerator.
+    Detects devices in EDL or MTK BROM mode via USB VID/PID.
+    """
+
+    # Qualcomm EDL USB identifiers
+    QUALCOMM_EDL_VID = 0x05C6
+    QUALCOMM_EDL_PID = 0x9008
+
+    # MediaTek BROM USB identifiers
+    MTK_BROM_VID = 0x0E8D
+    MTK_BROM_PIDS = [0x0003, 0x2000, 0x0001]
+
+    def __init__(self):
+        self._usb_available = False
+        try:
+            import usb1
+            self._usb_available = True
+        except ImportError:
+            try:
+                import usb.core
+                self._usb_available = True
+            except ImportError:
+                pass
+
+    def is_available(self) -> bool:
+        return self._usb_available
+
+    def supports_realtime(self) -> bool:
+        return False
+
+    def enumerate(self) -> List[UnifiedDeviceInfo]:
+        devices = []
+
+        try:
+            import usb1
+            with usb1.USBContext() as ctx:
+                for dev in ctx.getDeviceIterator(skip_on_error=True):
+                    vid = dev.getVendorID()
+                    pid = dev.getProductID()
+
+                    if vid == self.QUALCOMM_EDL_VID and pid == self.QUALCOMM_EDL_PID:
+                        devices.append(UnifiedDeviceInfo(
+                            device_id=f"edl_{vid:04x}_{pid:04x}_{dev.getBusNumber()}_{dev.getDeviceAddress()}",
+                            device_type=DeviceType.ANDROID_EDL,
+                            display_name="Qualcomm EDL Device",
+                            status=DeviceStatus.READY,
+                            metadata={
+                                'vid': vid, 'pid': pid,
+                                'bus': dev.getBusNumber(),
+                                'address': dev.getDeviceAddress(),
+                                'mode': 'edl',
+                                'chipset': 'Qualcomm Snapdragon',
+                            }
+                        ))
+
+                    elif vid == self.MTK_BROM_VID and pid in self.MTK_BROM_PIDS:
+                        mode = 'preloader' if pid == 0x2000 else 'brom'
+                        devices.append(UnifiedDeviceInfo(
+                            device_id=f"mtk_{vid:04x}_{pid:04x}_{dev.getBusNumber()}_{dev.getDeviceAddress()}",
+                            device_type=DeviceType.ANDROID_MTK_BROM,
+                            display_name=f"MediaTek BROM Device ({mode})",
+                            status=DeviceStatus.READY,
+                            metadata={
+                                'vid': vid, 'pid': pid,
+                                'bus': dev.getBusNumber(),
+                                'address': dev.getDeviceAddress(),
+                                'mode': mode,
+                                'chipset': 'MediaTek',
+                            }
+                        ))
+        except Exception as e:
+            logger.debug(f"USB enumeration error: {e}")
+
+        return devices
+
+
+# =============================================================================
 # Forensic Image Enumerator
 # =============================================================================
 
@@ -698,6 +810,16 @@ def create_default_enumerators() -> Dict[str, BaseDeviceEnumerator]:
 
     # Forensic images (always available)
     enumerators['images'] = ForensicImageEnumerator()
+
+    # Hardware-level enumerators (EDL / MTK BROM via USB VID/PID)
+    hw_enum = AndroidHardwareEnumerator()
+    if hw_enum.is_available():
+        enumerators['android_hardware'] = hw_enum
+
+    # WiFi ADB enumerator
+    wifi_enum = AndroidWiFiDeviceEnumerator()
+    if wifi_enum.is_available():
+        enumerators['android_wifi'] = wifi_enum
 
     logger.info(f"Created {len(enumerators)} device enumerators: {list(enumerators.keys())}")
     return enumerators

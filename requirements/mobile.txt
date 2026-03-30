@@ -8,3 +8,12 @@ iphone_backup_decrypt>=0.6.0
 # Android Forensics (USB direct connection - no external ADB binary required)
 adb-shell[usb]>=0.4.4
 libusb1>=3.0.0
+
+# Android Forensics - Extended Collection
+frida>=16.0.0              # Process memory collection via Frida instrumentation
+zeroconf>=0.128.0          # mDNS discovery for Android 11+ wireless debugging
+
+# Android Hardware-Level Collection (optional - hardware dependent)
+# Install separately if needed:
+# edl>=3.2  (or: pip install git+https://github.com/bkerler/edl.git)
+# mtkclient  (pip install git+https://github.com/bkerler/mtkclient.git)
