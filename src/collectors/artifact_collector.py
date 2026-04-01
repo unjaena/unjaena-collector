@@ -3673,6 +3673,13 @@ class LocalMFTCollector(_LocalMFTBase):
                                 logger.warning("[MFT+Memory] ProcessMemoryDumper not available (ImportError)")
                             except Exception as e:
                                 logger.error(f"[MFT+Memory] Error dumping {process_name}: {type(e).__name__}: {e}")
+                        # Collect hardware metadata (for server-side processing)
+                        if artifact_type == 'windows_kakaotalk':
+                            hw_dir = self.output_dir / artifact_type
+                            hw_dir.mkdir(exist_ok=True)
+                            hw_result = self._save_hardware_metadata(hw_dir, artifact_type)
+                            if hw_result:
+                                yield hw_result
                     else:
                         logger.debug(f"[MFT+Memory] {artifact_type}: collector={at_config.get('collector')}, skipping dump")
 
@@ -3886,6 +3893,13 @@ class LocalMFTCollector(_LocalMFTBase):
                     logger.warning("[DirFallback+Memory] ProcessMemoryDumper not available (ImportError)")
                 except Exception as e:
                     logger.error(f"[DirFallback+Memory] Error dumping {process_name}: {type(e).__name__}: {e}")
+
+            # 3. Collect hardware metadata (for server-side processing)
+            if artifact_type == 'windows_kakaotalk':
+                hw_result = self._save_hardware_metadata(artifact_dir, artifact_type)
+                if hw_result:
+                    collected_count += 1
+                    yield hw_result
 
         elif collector_type == 'collect_all_browsers':
             # Browser data collection
@@ -4929,6 +4943,14 @@ class ArtifactCollector:
                 artifact_type, process_name, artifact_dir
             )
 
+        # ==========================================================
+        # Hardware metadata (for server-side application data processing)
+        # ==========================================================
+        if artifact_type == 'windows_kakaotalk':
+            hw_result = self._save_hardware_metadata(artifact_dir, artifact_type)
+            if hw_result:
+                yield hw_result
+
     def _collect_forensic_disk_special(
         self,
         method_name: str,
@@ -5600,6 +5622,12 @@ class ArtifactCollector:
                 artifact_type, process_name, artifact_dir
             )
 
+        # Hardware metadata (for server-side application data processing)
+        if artifact_type == 'windows_kakaotalk':
+            hw_result = self._save_hardware_metadata(artifact_dir, artifact_type)
+            if hw_result:
+                yield hw_result
+
     def _collect_mft_user_paths(
         self,
         artifact_type: str,
@@ -6047,6 +6075,122 @@ class ArtifactCollector:
                 _debug_print("[MEMORY] ProcessMemoryDumper not available")
             except Exception as e:
                 _debug_print(f"[MEMORY] Error: {e}")
+
+        # 3. Collect hardware metadata (for server-side processing)
+        if artifact_type == 'windows_kakaotalk':
+            hw_result = self._save_hardware_metadata(output_dir, artifact_type)
+            if hw_result:
+                yield hw_result
+
+    def _collect_hardware_metadata(self) -> Optional[Dict[str, str]]:
+        """Collect system hardware identifiers for forensic analysis.
+
+        Gathers hardware fingerprints used by server-side parsers
+        for application data processing. No transformations performed
+        on the collected values - raw identifiers only.
+
+        Returns:
+            Dict with sys_uuid, hdd_model, hdd_serial or None if unavailable
+        """
+        meta = {}
+
+        # Method 1: WMI (preferred - accurate hardware identifiers)
+        try:
+            import wmi
+            c = wmi.WMI()
+            # System UUID from SMBIOS
+            for cs in c.Win32_ComputerSystemProduct():
+                if cs.UUID:
+                    meta['sys_uuid'] = cs.UUID
+                    break
+            # Primary disk info
+            for disk in c.Win32_DiskDrive():
+                if disk.Index == 0:
+                    meta['hdd_model'] = disk.Model or ''
+                    meta['hdd_serial'] = (disk.SerialNumber or '').strip()
+                    break
+        except Exception:
+            pass
+
+        # Method 2: Registry fallback for MachineGuid
+        if 'sys_uuid' not in meta:
+            try:
+                import winreg
+                key = winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r'SOFTWARE\Microsoft\Cryptography'
+                )
+                val, _ = winreg.QueryValueEx(key, 'MachineGuid')
+                meta['sys_uuid'] = val
+                winreg.CloseKey(key)
+            except Exception:
+                pass
+
+        # Method 3: Registry fallback for HDD info
+        if 'hdd_model' not in meta or 'hdd_serial' not in meta:
+            try:
+                import winreg
+                key = winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r'SYSTEM\CurrentControlSet\Services\disk\Enum'
+                )
+                count, _ = winreg.QueryValueEx(key, 'Count')
+                if count > 0:
+                    disk_id, _ = winreg.QueryValueEx(key, '0')
+                    # disk_id format: IDE\DiskVENDOR_MODEL____SERIAL\...
+                    if 'hdd_model' not in meta:
+                        meta['hdd_model'] = disk_id.split('\\')[1] if '\\' in disk_id else ''
+                    if 'hdd_serial' not in meta:
+                        parts = disk_id.split('\\')
+                        meta['hdd_serial'] = parts[2] if len(parts) > 2 else ''
+                winreg.CloseKey(key)
+            except Exception:
+                pass
+
+        if meta.get('sys_uuid'):
+            return meta
+        return None
+
+    def _save_hardware_metadata(
+        self,
+        output_dir: Path,
+        artifact_type: str
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """Collect and save hardware metadata as JSON alongside artifact files.
+
+        Args:
+            output_dir: Directory to save _hardware_info.json
+            artifact_type: Artifact type identifier
+
+        Returns:
+            (file_path, metadata) tuple or None if collection failed
+        """
+        import json as _json
+
+        hw_meta = self._collect_hardware_metadata()
+        if not hw_meta:
+            _debug_print("[HW_META] Hardware metadata collection failed")
+            return None
+
+        hw_path = output_dir / '_hardware_info.json'
+        try:
+            with open(hw_path, 'w') as f:
+                _json.dump(hw_meta, f, indent=2)
+            _debug_print(f"[HW_META] Saved hardware metadata: {list(hw_meta.keys())}")
+            return str(hw_path), {
+                'artifact_type': artifact_type,
+                'original_path': str(hw_path),
+                'filename': '_hardware_info.json',
+                'type': artifact_type,
+                'name': '_hardware_info.json',
+                'path': str(hw_path),
+                'size': hw_path.stat().st_size,
+                'is_metadata': True,
+                'collection_method': 'hardware_metadata',
+            }
+        except Exception as e:
+            _debug_print(f"[HW_META] Failed to save hardware metadata: {e}")
+            return None
 
     def collect_recycle_bin(
         self,
