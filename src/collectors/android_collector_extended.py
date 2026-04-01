@@ -4033,7 +4033,8 @@ class AndroidCollector:
         20+ individual dumpsys calls.
 
         Uses system adb binary (bugreport requires host-side adb command).
-        Timeout set to 120s as bugreport typically takes 60-90 seconds.
+        Timeout set to 300s (5 minutes) as bugreport typically takes 60-90 seconds
+        but can take 2-3 minutes on older devices.
         """
         if progress_callback:
             progress_callback("[Non-Root] Collecting bugreport (this may take 60-90 seconds)...")
@@ -4048,37 +4049,40 @@ class AndroidCollector:
             timeout=300
         )
 
-        if rc == 0 and bugreport_path.exists() and bugreport_path.stat().st_size > 0:
-            sha256 = hashlib.sha256()
-            with open(bugreport_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(65536), b''):
-                    sha256.update(chunk)
+        if rc == 0 and bugreport_path.exists():
+            stat_result = bugreport_path.stat()
+            if stat_result.st_size > 0:
+                sha256 = hashlib.sha256()
+                with open(bugreport_path, 'rb') as f:
+                    for chunk in iter(lambda: f.read(65536), b''):
+                        sha256.update(chunk)
 
-            logger.info(
-                f"[Bugreport] Collected successfully: "
-                f"{bugreport_path.stat().st_size // 1024}KB"
-            )
+                logger.info(
+                    f"[Bugreport] Collected successfully: "
+                    f"{stat_result.st_size // 1024}KB"
+                )
 
-            yield str(bugreport_path), {
-                'artifact_type': artifact_type,
-                'filename': bugreport_path.name,
-                'size': bugreport_path.stat().st_size,
-                'sha256': sha256.hexdigest(),
-                'device_serial': self.device_info.serial,
-                'device_model': self.device_info.model,
-                'android_version': self.device_info.android_version,
-                'collected_at': datetime.utcnow().isoformat(),
-                'collection_method': 'adb_bugreport',
-                'root_used': False,
-            }
-        else:
-            error_msg = output.strip()[:200] if output else 'Unknown error'
-            logger.warning(f"[Bugreport] Collection failed: {error_msg}")
-            yield '', {
-                'artifact_type': artifact_type,
-                'status': 'error',
-                'error': f'Bugreport collection failed: {error_msg}',
-            }
+                yield str(bugreport_path), {
+                    'artifact_type': artifact_type,
+                    'filename': bugreport_path.name,
+                    'size': stat_result.st_size,
+                    'sha256': sha256.hexdigest(),
+                    'device_serial': self.device_info.serial,
+                    'device_model': self.device_info.model,
+                    'android_version': self.device_info.android_version,
+                    'collected_at': datetime.utcnow().isoformat(),
+                    'collection_method': 'adb_bugreport',
+                    'root_used': False,
+                }
+                return
+
+        error_msg = output.strip()[:200] if output else 'Unknown error'
+        logger.warning(f"[Bugreport] Collection failed: {error_msg}")
+        yield '', {
+            'artifact_type': artifact_type,
+            'status': 'error',
+            'error': f'Bugreport collection failed: {error_msg}',
+        }
 
     def _collect_app_install_history(
         self,
@@ -4376,7 +4380,6 @@ class AndroidCollector:
         # Parse bonded/paired devices from bluetooth_manager output
         devices = []
         current_device = {}
-        in_bonded_section = False
 
         for line in output.split('\n'):
             stripped = line.strip()
@@ -4384,7 +4387,6 @@ class AndroidCollector:
             # Detect bonded devices section
             if ('Bonded devices' in stripped or 'bonded devices' in stripped
                     or 'Paired devices' in stripped):
-                in_bonded_section = True
                 continue
 
             # Detect device entry by MAC address pattern (XX:XX:XX:XX:XX:XX)
