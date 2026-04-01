@@ -2,7 +2,7 @@
 
 # iOS Forensics
 biplist>=1.0.3
-pymobiledevice3>=4.0.0,<9.0.0
+pymobiledevice3==7.5.1
 iphone_backup_decrypt>=0.6.0
 
 # Android Forensics (USB direct connection - no external ADB binary required)
