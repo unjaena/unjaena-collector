@@ -1,34 +1,89 @@
 # Forensic Collector - Cross-platform base dependencies
 # License: GPL-3.0 (due to pymobiledevice3 dependency)
+#
+# IMPORTANT: Every package referenced in ForensicCollector.spec (hiddenimports
+# + collect_packages) MUST appear here or in a platform file.  If a package is
+# missing, CI/CD pip install will skip it and the PyInstaller build will fail
+# at runtime with ImportError.
 
-# GUI
+# ── GUI ──────────────────────────────────────────────────────────────────────
 PyQt6>=6.6.0
 
-# HTTP Client
+# ── HTTP Client ──────────────────────────────────────────────────────────────
 requests>=2.31.0
-aiohttp>=3.9.0
+urllib3>=1.21.1                # requests dependency (native PYD in spec)
+charset-normalizer>=2.0       # requests dependency (native PYD in spec)
+idna>=2.5                     # requests dependency
+certifi>=2017.4.17            # SSL CA certificates (used by token_validator.py)
 
-# WebSocket
+# ── Async HTTP + WebSocket ───────────────────────────────────────────────────
+aiohttp>=3.9.0
+aiosignal>=1.4.0              # aiohttp dependency
+aiohappyeyeballs>=2.5.0       # aiohttp dependency
+frozenlist>=1.1.1             # aiohttp dependency (native PYD)
+multidict>=4.5                # aiohttp dependency (native PYD)
+yarl>=1.17.0                  # aiohttp dependency (native PYD)
+propcache>=0.2.0              # aiohttp dependency (native PYD)
+attrs>=17.3.0                 # aiohttp dependency
 websockets>=12.0
 
-# System monitoring
+# ── Crypto ───────────────────────────────────────────────────────────────────
+cryptography>=41.0.1          # secure_upload.py (AESGCM, HKDF)
+rsa>=4.0                      # adb-shell auth + pymobiledevice3 dep
+pycryptodome>=3.20.0          # iphone-backup-decrypt dependency (imports as Crypto)
+
+# ── System monitoring ────────────────────────────────────────────────────────
 psutil>=5.9.0
 
-# Utilities
-python-dateutil>=2.8.0
+# ── Disk encryption (BitLocker + LUKS) ───────────────────────────────────────
+dissect.fve>=4.2              # BitLocker/LUKS; dissect.apfs requires >=4.2
+dissect.hypervisor>=3.14      # VMDK/VHD/VHDX/QCOW2/VDI disk images
 
-# Disk encryption (BitLocker + LUKS)
-dissect.fve>=3.9
-dissect.hypervisor>=3.14
+# ── Filesystem parsing (pure Python) ────────────────────────────────────────
+dissect.extfs>=3.12           # ext2/ext3/ext4
+dissect.fat>=3.12             # FAT12/FAT16/FAT32/exFAT
+dissect.xfs>=3.12             # XFS
+dissect.btrfs>=1.8            # Btrfs (1.x series on PyPI)
+dissect.ffs>=3.12             # UFS/FFS
+dissect.apfs>=1.0             # APFS (macOS) — PyPI versions are 0.x/1.x, NOT 3.x
+dissect.ntfs>=3.12            # NTFS
+dissect.volume>=3.2           # Volume/partition parsing (spec hidden import)
 
-# Filesystem parsing (pytsk3 replacement — pure Python)
-dissect.extfs>=3.12       # ext2/ext3/ext4
-dissect.fat>=3.12         # FAT12/FAT16/FAT32/exFAT
-dissect.xfs>=3.12         # XFS
-dissect.btrfs>=1.8        # Btrfs (1.x series)
-dissect.ffs>=3.12         # UFS/FFS
-dissect.apfs>=3.12         # APFS (macOS)
-dissect.ntfs>=3.12         # NTFS
-dissect.cstruct>=3.12      # Binary structure parsing (dissect dep)
-dissect.util>=3.12         # Utility functions (dissect dep)
-asn1crypto>=1.5.0          # ASN.1 parsing (dissect.apfs dep)
+# ── dissect shared dependencies ──────────────────────────────────────────────
+dissect.cstruct>=4.0          # Binary structure parsing; all dissect pkgs require >=4
+dissect.util>=3.23            # Utility functions; dissect.apfs requires >=3.23
+asn1crypto>=1.5.0             # ASN.1 parsing (dissect.apfs dep)
+
+# ── Forensic filesystem (native) ────────────────────────────────────────────
+lzfse>=0.4.0                  # macOS APFS/LZFSE decompression (disk_backends.py)
+libfshfs-python>=20240221     # HFS+ filesystem parsing (imports as pyfshfs)
+yara-python>=4.0.0            # YARA rule scanning (memory_collector.py)
+
+# ── pymobiledevice3 + transitive deps ───────────────────────────────────────
+# pymobiledevice3 has 30+ dependencies. Most are installed transitively, but
+# PyInstaller collect_all/hiddenimports requires them to be physically present.
+# Pinning them here guarantees they survive pip resolver changes.
+construct>=2.9.29             # Binary data parsing
+construct-typing>=0.7.0       # construct type annotations
+bpylist2>=4.0.1               # Apple binary plist parsing
+opack2>=0.0.1                 # Apple opack serialization
+srptools>=1.0.1               # SRP authentication protocol
+hexdump>=3.3                  # Hex dump display
+hyperframe>=6.0               # HTTP/2 frame parsing
+ifaddr>=0.2.0                 # Network interface discovery
+nest-asyncio>=1.5.5           # Nested asyncio loop support
+parameter-decorators>=0.0.2   # Parameter decoration
+pycrashreport>=1.2.7          # iOS crash report parsing
+pygnuutils>=0.0.7             # GNU utility wrappers
+la-panic>=0.5.0               # iOS panic log parsing
+packaging>=23.0               # Version parsing
+tqdm>=4.60.0                  # Progress bars
+ujson>=5.0.0                  # Fast JSON
+wsproto>=1.0.0                # WebSocket protocol
+qh3>=1.0.0,<2                 # QUIC/HTTP3 (native PYD, pymobiledevice3 remote)
+click>=8.0.0                  # CLI framework
+developer-disk-image>=0.0.2   # iOS developer disk image
+ipsw-parser>=1.5.0            # iOS IPSW firmware parsing
+
+# ── Utilities ────────────────────────────────────────────────────────────────
+python-dateutil>=2.8.0        # Date parsing (may be used by pymobiledevice3)

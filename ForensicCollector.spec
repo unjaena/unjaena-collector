@@ -252,7 +252,7 @@ forensic_hidden_imports = [
     'lzfse',           # macOS APFS/LZFSE decompression (disk_backends.py)
 
     # --- dissect filesystem parsers (conditional imports in forensic_disk_accessor.py) ---
-    'dissect',
+    # NOTE: 'dissect' bare namespace is NOT a pip package; only sub-packages are needed.
     'dissect.extfs',       # ext2/ext3/ext4 filesystem parsing (Linux)
     'dissect.xfs',         # XFS filesystem parsing (Linux)
     'dissect.btrfs',       # Btrfs filesystem parsing (Linux)

@@ -6,9 +6,8 @@
 pywin32>=306
 wmi>=1.5.1
 
-# File System - MFT Collection (REQUIRED for forensic collection)
+# File System - MFT Collection (source-only on PyPI, requires C compiler)
 pytsk3>=20231007
 
-# Build (optional)
-# pyinstaller>=6.3.0
-libewf-python>=20240506     # E01 forensic image reading (pyewf)
+# E01 forensic image reading (imports as pyewf)
+libewf-python>=20240506
