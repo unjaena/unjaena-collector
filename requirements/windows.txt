@@ -11,3 +11,4 @@ pytsk3>=20231007
 
 # Build (optional)
 # pyinstaller>=6.3.0
+libewf-python>=20240506     # E01 forensic image reading (pyewf)

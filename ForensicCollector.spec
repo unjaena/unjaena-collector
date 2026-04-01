@@ -187,16 +187,27 @@ common_hidden_imports = [
 windows_hidden_imports = [
     'win32api',
     'win32con',
+    'win32file',       # Raw disk access (disk_backends.py)
     'win32security',
+    'winioctlcon',     # IOCTL constants for disk geometry (disk_backends.py)
+    'pywintypes',      # Win32 COM type support (disk_backends.py)
     'wmi',
     'pytsk3',
+    'pyewf',           # E01 forensic image support (libewf-python)
+]
+
+# Cross-platform forensic libraries (conditional imports inside try/except)
+forensic_hidden_imports = [
+    'yara',            # YARA rule scanning (memory_collector.py)
+    'pyfshfs',         # HFS+ filesystem parsing (forensic_disk_accessor.py)
+    'lzfse',           # macOS APFS/LZFSE decompression (disk_backends.py)
 ]
 
 # Combine based on platform
 if current_os == 'windows':
-    all_hidden_imports = common_hidden_imports + windows_hidden_imports
+    all_hidden_imports = common_hidden_imports + windows_hidden_imports + forensic_hidden_imports
 else:
-    all_hidden_imports = common_hidden_imports
+    all_hidden_imports = common_hidden_imports + forensic_hidden_imports
 
 # =============================================================================
 # collect_all: Full package bundling for packages with deep import chains

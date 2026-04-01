@@ -1,3 +1,4 @@
 # Forensic Collector - Linux dependencies
 -r base.txt
 -r mobile.txt
+libewf-python>=20240506     # E01 forensic image reading (pyewf)
