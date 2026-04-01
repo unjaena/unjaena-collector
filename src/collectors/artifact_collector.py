@@ -3114,6 +3114,59 @@ ARTIFACT_TYPES = {
 }
 
 # =============================================================================
+# Auto-register platform artifact types from platform-specific collectors
+# =============================================================================
+
+# Auto-register macOS artifact types from macOSCollector
+# (MACOS_ARTIFACT_FILTERS above covers macos_artifacts.py; this covers
+#  macos_collector.py entries like macos_quarantine_events, macos_wifi_known_networks)
+try:
+    _existing_macos = {k for k in ARTIFACT_TYPES if k.startswith('macos_')}
+    for _k, _v in MACOS_ARTIFACT_TYPES.items():
+        if _k not in _existing_macos:
+            ARTIFACT_TYPES[_k] = {
+                'name': _v.get('name', _k.replace('_', ' ').title()),
+                'description': _v.get('description', ''),
+                'category': 'macos',
+                'collector': 'collect_macos',
+                'paths': _v.get('paths', []),
+                'forensic_value': _v.get('forensic_value', 'medium'),
+            }
+except Exception:
+    pass
+
+# Auto-register Linux artifact types from LinuxCollector
+try:
+    _existing_linux = {k for k in ARTIFACT_TYPES if k.startswith('linux_')}
+    for _k, _v in LINUX_ARTIFACT_TYPES.items():
+        if _k not in _existing_linux:
+            ARTIFACT_TYPES[_k] = {
+                'name': _v.get('name', _k.replace('_', ' ').title()),
+                'description': _v.get('description', ''),
+                'category': 'linux',
+                'collector': 'collect_linux',
+                'paths': _v.get('paths', []),
+                'forensic_value': _v.get('forensic_value', 'medium'),
+            }
+except Exception:
+    pass
+
+# Auto-register iOS artifact types from iOSCollector
+try:
+    _existing_ios = {k for k in ARTIFACT_TYPES if k.startswith('mobile_ios_')}
+    for _k, _v in IOS_ARTIFACT_TYPES.items():
+        if _k not in _existing_ios:
+            ARTIFACT_TYPES[_k] = {
+                'name': _v.get('name', _k.replace('_', ' ').title()),
+                'description': _v.get('description', ''),
+                'category': 'ios',
+                'collector': 'collect_ios',
+                'forensic_value': _v.get('forensic_value', 'medium'),
+            }
+except Exception:
+    pass
+
+# =============================================================================
 # Local MFT Collector (inherits from BaseMFTCollector)
 # =============================================================================
 
