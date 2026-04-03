@@ -436,36 +436,6 @@ class iOSDeviceEnumerator(BaseDeviceEnumerator):
 
 
 # =============================================================================
-# Android WiFi Device Enumerator
-# =============================================================================
-
-class AndroidWiFiDeviceEnumerator(BaseDeviceEnumerator):
-    """
-    Android device enumerator for WiFi ADB connections.
-    Discovers Android devices accessible via ADB over TCP/IP.
-    """
-
-    def __init__(self):
-        self._available = False
-        try:
-            from collectors.android_wifi_collector import wifi_adb_available
-            self._available = wifi_adb_available()
-        except ImportError:
-            pass
-
-    def is_available(self) -> bool:
-        return self._available
-
-    def supports_realtime(self) -> bool:
-        return False  # Requires explicit scan
-
-    def enumerate(self) -> List[UnifiedDeviceInfo]:
-        # Return empty list - WiFi devices are added manually by user
-        # (scan initiated from GUI, not auto-detected)
-        return []
-
-
-# =============================================================================
 # Android Hardware-Level Enumerator (EDL / MTK BROM)
 # =============================================================================
 
@@ -1027,11 +997,6 @@ def create_default_enumerators() -> Dict[str, BaseDeviceEnumerator]:
     hw_enum = AndroidHardwareEnumerator()
     if hw_enum.is_available():
         enumerators['android_hardware'] = hw_enum
-
-    # WiFi ADB enumerator
-    wifi_enum = AndroidWiFiDeviceEnumerator()
-    if wifi_enum.is_available():
-        enumerators['android_wifi'] = wifi_enum
 
     logger.info(f"Created {len(enumerators)} device enumerators: {list(enumerators.keys())}")
     return enumerators

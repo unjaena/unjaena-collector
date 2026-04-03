@@ -96,19 +96,10 @@ common_hidden_imports = [
     'adb_shell.handle',
     'adb_shell.transport',
 
-    # --- Android extended collectors ---
-    'frida',               # wxWindows/LGPL — process memory collection
-    'zeroconf',            # LGPL — mDNS/DNS-SD for WiFi ADB discovery
-    'collectors.android_wifi_collector',
-    'collectors.android_frida_collector',
-    'collectors.android_fastboot_collector',
-    'collectors.android_edl_collector',
-    'collectors.android_mtk_collector',
-
     # --- USB: libusb (LGPL-2.1) + PyUSB (BSD) ---
     'usb1',
     'libusb1',
-    'usb',                 # PyUSB — used by android_edl/mtk_collector, device_enumerators
+    'usb',                 # PyUSB — device_enumerators
     'usb.core',
     'usb.util',
     'usb.backend',
@@ -156,9 +147,6 @@ common_hidden_imports = [
     'propcache',           # aiohttp dependency (has native PYD)
     'attrs',               # aiohttp dependency
     'aiohappyeyeballs',    # aiohttp dependency
-
-    # --- System: psutil (BSD) ---
-    'psutil',              # memory_collector.py — process enumeration
 
     # --- iOS: pymobiledevice3 (GPL-3.0) ---
     # Core modules (traced via runtime import analysis)
@@ -247,7 +235,6 @@ windows_hidden_imports = [
 
 # Cross-platform forensic libraries (conditional imports inside try/except)
 forensic_hidden_imports = [
-    'yara',            # YARA rule scanning (memory_collector.py)
     'pyfshfs',         # HFS+ filesystem parsing (forensic_disk_accessor.py)
     'lzfse',           # macOS APFS/LZFSE decompression (disk_backends.py)
 
@@ -293,8 +280,6 @@ collect_packages = [
     'pycrashreport',       # GPL-3.0 — iOS crash report parsing
     'pygnuutils',          # GPL-3.0 — GNU utility wrappers
     'adb_shell',           # Apache-2.0 — Android ADB communication
-    'frida',               # wxWindows/LGPL — process memory collection (_frida.pyd 118MB native)
-    'zeroconf',            # LGPL — mDNS/DNS-SD discovery (18 Cython .pyd extensions)
     'dissect.fve',         # AGPL-3.0 — BitLocker/LUKS volume support (_native.pyd)
     'dissect.hypervisor',  # AGPL-3.0 — VMDK/VHD/VHDX/QCOW2/VDI disk images
     'dissect.cstruct',     # AGPL-3.0 — Binary structure parsing (dissect dependency)
@@ -311,7 +296,6 @@ collect_packages = [
     'aiohttp',             # Apache-2.0 — async HTTP (4 native .pyd extensions)
     'charset_normalizer',  # MIT — encoding detection (2 native .pyd extensions, requests dep)
     'cryptography',        # Apache-2.0/BSD — crypto primitives (_rust.pyd 9MB native)
-    'psutil',              # BSD — process/system monitoring (_psutil_windows.pyd native)
 ]
 
 for pkg in collect_packages:

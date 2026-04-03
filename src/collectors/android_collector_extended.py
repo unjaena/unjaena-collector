@@ -3027,22 +3027,6 @@ class AndroidCollector:
                     phase3_collected = True
                     yield item
 
-            # 3g. Frida Gadget injection (DESTRUCTIVE — requires explicit opt-in)
-            # Reinstalls app with Frida Gadget injected; copies private data to /sdcard.
-            # For apps with allowBackup=false this DESTROYS existing private data.
-            # Only runs when artifact config has 'allow_gadget_injection': True
-            if not phase3_collected and artifact_info.get('allow_gadget_injection', False):
-                if progress_callback:
-                    progress_callback(
-                        f"[Phase 3g] Frida Gadget injection for {package} "
-                        "(DESTRUCTIVE: will reinstall app)"
-                    )
-                for item in self._collect_via_gadget_injection(
-                    artifact_type, package, db_paths, output_dir, progress_callback
-                ):
-                    phase3_collected = True
-                    yield item
-
         # Summary log
         if progress_callback:
             progress_callback(
@@ -3334,66 +3318,6 @@ class AndroidCollector:
         except Exception as e:
             logger.error(f"[ADB Backup] Extraction error: {e}")
             return False
-    def _collect_via_gadget_injection(
-        self,
-        artifact_type: str,
-        package: str,
-        db_paths: List[str],
-        output_dir: Path,
-        progress_callback: Optional[Callable[[str], None]]
-    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        """
-        Inject Frida Gadget into the target APK and extract app private data.
-
-        This method:
-        1. Pulls the APK from the device
-        2. Patches it with objection patchapk (injects libfrida-gadget.so)
-        3. Adds Gadget Script config for automated extraction
-        4. Uninstalls the original app (DESTROYS data for allowBackup=false!)
-        5. Installs the patched APK
-        6. Launches the app — Gadget copies databases to /sdcard
-        7. Pulls the data
-
-        Only runs when the artifact config has allow_gadget_injection=True.
-        Requires objection: pip install objection
-        """
-        try:
-            from collectors.android_frida_collector import AndroidGadgetCollector, gadget_available
-        except ImportError:
-            logger.debug("[Gadget] android_frida_collector not available")
-            return
-
-        if not gadget_available():
-            if progress_callback:
-                progress_callback("[Gadget] objection not installed (pip install objection)")
-            return
-
-        if progress_callback:
-            progress_callback(f"[Gadget] Starting Gadget injection for {package}")
-
-        def _pull_wrapper(remote: str, local: str) -> bool:
-            return self._adb_pull(remote, local)
-
-        def _push_wrapper(local: str, remote: str) -> bool:
-            _, rc = self._run_system_adb(["push", local, remote], timeout=60)
-            return rc == 0
-
-        gadget_col = AndroidGadgetCollector(
-            adb_shell_func=self._adb_shell,
-            adb_push_func=_push_wrapper,
-            adb_pull_func=_pull_wrapper,
-            output_dir=str(output_dir),
-            device_serial=self.device_serial,
-        )
-
-        yield from gadget_col.extract_via_gadget(
-            package=package,
-            artifact_type=artifact_type,
-            output_dir=output_dir,
-            progress_callback=progress_callback,
-            destructive=True,  # Already gated by allow_gadget_injection in caller
-            device_info=self.device_info,
-        )
 
     # =========================================================================
     # Content Provider Enumeration and Query
@@ -5149,9 +5073,6 @@ class AndroidCollector:
             # Content provider (always attempted)
             entry['strategies'].append('content_provider')
 
-            # Gadget injection always available (destructive)
-            entry['strategies'].append('gadget_injection (destructive)')
-
             # Recommended
             if is_rooted:
                 entry['recommended'] = 'root_direct'
@@ -5162,7 +5083,7 @@ class AndroidCollector:
             elif entry['sdcard_present']:
                 entry['recommended'] = 'sdcard'
             else:
-                entry['recommended'] = 'gadget_injection (destructive) or physical acquisition'
+                entry['recommended'] = 'physical acquisition'
 
             results.append(entry)
 

@@ -32,8 +32,6 @@ cryptography>=41.0.1          # secure_upload.py (AESGCM, HKDF)
 rsa>=4.0                      # adb-shell auth + pymobiledevice3 dep
 pycryptodome>=3.20.0          # iphone-backup-decrypt dependency (imports as Crypto)
 
-# ── System monitoring ────────────────────────────────────────────────────────
-psutil>=5.9.0
 
 # ── Disk encryption (BitLocker + LUKS) ───────────────────────────────────────
 dissect.fve>=4.2              # BitLocker/LUKS; dissect.apfs requires >=4.2
@@ -57,7 +55,6 @@ asn1crypto>=1.5.0             # ASN.1 parsing (dissect.apfs dep)
 # ── Forensic filesystem (native) ────────────────────────────────────────────
 lzfse>=0.4.0                  # macOS APFS/LZFSE decompression (disk_backends.py)
 libfshfs-python>=20240221     # HFS+ filesystem parsing (imports as pyfshfs)
-yara-python>=4.0.0            # YARA rule scanning (memory_collector.py)
 
 # ── pymobiledevice3 + transitive deps ───────────────────────────────────────
 # pymobiledevice3 has 30+ dependencies. Most are installed transitively, but
