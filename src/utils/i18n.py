@@ -25,7 +25,7 @@ STRINGS: Dict[str, str] = {
         '  Project: https://github.com/doronz88/pymobiledevice3\n'
         '  Authors: Hector Martin, Mathieu Renard, doronz88, matan1008, et al.\n\n'
         'This software is licensed under AGPL-3.0 due to its dependency on dissect.fve.\n'
-        'Source code available at: https://github.com/spirid0n/unjaena-collector'
+        'Source code available at: https://github.com/unjaena/unjaena-collector'
     ),
     'pymobiledevice3_available': 'pymobiledevice3 available',
     'pymobiledevice3_not_found': 'pymobiledevice3 not installed',

@@ -39,7 +39,7 @@ Cross-platform digital forensic artifact collection tool with GUI. Collects evid
 
 ## Download
 
-Pre-built binaries are available on the [Releases](https://github.com/spirid0n/unjaena-collector/releases) page:
+Pre-built binaries are available on the [Releases](https://github.com/unjaena/unjaena-collector/releases) page:
 
 | Platform | File |
 |----------|------|
@@ -65,7 +65,7 @@ Pre-built binaries are available on the [Releases](https://github.com/spirid0n/u
 
 ```bash
 # Clone the repository
-git clone https://github.com/spirid0n/unjaena-collector.git
+git clone https://github.com/unjaena/unjaena-collector.git
 cd unjaena-collector
 
 # Create virtual environment
@@ -198,6 +198,6 @@ This project depends on [dissect.fve](https://github.com/fox-it/dissect.fve) (AG
 This project is **source-open for transparency**, not for community-driven development.
 As a forensic evidence collection tool, code integrity directly impacts legal admissibility — all changes are reviewed and authored by the internal team.
 
-- **Bug reports & security issues**: Please open a [GitHub Issue](https://github.com/spirid0n/unjaena-collector/issues) or email `admin@unjaena.com`
+- **Bug reports & security issues**: Please open a [GitHub Issue](https://github.com/unjaena/unjaena-collector/issues) or email `admin@unjaena.com`
 - **Feature requests**: Welcome via Issues — we review and prioritize internally
 - **Pull requests**: Not accepted at this time

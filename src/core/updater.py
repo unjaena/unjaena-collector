@@ -12,7 +12,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 # GitHub repository for public releases
-GITHUB_REPO = "spirid0n/unjaena-collector"
+GITHUB_REPO = "unjaena/unjaena-collector"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
