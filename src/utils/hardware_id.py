@@ -316,6 +316,7 @@ def get_system_info() -> dict:
             os_info = c.Win32_OperatingSystem()[0]
             cpu_info = c.Win32_Processor()[0]
 
+            from core.updater import get_current_version
             return {
                 'os_name': os_info.Caption,
                 'os_version': os_info.Version,
@@ -323,6 +324,7 @@ def get_system_info() -> dict:
                 'cpu_cores': cpu_info.NumberOfCores,
                 'hostname': platform.node(),
                 'platform': platform.platform(),
+                'version': get_current_version(),
                 'hardware_id': get_hardware_id(),
                 'hardware_components': get_hardware_components(),
             }
@@ -330,16 +332,19 @@ def get_system_info() -> dict:
             return {
                 'hostname': platform.node(),
                 'platform': platform.platform(),
+                'version': get_current_version(),
                 'hardware_id': get_hardware_id(),
                 'error': str(e),
             }
     else:
         # Linux / macOS
+        from core.updater import get_current_version
         return {
             'os_name': platform.system(),
             'os_version': platform.release(),
             'hostname': platform.node(),
             'platform': platform.platform(),
+            'version': get_current_version(),
             'hardware_id': get_hardware_id(),
             'hardware_components': get_hardware_components(),
         }

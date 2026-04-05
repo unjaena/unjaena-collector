@@ -278,6 +278,28 @@ def main():
     else:
         shutil.copy(config_source_path, config_dest_path)
 
+    # Inject version from git tag or environment variable
+    import json as _json
+    with open(config_dest_path, 'r', encoding='utf-8') as f:
+        _cfg = _json.load(f)
+    # CI sets GITHUB_REF_NAME=collector-vX.Y.Z
+    _env_version = os.environ.get('GITHUB_REF_NAME', '')
+    if _env_version.startswith('collector-v'):
+        _cfg['version'] = _env_version.replace('collector-v', '')
+        print(f"[BUILD] Version from tag: {_cfg['version']}")
+    elif _cfg.get('version', '0.0.0') == '0.0.0':
+        # Fallback: try git describe
+        try:
+            import subprocess
+            _git_ver = subprocess.check_output(['git', 'describe', '--tags', '--abbrev=0'], text=True).strip()
+            _cfg['version'] = _git_ver.replace('collector-v', '')
+            print(f"[BUILD] Version from git: {_cfg['version']}")
+        except Exception:
+            _cfg['version'] = '2.4.7'
+            print(f"[BUILD] Version fallback: {_cfg['version']}")
+    with open(config_dest_path, 'w', encoding='utf-8') as f:
+        _json.dump(_cfg, f, indent=4)
+
     # Ensure resources directory exists
     resources_dir = collector_dir / "resources"
     resources_dir.mkdir(exist_ok=True)
