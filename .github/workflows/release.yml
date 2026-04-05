@@ -3,7 +3,7 @@ name: Build & Release Collector
 on:
   push:
     tags:
-      - 'collector-v*'   # collector-v2.2.0 형식
+      - 'collector-v*'
 
 permissions:
   contents: write
