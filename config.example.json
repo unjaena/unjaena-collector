@@ -2,7 +2,7 @@
   "_comment": "Example configuration for the forensic collection tool. Copy to config.json before use.",
   "_security_warning": "Set your API key via the COLLECTOR_API_KEY environment variable. Do not store it directly in this file!",
   "server": {
-    "url": "https://your-server.example.com",
+    "url": "https://app.unjaena.com",
     "_api_key_note": "Use the COLLECTOR_API_KEY environment variable. Do not store API keys in this file!",
     "verify_ssl": true,
     "timeout_seconds": 300

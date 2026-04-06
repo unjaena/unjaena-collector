@@ -90,7 +90,8 @@ class ServerSetupDialog(QDialog):
         form = QFormLayout(group)
 
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("https://your-server.example.com")
+        self.url_input.setPlaceholderText("https://app.unjaena.com")
+        self.url_input.setText("https://app.unjaena.com")
         self.url_input.textChanged.connect(self._on_url_changed)
         form.addRow("Server URL:", self.url_input)
 
