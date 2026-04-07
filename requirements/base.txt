@@ -13,7 +13,7 @@
 # To update the lock file, install from this file first, then freeze.
 
 # ── GUI ──────────────────────────────────────────────────────────────────────
-PyQt6>=6.6.0
+PyQt6>=6.6.0,<6.8.0            # 6.8+ Qt6Core.dll crashes on some Windows 11 (c0000409)
 
 # ── HTTP Client ──────────────────────────────────────────────────────────────
 requests>=2.31.0
