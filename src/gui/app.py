@@ -2652,6 +2652,7 @@ class CollectorWindow(QMainWindow):
         self._clear_session_data()
 
         if success:
+            self._collection_completed = True
             self._log(f"Collection completed: {message}")
             self._log("")
             self._log("✅ All evidence has been uploaded to the server.")
@@ -2848,9 +2849,9 @@ class CollectorWindow(QMainWindow):
         if hasattr(self, 'worker') and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait(3000)  # Wait max 3 seconds
-        else:
-            # Notify server if active session exists even without collection
-            # (closed after token auth but before collection start)
+        elif not getattr(self, '_collection_completed', False):
+            # Notify server only if collection was NOT completed
+            # (closed after token auth but before collection start/finish)
             self._notify_server_cancel()
 
         super().closeEvent(event)
