@@ -33,6 +33,11 @@ _ENDPOINTS = {
 }
 
 
+class SessionCancelledError(Exception):
+    """Raised when the server returns 409 (session invalidated/cancelled)."""
+    pass
+
+
 class CreditPausedError(Exception):
     """Raised when the server returns 402 (upload paused by server)."""
     def __init__(self, message: str = "Upload paused by server.", detail: dict = None):
@@ -688,10 +693,21 @@ class DirectUploader:
                     time.sleep(wait)
                     continue
 
+                if response.status_code == 409:
+                    # Session invalidated or case cancelled — do NOT retry
+                    detail = ""
+                    try:
+                        detail = response.json().get("detail", "")
+                    except Exception:
+                        detail = response.text[:200]
+                    raise SessionCancelledError(f"Collection cancelled: {detail}")
+
                 if response.status_code != 200:
                     raise RuntimeError(f"Presigned URL request failed ({response.status_code}): {response.text[:200]}")
 
                 return response.json()
+            except SessionCancelledError:
+                raise  # Don't retry cancelled sessions — propagate immediately
             except RuntimeError:
                 if attempt < max_retries:
                     wait = attempt * 5
@@ -1057,6 +1073,18 @@ class DirectUploader:
             return UploadResult(
                 success=True,
                 artifact_id=confirm_result.get('file_id'),
+            )
+
+        except SessionCancelledError as sce:
+            logger.warning(f"[UPLOAD] Session cancelled by server: {sce}")
+            if encrypted_path and os.path.exists(encrypted_path):
+                os.remove(encrypted_path)
+            return UploadResult(
+                success=False,
+                error="Collection cancelled by server.",
+                error_title="Collection Cancelled",
+                error_solution="The collection was cancelled from the web platform. Please close the collector.",
+                is_recoverable=False,
             )
 
         except CreditPausedError as cpe:

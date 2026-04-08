@@ -3764,7 +3764,7 @@ class CollectionWorker(QThread):
                         success_count += 1
                         self.log_message.emit(f"✓ Upload successful: {filename}", False)
                     else:
-                        if result.error and "CANCELLED" in result.error:
+                        if result.error and ("CANCELLED" in result.error or "cancelled" in result.error.lower()):
                             self.log_message.emit("🛑 Collection cancelled by server. Stopping upload.", True)
                             self._cancelled = True
                         elif result.error and "CLEANUP_IN_PROGRESS" in result.error:
