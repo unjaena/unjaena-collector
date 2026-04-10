@@ -299,7 +299,8 @@ jobs:
   # Release — SHA256 + GitHub Release 생성
   # =========================================================================
   release:
-    needs: [build-windows, build-linux, build-macos-arm64]
+    needs: [build-windows, build-linux]
+    if: always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
