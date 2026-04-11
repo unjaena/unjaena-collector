@@ -1797,34 +1797,44 @@ class ForensicDiskAccessor:
                    f"{len(result['directories'])} directories, "
                    f"{len(result['deleted_files'])} deleted")
 
-        # Calculate full_path (build path by following inode chain)
-        def build_full_path(inode: int, max_depth: int = 50) -> str:
-            """Build full path from inode"""
-            parts = []
+        # Build full paths with parent-chain caching.
+        # Most files share parent directories, so caching intermediate
+        # results avoids redundant traversals (significant speedup on 2M+ entries).
+        path_cache: Dict[int, str] = {}
+
+        def build_full_path_cached(inode: int) -> str:
+            if inode in path_cache:
+                return path_cache[inode]
+            # Walk up the parent chain, collecting nodes until we hit
+            # a cached ancestor or the root
+            chain = []
             current = inode
-            depth = 0
-            while current in inode_info and depth < max_depth:
+            while current in inode_info and current not in path_cache:
                 parent, name = inode_info[current]
-                # [2026-01] Include system folders like $Recycle.Bin in path
-                # NTFS reserved files (inode 0-23) are already separated into special_files
-                if name:
-                    parts.append(name)
+                chain.append((current, name))
                 if parent == current or parent == 5:  # Reached root
                     break
                 current = parent
-                depth += 1
-            parts.reverse()
-            return '/'.join(parts) if parts else ""
+            # Base path from cached ancestor (if any)
+            base = path_cache.get(current, '')
+            # Build and cache paths for every node in the chain (top-down)
+            chain.reverse()
+            current_path = base
+            for entry_inode, name in chain:
+                if name:
+                    current_path = f"{current_path}/{name}" if current_path else name
+                path_cache[entry_inode] = current_path
+            return path_cache.get(inode, '')
 
-        # Set full_path for active_files and deleted_files
+        # Set full_path for all entry lists (directories first for better cache hits)
+        for entry in result['directories']:
+            entry.full_path = build_full_path_cached(entry.inode)
+
         for entry in result['active_files']:
-            entry.full_path = build_full_path(entry.inode)
+            entry.full_path = build_full_path_cached(entry.inode)
 
         for entry in result['deleted_files']:
-            entry.full_path = build_full_path(entry.inode)
-
-        for entry in result['directories']:
-            entry.full_path = build_full_path(entry.inode)
+            entry.full_path = build_full_path_cached(entry.inode)
 
         return result
 

@@ -4282,10 +4282,7 @@ class LocalMFTCollector(_LocalMFTBase):
                     output_file = artifact_dir / f"{base}_{counter}{suffix}"
                     counter += 1
 
-            # Copy file
-            shutil.copy2(src_path, output_file)
-
-            # Calculate hash (skip for files larger than 100MB to avoid performance hangs)
+            # Single-pass copy + hash (avoid reading file twice)
             MAX_HASH_SIZE = 100 * 1024 * 1024  # 100MB
             stat = src.stat()
             hash_skipped = False
@@ -4293,13 +4290,21 @@ class LocalMFTCollector(_LocalMFTBase):
             if stat.st_size <= MAX_HASH_SIZE:
                 md5_hash = hashlib.md5()
                 sha256_hash = hashlib.sha256()
-                with open(output_file, 'rb') as f:
-                    for chunk in iter(lambda: f.read(65536), b''):
+                with open(src_path, 'rb') as f_in, open(output_file, 'wb') as f_out:
+                    while True:
+                        chunk = f_in.read(65536)
+                        if not chunk:
+                            break
+                        f_out.write(chunk)
                         md5_hash.update(chunk)
                         sha256_hash.update(chunk)
+                # Preserve timestamps after writing
+                shutil.copystat(src_path, str(output_file))
                 md5_hex = md5_hash.hexdigest()
                 sha256_hex = sha256_hash.hexdigest()
             else:
+                # Large files: copy without hashing
+                shutil.copy2(src_path, output_file)
                 md5_hex = ''
                 sha256_hex = ''
                 hash_skipped = True
@@ -4622,6 +4627,7 @@ class ArtifactCollector:
             'by_extension': {},   # {'.evtx': [entry, ...], '.pf': [entry, ...]}
             'by_filename': {},    # {'ntuser.dat': [entry, ...]}
             'no_extension': [],   # entries without file extension
+            'has_ads': [],        # entries with Alternate Data Streams
         }
 
         all_files = list(scan_result.get('active_files', []))
@@ -4647,11 +4653,16 @@ class ArtifactCollector:
                 index['by_filename'][filename_lower] = []
             index['by_filename'][filename_lower].append(entry)
 
+            # Index entries with Alternate Data Streams (Zone.Identifier, etc.)
+            if hasattr(entry, 'ads_streams') and entry.ads_streams:
+                index['has_ads'].append(entry)
+
         ext_count = sum(len(v) for v in index['by_extension'].values())
         _debug_print(
             f"[ForensicDisk] Scan index built: "
             f"{len(index['by_extension'])} extensions, "
             f"{len(index['by_filename'])} unique filenames, "
+            f"{len(index['has_ads'])} ADS entries, "
             f"{ext_count + len(index['no_extension'])} total entries"
         )
 
@@ -5257,10 +5268,21 @@ class ArtifactCollector:
                 # Use cached scan result (active_files only for Zone.Identifier)
                 if self._scan_cache is None:
                     self._scan_cache = self.forensic_disk_accessor.scan_all_files(include_deleted=True)
-                all_files = self._scan_cache.get('active_files', [])
-                _debug_print(f"[ForensicDisk] Scanning {len(all_files)} active files for Zone.Identifier...")
 
-                for entry in all_files:
+                # Build index if not already built
+                if self._scan_index is None:
+                    self._scan_index = self._build_scan_index(self._scan_cache)
+
+                # Use pre-built ADS index for O(1) lookup instead of scanning all files
+                if self._scan_index and 'has_ads' in self._scan_index:
+                    ads_entries = self._scan_index['has_ads']
+                else:
+                    ads_entries = [e for e in self._scan_cache.get('active_files', [])
+                                   if hasattr(e, 'ads_streams') and e.ads_streams]
+
+                _debug_print(f"[ForensicDisk] Checking {len(ads_entries)} ADS entries for Zone.Identifier...")
+
+                for entry in ads_entries:
                     try:
                         full_path = getattr(entry, 'full_path', '') or ''
                         filename = getattr(entry, 'filename', '') or ''

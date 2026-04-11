@@ -3410,6 +3410,26 @@ class CollectionWorker(QThread):
                     if hasattr(collector, 'close'):
                         _ios_collectors.append(collector)
 
+                    # Pre-warm MFT scan cache so all artifact types use cached data.
+                    # Without this, the first artifact type triggers the full MFT scan
+                    # and index build. Doing it upfront with progress feedback is better UX.
+                    if hasattr(collector, 'forensic_disk_accessor') and collector.forensic_disk_accessor:
+                        self.log_message.emit(f"[{device_name}] Building artifact index...", False)
+                        self.progress_updated.emit(1, 0, 0, f"[{device_name}] Building artifact index...", "")
+                        try:
+                            if hasattr(collector, '_scan_cache') and collector._scan_cache is None:
+                                collector._scan_cache = collector.forensic_disk_accessor.scan_all_files(
+                                    include_deleted=True
+                                )
+                                if hasattr(collector, '_build_scan_index') and collector._scan_index is None:
+                                    collector._scan_index = collector._build_scan_index(collector._scan_cache)
+                                active_count = len(collector._scan_cache.get('active_files', []))
+                                self.log_message.emit(
+                                    f"[{device_name}] Index ready: {active_count} files", False
+                                )
+                        except Exception as e:
+                            self.log_message.emit(f"[{device_name}] Index build skipped: {e}", True)
+
                     for artifact_type in self.artifacts:
                         if self._cancelled:
                             break
