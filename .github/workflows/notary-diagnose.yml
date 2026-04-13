@@ -1,0 +1,47 @@
+name: Notary Submission Diagnose
+
+# Manually triggered diagnostic. Pass a comma-separated list of notarization
+# submission UUIDs; the workflow prints the current status and the detailed
+# log JSON for each. Useful when xcrun notarytool --wait times out on the
+# release workflow and we need to see whether Apple actually completed the
+# submission or flagged the binary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      submission_ids:
+        description: 'Comma-separated notarization submission UUIDs'
+        required: true
+        type: string
+
+jobs:
+  diagnose:
+    runs-on: macos-14
+    steps:
+      - name: Query submission status and log
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SUB_IDS: ${{ inputs.submission_ids }}
+        run: |
+          set -u
+          IFS=',' read -ra IDS <<< "$SUB_IDS"
+          for raw in "${IDS[@]}"; do
+            id=$(echo "$raw" | tr -d '[:space:]')
+            [ -z "$id" ] && continue
+            echo "============================================================"
+            echo "Submission: $id"
+            echo "============================================================"
+            echo "--- notarytool info ---"
+            xcrun notarytool info "$id" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+            echo "--- notarytool log (verbose) ---"
+            xcrun notarytool log "$id" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+            echo ""
+          done
