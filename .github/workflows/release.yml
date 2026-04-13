@@ -266,11 +266,15 @@ jobs:
           DMG_FILE=$(ls IntelligenceCollector-*-macos-arm64.dmg 2>/dev/null | head -1)
           if [ -n "$DMG_FILE" ] && [ -n "$APPLE_ID" ]; then
             echo "[NOTARIZE] Submitting $DMG_FILE..."
+            # Apple notarization queue latency occasionally exceeds 30 min
+            # under load (observed one-off > 30m on 2026-04-13). 60m
+            # matches the enclosing job timeout and leaves headroom before
+            # the GitHub Actions runner hard-limits the job.
             xcrun notarytool submit "$DMG_FILE" \
               --apple-id "$APPLE_ID" \
               --password "$APPLE_APP_PASSWORD" \
               --team-id "$APPLE_TEAM_ID" \
-              --wait --timeout 30m
+              --wait --timeout 60m
 
             echo "[NOTARIZE] Stapling ticket..."
             xcrun stapler staple "$DMG_FILE"
