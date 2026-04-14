@@ -385,7 +385,11 @@ jobs:
   # Release — SHA256 checksums + GitHub Release assembly
   # =========================================================================
   release:
-    needs: [build-windows, build-linux]
+    # Wait for macOS too so the DMG (when notarization finishes in-job)
+    # lands in the release alongside the other assets. macOS is not
+    # gated — if notarize times out the DMG goes to a pending artifact
+    # and the release still ships with Windows + Linux.
+    needs: [build-windows, build-linux, build-macos-arm64]
     if: always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
     runs-on: ubuntu-latest
     steps:
