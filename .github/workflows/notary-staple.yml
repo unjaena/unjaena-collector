@@ -1,0 +1,145 @@
+name: Notary Staple Follow-up
+
+# Completes macOS notarization when the main release workflow timed out
+# before Apple finished processing the submission. Locates the pending
+# workflow artifact produced by release.yml, waits for Apple to reach
+# Accepted, staples the ticket, and uploads the stapled DMG to the
+# GitHub Release (refreshing SHA256SUMS.txt to match).
+#
+# Inputs:
+#   tag — release tag that owns the DMG (e.g. collector-v1.0.11)
+#
+# The submission id is read from the artifact, so no manual UUID entry
+# is required.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (for example collector-v1.0.11)'
+        required: true
+        type: string
+
+jobs:
+  staple:
+    runs-on: macos-14
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate release workflow run for this tag
+        id: locate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=push&per_page=50" \
+            --jq ".workflow_runs | map(select(.head_branch == \"$TAG\" and .name == \"Build & Release Collector\")) | .[0].id")
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No release workflow run found for tag $TAG"
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Found run id: $RUN_ID"
+
+      - name: Download pending artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ steps.locate.outputs.run_id }}
+        run: |
+          mkdir -p pending
+          cd pending
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -n macos-arm64-pending
+          ls -la
+
+      - name: Read submission id and wait for Apple
+        id: wait
+        working-directory: pending
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ ! -f submission_id.txt ]; then
+            echo "submission_id.txt missing from artifact"
+            exit 1
+          fi
+          SUBMISSION_ID=$(tr -d '[:space:]' < submission_id.txt)
+          if [ -z "$SUBMISSION_ID" ]; then
+            echo "submission id is empty"
+            exit 1
+          fi
+          echo "Waiting for submission $SUBMISSION_ID"
+
+          # Poll every 5 min for up to 5 hours. Apple queue has been
+          # observed to finish within 20h; manual retrigger is cheap.
+          for i in $(seq 1 60); do
+            STATUS=$(xcrun notarytool info "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" 2>&1 | awk -F': ' '/^  status:/{print $2; exit}')
+            echo "[$i/60] status=$STATUS"
+            case "$STATUS" in
+              Accepted)
+                echo "accepted=true" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              Invalid|Rejected)
+                echo "Notarization failed: $STATUS"
+                xcrun notarytool log "$SUBMISSION_ID" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_APP_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" || true
+                exit 1
+                ;;
+            esac
+            sleep 300
+          done
+          echo "Timed out — re-run this workflow later with the same tag."
+          exit 1
+
+      - name: Staple ticket
+        if: steps.wait.outputs.accepted == 'true'
+        working-directory: pending
+        run: |
+          DMG=$(ls IntelligenceCollector-*-macos-arm64.dmg | head -1)
+          if [ -z "$DMG" ]; then
+            echo "No DMG found in pending artifact"
+            exit 1
+          fi
+          echo "Stapling $DMG"
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
+      - name: Refresh SHA256SUMS and upload to release
+        if: steps.wait.outputs.accepted == 'true'
+        working-directory: pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          DMG=$(ls IntelligenceCollector-*-macos-arm64.dmg | head -1)
+          NEW_HASH=$(shasum -a 256 "$DMG" | awk '{print $1}')
+          echo "New DMG sha256: $NEW_HASH"
+
+          # Pull the current SHA256SUMS.txt, drop any prior DMG line, add
+          # the fresh hash, and upload both files back to the release.
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "SHA256SUMS.txt" --clobber || true
+
+          if [ -f SHA256SUMS.txt ]; then
+            awk -v dmg="$DMG" '$2 != dmg { print }' SHA256SUMS.txt > SHA256SUMS.new
+            mv SHA256SUMS.new SHA256SUMS.txt
+          else
+            : > SHA256SUMS.txt
+          fi
+          printf '%s  %s\n' "$NEW_HASH" "$DMG" >> SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$DMG" SHA256SUMS.txt
+          TAR=$(ls IntelligenceCollector-*-macos-arm64.tar.gz 2>/dev/null | head -1)
+          if [ -n "$TAR" ]; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$TAR"
+          fi
+          echo "Release $TAG now contains the stapled macOS DMG."
