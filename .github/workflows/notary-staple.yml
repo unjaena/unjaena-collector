@@ -19,11 +19,21 @@ on:
         description: 'Release tag (for example collector-v1.0.11)'
         required: true
         type: string
+      arch:
+        description: 'Architecture to resume (arm64 or x86_64)'
+        required: true
+        type: choice
+        options:
+          - arm64
+          - x86_64
+        default: arm64
 
 jobs:
   staple:
     runs-on: macos-14
     timeout-minutes: 330
+    env:
+      ARCH: ${{ inputs.arch }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +59,7 @@ jobs:
         run: |
           mkdir -p pending
           cd pending
-          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -n macos-arm64-pending
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -n macos-${{ inputs.arch }}-pending
           ls -la
 
       - name: Read submission id and wait for Apple
@@ -102,7 +112,7 @@ jobs:
         if: steps.wait.outputs.accepted == 'true'
         working-directory: pending
         run: |
-          DMG=$(ls IntelligenceCollector-*-macos-arm64.dmg | head -1)
+          DMG=$(ls IntelligenceCollector-*-macos-${ARCH}.dmg | head -1)
           if [ -z "$DMG" ]; then
             echo "No DMG found in pending artifact"
             exit 1
@@ -118,7 +128,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: |
-          DMG=$(ls IntelligenceCollector-*-macos-arm64.dmg | head -1)
+          DMG=$(ls IntelligenceCollector-*-macos-${ARCH}.dmg | head -1)
           NEW_HASH=$(shasum -a 256 "$DMG" | awk '{print $1}')
           echo "New DMG sha256: $NEW_HASH"
 
@@ -138,7 +148,7 @@ jobs:
 
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             "$DMG" SHA256SUMS.txt
-          TAR=$(ls IntelligenceCollector-*-macos-arm64.tar.gz 2>/dev/null | head -1)
+          TAR=$(ls IntelligenceCollector-*-macos-${ARCH}.tar.gz 2>/dev/null | head -1)
           if [ -n "$TAR" ]; then
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$TAR"
           fi
