@@ -18,8 +18,8 @@ First public release.
 - Optional physical memory acquisition via user-supplied WinPmem binary
 - PyQt6 graphical interface with multi-language support
 - AES-256-GCM encrypted upload channel with TLS certificate verification in production
-- Per-file SHA-256 hashing and integrity verification at upload
-- Ed25519-signed operator consent receipt bound to each collection run
+- Per-file SHA-256 hashing bound as additional authenticated data to the encrypted upload
+- Operator consent record with HMAC-SHA256 integrity tag over the user's selections
 
 ### Security
 - Apple Developer ID signing and notarization for the macOS build
@@ -31,4 +31,5 @@ First public release.
 - Windows and Linux builds are not yet Authenticode / package-signed; verify via `SHA256SUMS.txt`
 - Memory acquisition requires the operator to supply `winpmem_mini_x64.exe` separately (Apache-2.0 upstream)
 - Output archive does not yet include a canonical manifest JSON file with per-artifact metadata; this is planned for a future release
+- Server-side verification of the operator consent record is not yet wired into the release build. The HMAC tag provides tamper-evidence at archive rest, but a cryptographic binding of the consent record to a specific analysis session is planned for a future release.
 - No third-party security audit has been performed on this release

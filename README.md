@@ -58,7 +58,7 @@ When you run a collection and choose to upload to the analysis platform, the fol
 - The collected artifact archive (AES-256-GCM encrypted in transit)
 - Host identifier derived from `COMPUTERNAME` / `HOSTNAME` environment variables
 - Collection start/end timestamps and per-file SHA-256 hashes
-- Operator consent receipt signed with `CONSENT_SIGNING_KEY` (if configured)
+- Operator consent record (the user's consent selections, timestamp, and an HMAC-SHA256 integrity tag over the record contents)
 
 The following are **never transmitted**:
 
@@ -163,7 +163,6 @@ The production build reads `config.json` for `server_url` / `ws_url` / `dev_mode
 | `FORENSIC_DEV_MODE` | Allow plain HTTP/WS for local testing | `false` |
 | `FORENSIC_VERIFY_SSL` | Verify server TLS certificate | `true` |
 | `COLLECTOR_DEV_MODE` | Enable GUI development hints | `false` |
-| `CONSENT_SIGNING_KEY` | Ed25519 private key for signing the operator consent receipt (base64) | auto-generated per run when unset |
 
 ### Config File (`config.json`)
 
@@ -175,11 +174,11 @@ See `config.example.json` for all available options including:
 
 ## Security
 
-- **AES-256-GCM** authenticated encryption for all file transfers
+- **AES-256-GCM** authenticated encryption for all file transfers, with the per-file SHA-256 hash bound as additional authenticated data
 - **SHA-256** file integrity verification for every collected artifact
-- **HTTPS/WSS enforced** in production mode with TLS certificate verification
-- **One-time session tokens** with replay prevention
-- **Operator consent receipt** is signed (Ed25519) and bound to the collection run
+- **HTTPS/WSS enforced** in production (PyInstaller) builds — TLS verification cannot be disabled at runtime; the dev-mode and `FORENSIC_VERIFY_SSL` flags apply only to source builds
+- **One-time session tokens** with replay prevention (used-token set with expiry)
+- **Operator consent record** captured with HMAC-SHA256 integrity tag over the user's selections, timestamp, and hostname hash. Server-side verification of this record against an analysis session is planned for a future release (see CHANGELOG.md, Known Limitations).
 
 For details, see [SECURITY.md](SECURITY.md).
 
