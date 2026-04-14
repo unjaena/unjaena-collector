@@ -1,5 +1,5 @@
 # Forensic Collector - Windows dependencies (backward compatibility)
-# License: GPL-3.0 (due to pymobiledevice3 dependency)
+# License: AGPL-3.0 (project license — see LICENSE)
 #
 # This file is kept for backward compatibility.
 # For cross-platform usage, see requirements/ directory:

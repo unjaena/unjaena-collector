@@ -27,15 +27,46 @@ Cross-platform digital forensic artifact collection tool with GUI. Collects evid
 ## Features
 
 - **Windows Forensics**: MFT, registry, prefetch, event logs, browser history, USB artifacts
-- **Memory Forensics**: Physical memory acquisition (WinPmem), hibernation/pagefile analysis
-- **Android Forensics**: USB direct collection via ADB protocol (no external ADB binary required)
-- **iOS Forensics**: USB direct backup and artifact extraction via pymobiledevice3
+- **Memory Acquisition**: Raw read of pagefile and hiberfil (optional physical-memory acquisition via user-supplied WinPmem binary)
+- **Android Forensics**: USB collection via ADB protocol (no external ADB binary required)
+- **iOS Forensics**: USB backup and artifact extraction via pymobiledevice3
 - **macOS / Linux Forensics**: System logs, user artifacts, browser data, shell history
 - **Disk Image Support**: E01 (Expert Witness Format), RAW image analysis
-- **BitLocker Support**: Encrypted volume access with recovery key/password/BEK
+- **BitLocker Support**: Encrypted volume access with operator-provided recovery credentials
 - **Secure Upload**: AES-256-GCM encrypted transfer
-- **Chain of Custody**: SHA-256 integrity verification with tamper-evident logging
+- **Collection Integrity**: Per-file SHA-256 hashing with integrity verification on upload
 - **Multi-language GUI**: PyQt6 interface with i18n support
+
+## Legal Notice
+
+This software is provided strictly for **authorized forensic activities** — including but not limited to in-house incident response, contracted penetration testing, and authorized digital investigations. You are solely responsible for ensuring that you have the legal authority to run this tool against any target system, and for complying with all applicable laws and regulations in your jurisdiction.
+
+The maintainers disclaim any liability arising from unauthorized or unlawful use.
+
+This tool is **not purpose-built for court-admissible evidence collection**. If you intend to use the collected data in legal proceedings, consult with qualified counsel and apply organizational chain-of-custody procedures external to this tool.
+
+### AGPL-3.0 Network Use
+
+This project is distributed under the GNU Affero General Public License v3.0. Because the AGPL treats network interaction as a form of distribution (§13), if you modify this collector and allow third parties to interact with your modified version — for example by operating an analysis service that receives uploads from the modified client — you must make the corresponding source of the modified client available to those users under the same license.
+
+The AGPL obligation applies to this collector only. The separate server-side analysis platform is independently developed and is not a covered work of this repository.
+
+## Privacy and Data Handling
+
+When you run a collection and choose to upload to the analysis platform, the following is transmitted over the encrypted channel:
+
+- The collected artifact archive (AES-256-GCM encrypted in transit)
+- Host identifier derived from `COMPUTERNAME` / `HOSTNAME` environment variables
+- Collection start/end timestamps and per-file SHA-256 hashes
+- Operator consent receipt signed with `CONSENT_SIGNING_KEY` (if configured)
+
+The following are **never transmitted**:
+
+- Plaintext session tokens (only SHA-256 hashes are logged)
+- Locally entered BitLocker recovery credentials (used in-memory only)
+- Your API key or server URL beyond the upload handshake
+
+The collector performs no background telemetry; network activity is limited to the explicit upload you initiate. Data retention on the analysis platform is governed by that platform's privacy policy, independent of this repository.
 
 ## Download
 
@@ -55,11 +86,11 @@ Pre-built binaries are available on the [Releases](https://github.com/unjaena/un
 
 ### External Dependencies (not included)
 
-| Tool | Purpose | License | Download |
-|------|---------|---------|----------|
-| WinPmem | Memory acquisition | Apache 2.0 | [GitHub](https://github.com/Velocidex/WinPmem/releases) |
-| libimobiledevice | iOS device communication | LGPL 2.1 | Auto-downloaded via `build.py` |
-| libusb | USB device access | LGPL 2.1 | Installed via `pip install libusb1` |
+| Tool | Purpose | License | How to obtain |
+|------|---------|---------|----------------|
+| WinPmem | Physical memory acquisition (optional) | Apache 2.0 | Download `winpmem_mini_x64.exe` from the [WinPmem releases](https://github.com/Velocidex/WinPmem/releases) page and place it in `resources/` before building. |
+| libimobiledevice | iOS device communication | LGPL 2.1 | Run `python tools/download_libimobiledevice.py` once before the first iOS collection. |
+| libusb | USB device access | LGPL 2.1 | Installed via `pip install libusb1` as part of requirements. |
 
 ## Installation
 
@@ -84,20 +115,19 @@ cp config.example.json config.json
 ### iOS Collection Setup
 
 ```bash
-# Download libimobiledevice binaries (Windows)
+# Download libimobiledevice binaries (Windows only; macOS/Linux use system libimobiledevice)
 python tools/download_libimobiledevice.py
 
-# Or use pymobiledevice3 directly (cross-platform)
-pip install pymobiledevice3
+# pymobiledevice3 is installed automatically via requirements
 ```
 
 ### Android Collection Setup
 
-USB drivers are handled automatically via `adb-shell[usb]` and `libusb1` packages. No external ADB binary required.
+USB drivers are handled via the `adb-shell[usb]` and `libusb1` packages. On Windows you may additionally need [Zadig](https://zadig.akeo.ie/) to bind the WinUSB driver to the target device — note that Zadig changes the driver at the system level, which can affect other USB devices. See [`resources/USB_DEPENDENCIES.md`](resources/USB_DEPENDENCIES.md) for details.
 
-### Memory Acquisition Setup
+### Memory Acquisition Setup (optional)
 
-Download `winpmem_mini_x64.exe` from [WinPmem releases](https://github.com/Velocidex/WinPmem/releases) and place it in `resources/`.
+Physical memory acquisition is opt-in and requires a user-supplied WinPmem binary. Download `winpmem_mini_x64.exe` from [WinPmem releases](https://github.com/Velocidex/WinPmem/releases) and place it in `resources/` before building. Without this file, memory acquisition is skipped and only pagefile/hiberfil raw reads are attempted.
 
 ## Usage
 
@@ -110,15 +140,17 @@ python src/main.py
 ### Build Standalone Executable
 
 ```bash
-# Development build
+# Development build (uses config.json or defaults)
 python build.py --development
 
-# Production build (requires HTTPS server URL)
-python build.py --production --server-url https://your-server.com
+# Production build (expects a populated config.json alongside the script)
+python build.py --production
 
-# Check dependencies before building
+# Check bundled dependencies
 python build.py --check-deps
 ```
+
+The production build reads `config.json` for `server_url` / `ws_url` / `dev_mode` / `allow_insecure`. Copy `config.example.json` to `config.json` and edit before building. (The GitHub Actions release workflow generates a `config.production.json` at build time from the `PRODUCTION_SERVER_URL` secret — that file is not required for local builds.)
 
 ## Configuration
 
@@ -126,9 +158,12 @@ python build.py --check-deps
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `COLLECTOR_SERVER_URL` | Server endpoint | — |
-| `COLLECTOR_WS_URL` | WebSocket endpoint | — |
-| `COLLECTOR_DEV_MODE` | Enable development mode | `false` |
+| `FORENSIC_SERVER_URL` | Analysis server HTTPS endpoint | read from `config.json` |
+| `FORENSIC_API_KEY` | API authentication key | read from `config.json` |
+| `FORENSIC_DEV_MODE` | Allow plain HTTP/WS for local testing | `false` |
+| `FORENSIC_VERIFY_SSL` | Verify server TLS certificate | `true` |
+| `COLLECTOR_DEV_MODE` | Enable GUI development hints | `false` |
+| `CONSENT_SIGNING_KEY` | Ed25519 private key for signing the operator consent receipt (base64) | auto-generated per run when unset |
 
 ### Config File (`config.json`)
 
@@ -141,10 +176,10 @@ See `config.example.json` for all available options including:
 ## Security
 
 - **AES-256-GCM** authenticated encryption for all file transfers
-- **SHA-256** file integrity verification
+- **SHA-256** file integrity verification for every collected artifact
 - **HTTPS/WSS enforced** in production mode with TLS certificate verification
 - **One-time session tokens** with replay prevention
-- **Chain of custody** logging with tamper-evident audit trail
+- **Operator consent receipt** is signed (Ed25519) and bound to the collection run
 
 For details, see [SECURITY.md](SECURITY.md).
 

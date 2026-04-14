@@ -40,17 +40,18 @@ If you discover a security vulnerability in this project, please report it respo
 - Token values never logged in plaintext (SHA-256 hash used for debug)
 
 ### Data Handling
-- Collected artifacts encrypted before upload
-- Chain of custody with per-entry SHA-256 integrity logging
+- Collected artifacts encrypted before upload (AES-256-GCM)
+- Per-file SHA-256 hashing with integrity verification at upload time
 - No credentials stored in application code or config templates
 - All sensitive configuration via environment variables
+- Operator consent receipt is signed with Ed25519 and retained alongside the archive
 
 ## Supported Versions
 
 | Version | Supported |
 |---------|-----------|
-| 2.x     | Yes       |
-| 1.x     | No        |
+| 1.0.x   | Yes       |
+| < 1.0   | No        |
 
 ## Scope
 
