@@ -21,7 +21,7 @@ import hashlib
 import logging
 import fnmatch
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Generator, Tuple, Dict, Any, Optional, List
 
 # macOS artifact filters for auto-registration in ARTIFACT_TYPES
@@ -2911,6 +2911,186 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
+    # [2026-04-21] Tier S expansion — Windows
+    # =========================================================================
+    'credential_manager_vault': {
+        'name': 'Windows Credential Manager Vault',
+        'description': (
+            'Windows Credential Manager vault directory files: '
+            'Policy.vpol, *.vsch schemas, *.vcrd records, plus '
+            'generic credential files under Credentials. Inventory '
+            'headers only — record bodies are processed by downstream '
+            'server components.'
+        ),
+        'paths': [
+            r'%LOCALAPPDATA%\Microsoft\Vault\*\*',
+            r'%APPDATA%\Microsoft\Vault\*\*',
+            r'%LOCALAPPDATA%\Microsoft\Credentials\*',
+            r'%APPDATA%\Microsoft\Credentials\*',
+            r'C:\Windows\System32\config\systemprofile\AppData\Local\Microsoft\Vault\*\*',
+            r'C:\Windows\System32\config\systemprofile\AppData\Roaming\Microsoft\Vault\*\*',
+        ],
+        'mft_config': {
+            'user_paths': [
+                'AppData/Local/Microsoft/Vault',
+                'AppData/Roaming/Microsoft/Vault',
+                'AppData/Local/Microsoft/Credentials',
+                'AppData/Roaming/Microsoft/Credentials',
+            ],
+            'recursive': True,
+        },
+        'requires_admin': True,
+        'collector': 'collect_user_files',
+        'forensic_value': (
+            'Vault inventory per user SID; schema friendly names; '
+            'record last-written timestamps; generic credential '
+            'file presence'
+        ),
+    },
+    'credential_protection_blobs': {
+        'name': 'Windows User Protection Blobs',
+        'description': (
+            'Binary protection blob files under Roaming\\Microsoft\\'
+            'Protect. Structural inventory only — filename, size, '
+            'timestamps. Required as dependency input for downstream '
+            'credential-store processing.'
+        ),
+        'paths': [
+            r'%APPDATA%\Microsoft\Protect\*',
+            r'%APPDATA%\Microsoft\Protect\S-1-5-21-*\*',
+            r'C:\Windows\System32\Microsoft\Protect\S-1-5-18\*',
+            r'C:\Windows\System32\Microsoft\Protect\S-1-5-18\User\*',
+        ],
+        'mft_config': {
+            'user_paths': [
+                'AppData/Roaming/Microsoft/Protect',
+            ],
+            'recursive': True,
+        },
+        'requires_admin': True,
+        'collector': 'collect_user_files',
+        'forensic_value': (
+            'Structural presence of per-user and machine-scope '
+            'protection stores; inventory for downstream dependency '
+            'resolution'
+        ),
+    },
+    'defender_operational_log': {
+        'name': 'Microsoft Defender Operational Log (MPLog)',
+        'description': (
+            'Microsoft Defender operational text logs under '
+            'ProgramData. Captures process executions, scan results, '
+            'detections, and Behavior Monitoring telemetry. UTF-16 '
+            'LE encoded with rolling retention.'
+        ),
+        'paths': [
+            r'C:\ProgramData\Microsoft\Windows Defender\Support\MPLog-*.log',
+            r'C:\ProgramData\Microsoft\Windows Defender\Support\MPLog-*.log.*',
+        ],
+        'mft_config': {
+            'base_path': 'ProgramData/Microsoft/Windows Defender/Support',
+            'pattern': 'MPLog-*.log*',
+        },
+        'requires_admin': True,
+        'collector': 'collect_locked_files',
+        'forensic_value': (
+            'Process execution trace, scan hits, behaviour rule hits, '
+            'remediation actions'
+        ),
+    },
+    'teams_v2_local_cache': {
+        'name': 'Microsoft Teams v2 Local Cache',
+        'description': (
+            'New Teams (MSIX) Chromium LevelDB + IndexedDB stores '
+            'containing messages, meetings, call logs, contacts, and '
+            'file-transfer metadata. Collects both EBWebView IndexedDB '
+            'and Local Storage LevelDB plus the sibling blob directory.'
+        ),
+        'paths': [
+            r'%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\WV2Profile_tfw\IndexedDB\*\*',
+            r'%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\WV2Profile_tfw\Local Storage\leveldb\*',
+            r'%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\WV2Profile_tfw\Session Storage\*',
+            r'%APPDATA%\Microsoft\Teams\IndexedDB\*\*',
+            r'%APPDATA%\Microsoft\Teams\Local Storage\leveldb\*',
+        ],
+        'mft_config': {
+            'user_paths': [
+                'AppData/Local/Packages/MSTeams_8wekyb3d8bbwe/LocalCache/Microsoft/MSTeams',
+                'AppData/Roaming/Microsoft/Teams',
+            ],
+            'recursive': True,
+        },
+        'requires_admin': False,
+        'collector': 'collect_user_files',
+        'forensic_value': (
+            'Messages (verbatim content + thread + sender), meeting '
+            'records (participants + subject + time), call logs '
+            '(duration + direction + type), contact roster, file-'
+            'transfer attachments (SharePoint URLs — exfil evidence)'
+        ),
+    },
+    'onedrive_sync_log': {
+        'name': 'OneDrive Sync Logs + Snapshots',
+        'description': (
+            'OneDrive operational logs under LocalAppData\\Microsoft\\'
+            'OneDrive\\logs\\<account>\\ including ODL rolling files, '
+            'general.keystore, SyncDiagnostics.log, and UserCid .dat '
+            'folder-tree snapshots under settings\\<account>\\. '
+            'Activity window, file counts, keystore pairing.'
+        ),
+        'paths': [
+            r'%LOCALAPPDATA%\Microsoft\OneDrive\logs\*\*.odl',
+            r'%LOCALAPPDATA%\Microsoft\OneDrive\logs\*\*.odlgz',
+            r'%LOCALAPPDATA%\Microsoft\OneDrive\logs\*\*.odlsent',
+            r'%LOCALAPPDATA%\Microsoft\OneDrive\logs\*\*.aold',
+            r'%LOCALAPPDATA%\Microsoft\OneDrive\logs\*\general.keystore',
+            r'%LOCALAPPDATA%\Microsoft\OneDrive\logs\*\SyncDiagnostics.log',
+            r'%LOCALAPPDATA%\Microsoft\OneDrive\settings\*\*.dat',
+            r'%LOCALAPPDATA%\Microsoft\OneDrive\settings\*\*.dat.previous',
+        ],
+        'mft_config': {
+            'user_paths': [
+                'AppData/Local/Microsoft/OneDrive/logs',
+                'AppData/Local/Microsoft/OneDrive/settings',
+            ],
+            'recursive': True,
+        },
+        'requires_admin': False,
+        'collector': 'collect_user_files',
+        'forensic_value': (
+            'OneDrive activity window, per-account file operation '
+            'inventory, cloud-exfiltration evidence'
+        ),
+    },
+    'chrome_state_file': {
+        'name': 'Chromium Local State',
+        'description': (
+            'Chromium Local State JSON for installed browsers '
+            '(Chrome / Edge / Brave). Profile inventory, signed-in '
+            'accounts, last active timestamps.'
+        ),
+        'paths': [
+            r'%LOCALAPPDATA%\Google\Chrome\User Data\Local State',
+            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Local State',
+            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Local State',
+        ],
+        'mft_config': {
+            'user_paths': [
+                'AppData/Local/Google/Chrome/User Data',
+                'AppData/Local/Microsoft/Edge/User Data',
+                'AppData/Local/BraveSoftware/Brave-Browser/User Data',
+            ],
+            'files': ['Local State'],
+        },
+        'requires_admin': False,
+        'collector': 'collect_user_files',
+        'forensic_value': (
+            'Profile inventory, signed-in account hints, last-active '
+            'timestamps per browser profile'
+        ),
+    },
+
+    # =========================================================================
     # Linux Forensics Artifacts (Phase 3.1)
     # =========================================================================
     'linux_auth_log': {
@@ -2991,6 +3171,69 @@ ARTIFACT_TYPES = {
         'forensic_value': 'critical',
         'mitre_attack': 'T1078',
         'kill_chain_phase': 'initial_access',
+        'collector': 'collect_linux',
+    },
+
+    # =========================================================================
+    # [2026-04-21] Tier S expansion — Linux
+    # =========================================================================
+    'linux_systemd_journal': {
+        'name': 'Linux systemd Journal',
+        'description': (
+            'Binary journal files written by systemd-journald under '
+            '/var/log/journal/<machine-id>/. Structured logs covering '
+            'all systemd-managed services including sshd, sudo, '
+            'polkit, and audit forwards.'
+        ),
+        'category': 'linux',
+        'paths': [
+            '/var/log/journal/*/*.journal',
+            '/var/log/journal/*/*.journal~',
+            '/run/log/journal/*/*.journal',
+        ],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1078',
+        'kill_chain_phase': 'initial_access',
+        'requires_admin': True,
+        'collector': 'collect_linux',
+    },
+    'linux_auditd_log': {
+        'name': 'Linux Audit Log (auditd)',
+        'description': (
+            'Kernel audit subsystem text log plus rotated and '
+            'gzipped siblings (/var/log/audit/audit.log*).'
+        ),
+        'category': 'linux',
+        'paths': [
+            '/var/log/audit/audit.log',
+            '/var/log/audit/audit.log.*',
+        ],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1059.004',
+        'kill_chain_phase': 'execution',
+        'requires_admin': True,
+        'collector': 'collect_linux',
+    },
+    'linux_container_state': {
+        'name': 'Linux Container State (Docker / Podman)',
+        'description': (
+            'Docker and Podman container configuration files and '
+            'stdio log files. Captures runtime images, mounts, '
+            'security flags, and container output.'
+        ),
+        'category': 'linux',
+        'paths': [
+            '/var/lib/docker/containers/*/config.v2.json',
+            '/var/lib/docker/containers/*/hostconfig.json',
+            '/var/lib/docker/containers/*/*-json.log',
+            '/var/lib/docker/image/overlay2/repositories.json',
+            '/var/lib/containers/storage/overlay-containers/containers.json',
+            '/home/*/.local/share/containers/storage/overlay-containers/containers.json',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1610',
+        'kill_chain_phase': 'execution',
+        'requires_admin': True,
         'collector': 'collect_linux',
     },
 
@@ -3085,6 +3328,58 @@ ARTIFACT_TYPES = {
         'forensic_value': 'critical',
         'mitre_attack': 'T1555.001',
         'kill_chain_phase': 'credential_access',
+        'collector': 'collect_macos',
+    },
+
+    # =========================================================================
+    # [2026-04-21] Tier S expansion — macOS
+    # =========================================================================
+    'macos_xprotect_remediator_db': {
+        'name': 'macOS XProtect Behavior DB',
+        'description': (
+            'Apple XProtect Behavior Service database (XPdb) — '
+            'Ventura 13+ detection events from built-in behavior '
+            'rules. SIP-protected; requires root + Full Disk Access.'
+        ),
+        'category': 'macos',
+        'paths': [
+            '/var/protected/xprotect/XPdb',
+            '/private/var/protected/xprotect/XPdb',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': '',
+        'kill_chain_phase': 'defense_evasion',
+        'requires_admin': True,
+        'collector': 'collect_macos',
+    },
+
+    'macos_biome_stream': {
+        'name': 'macOS / iOS Biome streams',
+        'description': (
+            "Apple's pattern-of-life framework (macOS Ventura 13+, "
+            'iOS 15+). SEGB binary files under Biome/streams/ hold '
+            'notification, Safari history, location inference, and '
+            'device-pairing events. Supports both SEGB v1 and v2 '
+            'container formats. Valuable for user-activity timeline '
+            'reconstruction.'
+        ),
+        'category': 'macos',
+        'paths': [
+            # macOS: per-user Biome + system Biome
+            '/Users/*/Library/Biome/streams/*/*/local/*',
+            '/Users/*/Library/Biome/streams/*/*/remote/*',
+            '/Users/*/Library/Biome/streams/*/*/metadata.plist',
+            '/var/db/Biome/streams/*/*/local/*',
+            '/var/db/Biome/streams/*/*/remote/*',
+            '/private/var/db/Biome/streams/*/*/local/*',
+            # iOS backup / image paths (when mounted)
+            '/private/var/mobile/Library/Biome/streams/*/*/local/*',
+            '/private/var/mobile/Library/Biome/streams/*/*/remote/*',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1005',
+        'kill_chain_phase': 'collection',
+        'requires_admin': True,
         'collector': 'collect_macos',
     },
 
@@ -4317,8 +4612,8 @@ class LocalMFTCollector(_LocalMFTBase):
                 'collection_method': 'directory_fallback',
                 'source': self._get_source_description(),
                 'is_deleted': False,  # Directory fallback cannot collect deleted files
-                'created_time': datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                'modified_time': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                'created_time': datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc).isoformat(),
+                'modified_time': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
                 'collected_at': datetime.now().isoformat(),
                 'warning': 'Collected via directory fallback - deleted files not recoverable',
             }
@@ -6675,9 +6970,9 @@ class ArtifactCollector:
         try:
             stat = src.stat()
             timestamps = {
-                'created': datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                'accessed': datetime.fromtimestamp(stat.st_atime).isoformat(),
+                'created': datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc).isoformat(),
+                'modified': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                'accessed': datetime.fromtimestamp(stat.st_atime, tz=timezone.utc).isoformat(),
             }
         except (OSError, ValueError):
             timestamps = {}

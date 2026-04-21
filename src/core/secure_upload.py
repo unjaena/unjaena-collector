@@ -354,6 +354,21 @@ class SecureUploadManager:
         sha256_local = compute_file_hash(path)
         file_size = path.stat().st_size
 
+        # [2026-04-20] Reject files too large for the single-shot encrypt+read
+        # path to prevent OOM on memory-dump artifacts (4 - 64 GB typical).
+        # Callers should switch to the streaming uploader (DirectUploader)
+        # for large files; this manager targets the small-artifact fast path.
+        _MAX_SINGLESHOT_BYTES = 500 * 1024 * 1024  # 500 MB
+        if file_size > _MAX_SINGLESHOT_BYTES:
+            return UploadResult(
+                success=False,
+                error=(
+                    f"File size {file_size // (1024 * 1024)} MB exceeds the "
+                    f"secure-upload single-shot limit ({_MAX_SINGLESHOT_BYTES // (1024 * 1024)} MB). "
+                    f"Use the streaming uploader for large artifacts (memory dumps, disk images)."
+                ),
+            )
+
         try:
             session = self._get_session()
 

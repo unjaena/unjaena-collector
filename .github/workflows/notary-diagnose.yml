@@ -6,6 +6,10 @@ name: Notary Submission Diagnose
 # release workflow and we need to see whether Apple actually completed the
 # submission or flagged the binary.
 
+# 2026-04-20: read-only  -  this workflow only queries Apple notary status.
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:

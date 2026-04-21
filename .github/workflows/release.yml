@@ -5,8 +5,10 @@ on:
     tags:
       - 'collector-v*'
 
+# 2026-04-20: default deny  -  each job opts into the permissions it needs.
+# Only the release-publishing job gets contents:write.
 permissions:
-  contents: write
+  contents: read
 
 env:
   PYTHON_VERSION: '3.11'
@@ -14,14 +16,14 @@ env:
 
 jobs:
   # =========================================================================
-  # Windows x64 — .exe (PyInstaller onefile)
+  # Windows x64  -  .exe (PyInstaller onefile)
   # =========================================================================
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -78,20 +80,20 @@ jobs:
           mv IntelligenceCollector.exe "IntelligenceCollector-${VERSION}-windows-x64.exe"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: windows-x64
           path: dist/IntelligenceCollector-*-windows-x64.exe
 
   # =========================================================================
-  # Linux x64 — .tar.gz (PyInstaller onefile)
+  # Linux x64  -  .tar.gz (PyInstaller onefile)
   # =========================================================================
   build-linux:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -139,13 +141,13 @@ jobs:
           tar czf "IntelligenceCollector-${VERSION}-linux-x64.tar.gz" IntelligenceCollector
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: linux-x64
           path: dist/IntelligenceCollector-*-linux-x64.tar.gz
 
   # =========================================================================
-  # macOS dual-arch (Apple Silicon + Intel) — two .dmg per release
+  # macOS dual-arch (Apple Silicon + Intel)  -  two .dmg per release
   #
   # Native per-arch runners avoid PyInstaller universal2 binary validation
   # failures (any dep without a universal2 slice aborts the build) and
@@ -164,9 +166,9 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -304,7 +306,7 @@ jobs:
 
           SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('id',''))" 2>/dev/null || true)
           if [ -z "$SUBMISSION_ID" ]; then
-            echo "[NOTARIZE] Submit failed — could not extract submission id"
+            echo "[NOTARIZE] Submit failed  -  could not extract submission id"
             exit 1
           fi
           echo "[NOTARIZE] Submission id: $SUBMISSION_ID"
@@ -357,7 +359,7 @@ jobs:
             echo "[STAPLE] Done."
             echo "accepted=true" >> "$GITHUB_OUTPUT"
           else
-            echo "[NOTARIZE] Timed out waiting for Apple — release will ship Windows/Linux first; run notary-staple workflow once submission reaches Accepted."
+            echo "[NOTARIZE] Timed out waiting for Apple  -  release will ship Windows/Linux first; run notary-staple workflow once submission reaches Accepted."
             echo "accepted=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -366,17 +368,17 @@ jobs:
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
 
-      # Stapled DMG — goes directly into the GitHub Release.
+      # Stapled DMG  -  goes directly into the GitHub Release.
       - name: Upload artifact (stapled DMG)
         if: always() && steps.notarize_poll.outputs.accepted == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: macos-${{ matrix.arch }}
           path: |
             dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.dmg
             dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.tar.gz
 
-      # Unstapled DMG + submission id — consumed by notary-staple.yml.
+      # Unstapled DMG + submission id  -  consumed by notary-staple.yml.
       # Kept out of the GitHub Release so users never download an unsigned
       # artifact by mistake.
       - name: Upload artifact (pending notarization)
@@ -386,7 +388,7 @@ jobs:
           echo "${{ steps.notarize_submit.outputs.submission_id }}" > submission_id.txt
       - name: Upload pending artifact
         if: always() && steps.notarize_submit.outputs.submission_id != '' && steps.notarize_poll.outputs.accepted != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: macos-${{ matrix.arch }}-pending
           retention-days: 14
@@ -396,21 +398,24 @@ jobs:
             dist/submission_id.txt
 
   # =========================================================================
-  # Release — SHA256 checksums + GitHub Release assembly
+  # Release  -  SHA256 checksums + GitHub Release assembly
   # =========================================================================
   release:
     # Wait for macOS too so the DMG (when notarization finishes in-job)
     # lands in the release alongside the other assets. macOS is not
-    # gated — if notarize times out the DMG goes to a pending artifact
+    # gated  -  if notarize times out the DMG goes to a pending artifact
     # and the release still ships with Windows + Linux.
     needs: [build-windows, build-linux, build-macos]
     if: always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
     runs-on: ubuntu-latest
+    # Only this job needs write access to create the GitHub Release.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: release-assets
 
@@ -423,7 +428,7 @@ jobs:
           cat ../SHA256SUMS.txt
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           name: "Intelligence Collector ${{ github.ref_name }}"
           generate_release_notes: true

@@ -7,10 +7,15 @@ name: Notary Staple Follow-up
 # GitHub Release (refreshing SHA256SUMS.txt to match).
 #
 # Inputs:
-#   tag — release tag that owns the DMG (e.g. collector-v1.0.11)
+#   tag  -  release tag that owns the DMG (e.g. collector-v1.0.11)
 #
 # The submission id is read from the artifact, so no manual UUID entry
 # is required.
+
+# 2026-04-20: default deny  -  only the staple job needs contents:write
+# for the upload step; read at workflow level.
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:
@@ -32,10 +37,12 @@ jobs:
   staple:
     runs-on: macos-14
     timeout-minutes: 330
+    permissions:
+      contents: write  # upload stapled DMG to the existing Release
     env:
       ARCH: ${{ inputs.arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Locate release workflow run for this tag
         id: locate
@@ -105,7 +112,7 @@ jobs:
             esac
             sleep 300
           done
-          echo "Timed out — re-run this workflow later with the same tag."
+          echo "Timed out  -  re-run this workflow later with the same tag."
           exit 1
 
       - name: Staple ticket

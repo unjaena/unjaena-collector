@@ -32,7 +32,7 @@ import logging
 import platform
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Generator, Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 
@@ -684,10 +684,9 @@ class macOSCollector:
                 'artifact_type': artifact_type,
                 'original_path': str(path),
                 'file_size': stat_info.st_size,
-                'modified_time': datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
-                'accessed_time': datetime.fromtimestamp(stat_info.st_atime).isoformat(),
-                'created_time': datetime.fromtimestamp(
-                    getattr(stat_info, 'st_birthtime', stat_info.st_ctime)
+                'modified_time': datetime.fromtimestamp(stat_info.st_mtime, tz=timezone.utc).isoformat(),
+                'accessed_time': datetime.fromtimestamp(stat_info.st_atime, tz=timezone.utc).isoformat(),
+                'created_time': datetime.fromtimestamp(getattr(stat_info, 'st_birthtime', stat_info.st_ctime, tz=timezone.utc)
                 ).isoformat(),
                 'hash_sha256': hash_sha256,
                 'forensic_value': config.get('forensic_value', 'medium'),
