@@ -5,6 +5,87 @@
 
 Cross-platform digital forensic artifact collection tool with GUI. Collects evidence from Windows, macOS, Linux, Android, and iOS devices with cryptographic integrity verification and secure upload.
 
+![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)
+![Platforms: Win/macOS/Linux/Android/iOS](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-lightgrey)
+![Languages: KR/EN/JA/ZH](https://img.shields.io/badge/reports-KR%20%7C%20EN%20%7C%20JA%20%7C%20ZH-green)
+![Release](https://img.shields.io/github/v/release/unjaena/unjaena-collector?label=release)
+![Stars](https://img.shields.io/github/stars/unjaena/unjaena-collector?style=social)
+
+## ⚡ Quick Start
+
+```bash
+# Clone and run from source
+git clone https://github.com/unjaena/unjaena-collector.git
+cd unjaena-collector
+pip install -r requirements.txt
+python run.py
+```
+
+Or download a pre-built binary for your platform from [Releases](https://github.com/unjaena/unjaena-collector/releases/latest) (Windows `.exe`, macOS `.dmg`, Linux AppImage).
+
+Configure your upload endpoint in `config.json` (see [Configuration](#configuration)) — defaults to `https://app.unjaena.com` for users of the hosted analysis service.
+
+## 🌟 What's New in v2.4.1 — Tier S 2026 Expansion
+
+**11 new artifact types** covering gaps in Windows 11 24H2, macOS Sequoia, and modern Linux distros. These artifacts had limited or no public collector support prior to this release.
+
+### 🍎 macOS / iOS
+- **`macos_biome_stream`** — Apple pattern-of-life framework streams (Ventura+, iOS 15+). Covers notification, Safari history, location activity, and device-pairing event streams. Full **SEGB v1 + v2** container parser.
+- **`macos_xprotect_remediator_db`** — Apple's built-in behavior-rule detection database (XPdb). Ventura+ only, SIP-protected (requires root + Full Disk Access).
+
+### 🪟 Windows 11 24H2+
+- **`teams_v2_local_cache`** — New Teams (MSIX) Chromium LevelDB cache for messages, calls, meetings, and attachment references.
+- **`credential_manager_vault`** — Windows Credential Manager Vault record structure (`VAULT_VCRD` + attribute map + attribute body). Structure only — credential contents never surfaced.
+- **`credential_protection_blobs`** — Windows credential protection key storage (filename + size + hash inventory only).
+- **`onedrive_sync_log`** — OneDrive client sync activity log records.
+- **`chrome_state_file`** — Chromium Local State profile inventory across Chrome / Edge / Brave / Chromium.
+- **`defender_operational_log`** — Windows Defender MPLog operational events (scans, detections, quarantine).
+
+### 🐧 Linux (modern distros)
+- **`linux_auditd_log`** — Kernel audit records (syscall / execve / login events).
+- **`linux_systemd_journal`** — systemd journal messages across all units.
+- **`linux_container_state`** — Docker + Podman container runtime state snapshots.
+
+See the [v2.4.1 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.1) for full technical details.
+
+## 🆚 Why unjaena-collector?
+
+> *Pricing, license terms, and feature sets reflect publicly available information as of 2026-04-22. See each vendor's official site for the latest details. Comparison is provided for informational purposes only.*
+
+| | **unjaena-collector** | Magnet AXIOM Cyber | Cellebrite Inseyets.PA | Oxygen Detective | Autopsy | Velociraptor |
+|---|---|---|---|---|---|---|
+| **License** | AGPL-3.0 (open) | Commercial (quote-based) | Commercial (quote-based) | Commercial | Apache-2.0 (open) | AGPL-3.0 (open) |
+| **Public pricing** | Free | Not disclosed | Not disclosed | Not disclosed (GSA listed) | Free | Free |
+| **Endpoint OS coverage** | Windows / macOS / Linux / Android / iOS | Windows / macOS / Linux / Android / iOS | Mobile-focused | Windows / macOS / Linux / Mobile | Windows-focused (macOS/Linux limited) | Windows / macOS / Linux |
+| **Report UI languages** | **KO / EN / JA / ZH** (native i18n) | Translation module available (32 lang, extra) | Smart translator add-on (40 lang) | 15+ languages (Korean not listed) | English only (community translations) | English only |
+| **Open source** | ✅ Full source | ❌ | ❌ | ❌ | ✅ Full source | ✅ Full source |
+| **Windows 11 24H2 Tier S artifacts (2026-04)** | ✅ 11 new types shipped | ✅ (per release notes) | Limited (mobile focus) | Partial coverage | Not listed in release notes | VQL-custom (user writes queries) |
+| **Court admissibility certification** | ❌ Not certified (see [Legal Notice](#legal-notice)) | Widely adopted for LE/enterprise | NIST CFTT and other certifications | LE/enterprise adoption | Partial NIST testing | No vendor certification program |
+
+### Honest positioning
+
+**Where unjaena-collector leads**:
+1. **Native 4-language UI and reports** (Korean / English / Japanese / Chinese) — competing tools mostly require paid translation modules or lack Korean entirely.
+2. **Free, AGPL-3.0, cross-platform** with both endpoint and mobile collection — Autopsy is free but macOS/Linux functionality is limited; Velociraptor is endpoint-only with English UI.
+3. **Windows 11 24H2 Tier S coverage** — 11 new artifact parsers (Teams v2, Credential Manager Vault structure, Defender MPLog, OneDrive sync log, etc.) shipped in v2.4.1.
+
+**Where it's comparable**:
+4. **Cross-platform artifact collection** across Windows / macOS / Linux / Android / iOS — Magnet AXIOM Cyber and Oxygen Detective offer similar breadth.
+
+**Where it's honestly behind**:
+5. **No court admissibility certification, no vendor training/certification program, no 24/7 commercial support.** For legal proceedings requiring admissibility, use in parallel with NIST-tested commercial suites. unjaena-collector is appropriate for in-house incident response, authorized investigations, and academic research.
+
+> *Trade names (Magnet AXIOM, Magnet AXIOM Cyber, Cellebrite, UFED, Inseyets, Physical Analyzer, Oxygen Forensic Detective, Autopsy, Velociraptor) are trademarks of their respective owners and are used here solely for factual identification.*
+>
+> *Sources: [Magnet Free Tools](https://www.magnetforensics.com/free-tools/) · [Magnet AXIOM Cyber](https://www.magnetforensics.com/products/magnet-axiom-cyber/) · [Cellebrite licensing](https://cellebrite.com/en/changes-to-cellebrite-licensing-model/) · [Oxygen Forensic Detective](https://www.oxygenforensics.com/products/oxygen-forensic-detective/) · [Autopsy GitHub](https://github.com/sleuthkit/autopsy) · [Velociraptor GitHub](https://github.com/Velocidex/velociraptor).*
+
+## 💬 Community
+
+- **Discord** — *[coming soon]* — Live DFIR discussion and release announcements
+- **Twitter / X** — *[coming soon]* — Technical deep-dives, weekly IOC sharing
+- **GitHub Discussions** — Use the [Discussions tab](https://github.com/unjaena/unjaena-collector/discussions) for Q&A
+- **GitHub Issues** — [Report bugs or request artifact types](https://github.com/unjaena/unjaena-collector/issues)
+
 ## How It Works
 
 ```
