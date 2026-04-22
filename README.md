@@ -3,6 +3,10 @@
 > The official evidence collection tool for the **unJaena AI** forensic analysis platform.
 > Collected artifacts are automatically uploaded for AI-powered analysis including MITRE ATT&CK mapping, timeline reconstruction, and multilingual investigation reports.
 
+<p align="center">
+  <img src="docs/readme-demo.gif" alt="unjaena-collector demo — end-to-end evidence collection in under 30 seconds" width="720" />
+</p>
+
 Cross-platform digital forensic artifact collection tool with GUI. Collects evidence from Windows, macOS, Linux, Android, and iOS devices with cryptographic integrity verification and secure upload.
 
 ![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)
@@ -81,10 +85,9 @@ See the [v2.4.1 release notes](https://github.com/unjaena/unjaena-collector/rele
 
 ## 💬 Community
 
-- **Discord** — *[coming soon]* — Live DFIR discussion and release announcements
-- **Twitter / X** — *[coming soon]* — Technical deep-dives, weekly IOC sharing
-- **GitHub Discussions** — Use the [Discussions tab](https://github.com/unjaena/unjaena-collector/discussions) for Q&A
-- **GitHub Issues** — [Report bugs or request artifact types](https://github.com/unjaena/unjaena-collector/issues)
+- **GitHub Discussions** — [Ask questions or share artifact requests](https://github.com/unjaena/unjaena-collector/discussions)
+- **GitHub Issues** — [Report bugs or propose new artifact types](https://github.com/unjaena/unjaena-collector/issues)
+- **Follow the project** — [LinkedIn profile](https://www.linkedin.com/in/unjaena) for technical deep-dives and release notes
 
 ## How It Works
 
