@@ -383,7 +383,7 @@ class VMDKDiskBackend(UnifiedDiskReader):
             from dissect.hypervisor.disk.vmdk import VMDK
             logger.info(f"Opening VMDK image: {self.image_path}")
             self._fh = open(self.image_path, 'rb')
-            self._vmdk = VMDK(self._fh).open()
+            self._vmdk = VMDK(self._fh)
             self._disk_size = self._vmdk.size
             self._sector_size = 512
             self._is_open = True
@@ -452,7 +452,7 @@ class VHDDiskBackend(UnifiedDiskReader):
             from dissect.hypervisor.disk.vhd import VHD
             logger.info(f"Opening VHD image: {self.image_path}")
             self._fh = open(self.image_path, 'rb')
-            self._vhd = VHD(self._fh).open()
+            self._vhd = VHD(self._fh)
             self._disk_size = self._vhd.size
             self._sector_size = 512
             self._is_open = True
@@ -521,7 +521,7 @@ class VHDXDiskBackend(UnifiedDiskReader):
             from dissect.hypervisor.disk.vhdx import VHDX
             logger.info(f"Opening VHDX image: {self.image_path}")
             self._fh = open(self.image_path, 'rb')
-            self._vhdx = VHDX(self._fh).open()
+            self._vhdx = VHDX(self._fh)
             self._disk_size = self._vhdx.size
             self._sector_size = 512
             self._is_open = True

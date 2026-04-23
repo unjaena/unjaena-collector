@@ -3061,9 +3061,23 @@ class ForensicDiskAccessor:
 
                     read_size = min(size, max_size) if max_size else size
 
-                    # Create runlist stream for reading
+                    # Create runlist stream for reading.
+                    # dissect.fat.ExFAT.runlist() takes a starting cluster
+                    # (int), not the FILE directory entry. For not-fragmented
+                    # files the FAT is not consulted, so we must also pass
+                    # ``size`` so the runlist spans the whole file. For
+                    # fragmented files, size is ignored and the full chain
+                    # is walked.
                     from dissect.fat.exfat import RunlistStream
-                    runlist = self._dissect_fs.runlist(file_entry)
+                    starting_cluster = file_entry.stream.location
+                    not_fragmented = bool(
+                        file_entry.stream.flags.not_fragmented
+                    )
+                    runlist = self._dissect_fs.runlist(
+                        starting_cluster,
+                        not_fragmented=not_fragmented,
+                        size=size if not_fragmented else None,
+                    )
                     fh = RunlistStream(
                         self._dissect_fh, runlist, size,
                         self._dissect_fs.sector_size
@@ -3161,7 +3175,15 @@ class ForensicDiskAccessor:
                         return None
 
                     from dissect.fat.exfat import RunlistStream
-                    runlist = self._dissect_fs.runlist(file_entry)
+                    starting_cluster = file_entry.stream.location
+                    not_fragmented = bool(
+                        file_entry.stream.flags.not_fragmented
+                    )
+                    runlist = self._dissect_fs.runlist(
+                        starting_cluster,
+                        not_fragmented=not_fragmented,
+                        size=size if not_fragmented else None,
+                    )
                     return RunlistStream(
                         self._dissect_fh, runlist, size,
                         self._dissect_fs.sector_size
