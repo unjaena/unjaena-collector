@@ -4,7 +4,15 @@
 > Collected artifacts are automatically uploaded for AI-powered analysis including MITRE ATT&CK mapping, timeline reconstruction, and multilingual investigation reports.
 
 <p align="center">
-  <img src="docs/readme-demo.gif" alt="unjaena-collector demo — end-to-end evidence collection in under 30 seconds" width="720" />
+  <img src="docs/readme-demo-windows.gif" alt="unjaena-collector GUI on Windows - device selection, session token, and artifact picker" width="720" />
+  <br>
+  <sub><em>Windows - GUI</em></sub>
+</p>
+
+<p align="center">
+  <img src="docs/readme-demo.gif" alt="unjaena-collector demo on macOS - end-to-end evidence collection in under 30 seconds" width="720" />
+  <br>
+  <sub><em>macOS - terminal workflow</em></sub>
 </p>
 
 Cross-platform digital forensic artifact collection tool with GUI. Collects evidence from Windows, macOS, Linux, Android, and iOS devices with cryptographic integrity verification and secure upload.
