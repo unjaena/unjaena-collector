@@ -16,6 +16,10 @@ from .case_manifest import (
     CaseManifestWriter,
     NotExtractedRecord,
 )
+from .cellebrite_adapter import (
+    CellebriteAdapter,
+    ResolvedArtifact,
+)
 from .format_detector import (
     FormatDetection,
     FormatID,
@@ -23,6 +27,21 @@ from .format_detector import (
     LOW_CONFIDENCE,
     MEDIUM_CONFIDENCE,
     detect_zip_format,
+)
+from .ios_uuid_resolver import (
+    UUIDMapping,
+    build_uuid_map,
+    resolve_app_path,
+)
+from .path_specs import (
+    ANDROID_PATH_SPECS,
+    AndroidArtifactSpec,
+    ContainerKind,
+    IOS_PATH_SPECS,
+    IOSArtifactSpec,
+    all_artifact_types,
+    find_android_spec_by_path,
+    find_ios_system_spec_by_path,
 )
 from .safe_zip import (
     ContainerSafetyError,
@@ -67,4 +86,20 @@ __all__ = [
     "CaseManifest",
     "CaseManifestWriter",
     "NotExtractedRecord",
+    # path_specs
+    "ANDROID_PATH_SPECS",
+    "AndroidArtifactSpec",
+    "ContainerKind",
+    "IOS_PATH_SPECS",
+    "IOSArtifactSpec",
+    "all_artifact_types",
+    "find_android_spec_by_path",
+    "find_ios_system_spec_by_path",
+    # ios_uuid_resolver
+    "UUIDMapping",
+    "build_uuid_map",
+    "resolve_app_path",
+    # cellebrite_adapter
+    "CellebriteAdapter",
+    "ResolvedArtifact",
 ]
