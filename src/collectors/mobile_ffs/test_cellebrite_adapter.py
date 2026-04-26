@@ -59,8 +59,7 @@ class PathSpecsBasic(unittest.TestCase):
             "Dump/data/data/com.whatsapp/databases/msgstore.db"
         )
         self.assertIsNotNone(spec)
-        self.assertEqual(spec.artifact_type,
-                         "mobile_android_app_database_whatsapp")
+        self.assertEqual(spec.artifact_type, "mobile_android_whatsapp")
 
     def test_android_spec_no_match(self):
         self.assertIsNone(
@@ -98,8 +97,7 @@ class CellebriteAdapterAndroidSynthetic(unittest.TestCase):
                 # All Android specs are reported
                 self.assertGreater(len(resolved), 5)
                 wa = [r for r in resolved
-                      if r.artifact_type ==
-                      "mobile_android_app_database_whatsapp"]
+                      if r.artifact_type == "mobile_android_whatsapp"]
                 self.assertEqual(len(wa), 1)
                 self.assertTrue(wa[0].present)
                 self.assertEqual(
@@ -133,8 +131,7 @@ class CellebriteAdapterAndroidSynthetic(unittest.TestCase):
             ]
             self.assertEqual(len(artifacts), 1)
             self.assertEqual(
-                artifacts[0]["artifact_type"],
-                "mobile_android_app_database_whatsapp",
+                artifacts[0]["artifact_type"], "mobile_android_whatsapp"
             )
 
             not_ext = [
@@ -170,14 +167,10 @@ class CellebriteAdapterRealCorpus(unittest.TestCase):
             artifact_types = {r.artifact_type for r in present}
             # Pixel 7a should at minimum have system telephony +
             # whatsapp + telegram + line + viber (corpus verified).
-            self.assertIn("mobile_android_app_database_whatsapp",
-                          artifact_types)
-            self.assertIn("mobile_android_app_database_telegram",
-                          artifact_types)
-            self.assertIn("mobile_android_app_database_line",
-                          artifact_types)
-            self.assertIn("mobile_android_app_database_viber",
-                          artifact_types)
+            self.assertIn("mobile_android_whatsapp", artifact_types)
+            self.assertIn("mobile_android_telegram", artifact_types)
+            self.assertIn("mobile_android_line", artifact_types)
+            self.assertIn("mobile_android_viber", artifact_types)
 
     def test_hickman_ios_artifacts(self):
         if not Path(self.HICKMAN_IOS).exists():
@@ -192,7 +185,7 @@ class CellebriteAdapterRealCorpus(unittest.TestCase):
             artifact_types = {r.artifact_type for r in present}
             # Core iOS system DBs should be present
             self.assertIn("mobile_ios_sms", artifact_types)
-            self.assertIn("mobile_ios_call_history", artifact_types)
+            self.assertIn("mobile_ios_call", artifact_types)
             self.assertIn("mobile_ios_contacts", artifact_types)
 
     def test_hickman_ios_full_pipeline(self):

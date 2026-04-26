@@ -91,9 +91,12 @@ class IOSArtifactSpec:
 # Android path specs — neutral artifact_type names, public package ids only
 # =============================================================================
 ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
-    # System-level core artifacts (no app package)
+    # System-level core artifacts (no app package). artifact_type values
+    # mirror the server-side ArtifactType enum so the collector ships
+    # uploads with labels that route directly into the existing parser
+    # dispatch table — no enum churn required.
     AndroidArtifactSpec(
-        artifact_type="mobile_android_telephony_sms",
+        artifact_type="mobile_android_sms",
         package="com.android.providers.telephony",
         relative_path="databases/mmssms.db",
         description="Android system SMS/MMS database",
@@ -105,13 +108,13 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
         description="Android system contacts database",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_call_log",
+        artifact_type="mobile_android_call",
         package="com.android.providers.contacts",
         relative_path="databases/calllog.db",
         description="Android call log database",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_calendar",
+        artifact_type="mobile_android_calendar_provider",
         package="com.android.providers.calendar",
         relative_path="databases/calendar.db",
         description="Android calendar provider database",
@@ -124,74 +127,74 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
         description="Android package manager state",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_chrome_history",
+        artifact_type="mobile_android_chrome",
         package="com.android.chrome",
         relative_path="app_chrome/Default/History",
         description="Chrome browser history database",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_samsung_internet_history",
+        artifact_type="mobile_android_samsung_browser",
         package="com.sec.android.app.sbrowser",
         relative_path="app_sbrowser/Default/History",
         description="Samsung Internet browser history",
     ),
-    # Common third-party messengers — bundle IDs are public
+    # Third-party messengers — bundle IDs are public
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_whatsapp",
+        artifact_type="mobile_android_whatsapp",
         package="com.whatsapp",
         relative_path="databases/msgstore.db",
         description="WhatsApp message store",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_telegram",
+        artifact_type="mobile_android_telegram",
         package="org.telegram.messenger",
         relative_path="files/cache4.db",
         description="Telegram cache database",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_line",
+        artifact_type="mobile_android_line",
         package="jp.naver.line.android",
         relative_path="databases/naver_line",
         description="LINE message database",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_viber",
+        artifact_type="mobile_android_viber",
         package="com.viber.voip",
         relative_path="databases/viber_messages",
         description="Viber message database",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_facebook_messenger",
+        artifact_type="mobile_android_facebook_messenger",
         package="com.facebook.orca",
         relative_path="databases/threads_db2",
         description="Facebook Messenger database",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_signal",
+        artifact_type="mobile_android_signal",
         package="org.thoughtcrime.securesms",
         relative_path="databases/signal.db",
         description="Signal message database",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_discord",
+        artifact_type="mobile_android_discord",
         package="com.discord",
         relative_path="cache/STORE.db",
         description="Discord LevelDB store",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_instagram",
+        artifact_type="mobile_android_instagram",
         package="com.instagram.android",
         relative_path="databases/direct.db",
         description="Instagram direct messages",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_snapchat",
+        artifact_type="mobile_android_snapchat",
         package="com.snapchat.android",
         relative_path="databases/arroyo.db",
         description="Snapchat arroyo database",
     ),
     AndroidArtifactSpec(
-        artifact_type="mobile_android_app_database_kakaotalk",
+        artifact_type="mobile_android_kakaotalk",
         package="com.kakao.talk",
         relative_path="databases/KakaoTalk.db",
         description="KakaoTalk message database",
@@ -203,7 +206,10 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
 # iOS path specs — system DBs by absolute path, app DBs by bundle id
 # =============================================================================
 IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
-    # System databases at well-known absolute paths
+    # System databases at well-known absolute paths.
+    # artifact_type values mirror the server-side ArtifactType enum
+    # so each upload is dispatch-routable without adding new enum
+    # values (server already has these).
     IOSArtifactSpec(
         artifact_type="mobile_ios_sms",
         package=None,
@@ -212,7 +218,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         description="iOS SMS / iMessage database",
     ),
     IOSArtifactSpec(
-        artifact_type="mobile_ios_call_history",
+        artifact_type="mobile_ios_call",
         package=None,
         relative_path="private/var/mobile/Library/CallHistoryDB/CallHistory.storedata",
         container_kind=ContainerKind.SYSTEM,
@@ -226,7 +232,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         description="iOS contacts (AddressBook)",
     ),
     IOSArtifactSpec(
-        artifact_type="mobile_ios_safari_history",
+        artifact_type="mobile_ios_safari",
         package=None,
         relative_path="private/var/mobile/Library/Safari/History.db",
         container_kind=ContainerKind.SYSTEM,
@@ -254,7 +260,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         description="iOS Calendar database",
     ),
     IOSArtifactSpec(
-        artifact_type="mobile_ios_voice_memos",
+        artifact_type="mobile_ios_voicememos",
         package=None,
         relative_path="private/var/mobile/Library/Recordings/CloudRecordings.db",
         container_kind=ContainerKind.SYSTEM,
@@ -288,6 +294,9 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="Wallet passes + transactions",
     ),
+    # New artifact_types — server enum extension required (added in
+    # the server-side companion commit). Daubert: explicit, neutral,
+    # bundle-name-free.
     IOSArtifactSpec(
         artifact_type="mobile_ios_notification_history",
         package=None,
@@ -303,37 +312,39 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         description="Lockdown daemon pairing records",
     ),
 
-    # App-specific (bundle id → resolved per-app container)
+    # App-specific (bundle id → resolved per-app container at runtime
+    # by ios_uuid_resolver). artifact_type values match the server's
+    # existing per-app enum so the dispatcher routes them.
     IOSArtifactSpec(
-        artifact_type="mobile_ios_app_database_whatsapp_chat",
+        artifact_type="mobile_ios_whatsapp",
         package="net.whatsapp.WhatsApp",
         relative_path="ChatStorage.sqlite",
         container_kind=ContainerKind.APP_GROUP,
         description="WhatsApp shared-group chat storage",
     ),
     IOSArtifactSpec(
-        artifact_type="mobile_ios_app_database_telegram",
+        artifact_type="mobile_ios_telegram",
         package="ph.telegra.Telegraph",
         relative_path="Documents/tgdata.db",
         container_kind=ContainerKind.APP_DATA,
         description="Telegram iOS database",
     ),
     IOSArtifactSpec(
-        artifact_type="mobile_ios_app_database_line",
+        artifact_type="mobile_ios_line",
         package="jp.naver.line",
         relative_path="Library/Application Support/LINE/Messages.sqlite",
         container_kind=ContainerKind.APP_DATA,
         description="LINE iOS messages",
     ),
     IOSArtifactSpec(
-        artifact_type="mobile_ios_app_database_signal",
+        artifact_type="mobile_ios_signal",
         package="org.whispersystems.signal",
         relative_path="grdb/signal.sqlite",
         container_kind=ContainerKind.APP_GROUP,
         description="Signal message database (GRDB)",
     ),
     IOSArtifactSpec(
-        artifact_type="mobile_ios_app_database_kakaotalk",
+        artifact_type="mobile_ios_kakaotalk",
         package="com.iwilab.KakaoTalk",
         relative_path="Library/PrivateDocuments/talk.sqlite",
         container_kind=ContainerKind.APP_DATA,
