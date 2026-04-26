@@ -8,6 +8,14 @@ a live device.
 Phase 1A delivers safe container handling primitives. Layout adapters
 and format detection arrive in Phase 1B and 1D.
 """
+from .format_detector import (
+    FormatDetection,
+    FormatID,
+    HIGH_CONFIDENCE,
+    LOW_CONFIDENCE,
+    MEDIUM_CONFIDENCE,
+    detect_zip_format,
+)
 from .safe_zip import (
     ContainerSafetyError,
     CRCMismatchError,
@@ -24,6 +32,7 @@ from .safe_zip import (
 )
 
 __all__ = [
+    # safe_zip
     "ContainerSafetyError",
     "CRCMismatchError",
     "EntryCountError",
@@ -36,4 +45,11 @@ __all__ = [
     "ZipBombError",
     "inventory_all",
     "safe_iter_entries",
+    # format_detector
+    "FormatDetection",
+    "FormatID",
+    "HIGH_CONFIDENCE",
+    "MEDIUM_CONFIDENCE",
+    "LOW_CONFIDENCE",
+    "detect_zip_format",
 ]
