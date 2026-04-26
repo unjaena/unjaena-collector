@@ -1569,6 +1569,11 @@ class CollectorWindow(QMainWindow):
             self.session_id = result.session_id
             self.case_id = result.case_id
             self.collection_token = result.collection_token
+            # Wire server-issued consent signing key through to the consent
+            # dialog. Without this, the dialog falls back to the
+            # CONSENT_SIGNING_KEY env var on the user's PC (typically unset)
+            # and refuses to record consent.
+            self.consent_signing_key = getattr(result, 'consent_signing_key', None)
 
             # [Security] Initialize request signer for HMAC-signed API calls
             from utils.hardware_id import get_hardware_id
@@ -1735,7 +1740,8 @@ class CollectorWindow(QMainWindow):
             server_url=self.server_url,
             session_id=self.session_id,
             case_id=self.case_id,
-            language=lang_code
+            language=lang_code,
+            server_signing_key=getattr(self, 'consent_signing_key', None),
         )
 
         if not consent_record:
