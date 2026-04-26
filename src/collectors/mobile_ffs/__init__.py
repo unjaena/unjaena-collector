@@ -8,6 +8,14 @@ a live device.
 Phase 1A delivers safe container handling primitives. Layout adapters
 and format detection arrive in Phase 1B and 1D.
 """
+from .case_manifest import (
+    ArtifactRecord,
+    BinaryBlobRecord,
+    BlobReason,
+    CaseManifest,
+    CaseManifestWriter,
+    NotExtractedRecord,
+)
 from .format_detector import (
     FormatDetection,
     FormatID,
@@ -52,4 +60,11 @@ __all__ = [
     "MEDIUM_CONFIDENCE",
     "LOW_CONFIDENCE",
     "detect_zip_format",
+    # case_manifest
+    "ArtifactRecord",
+    "BinaryBlobRecord",
+    "BlobReason",
+    "CaseManifest",
+    "CaseManifestWriter",
+    "NotExtractedRecord",
 ]

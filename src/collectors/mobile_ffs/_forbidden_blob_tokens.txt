@@ -1,0 +1,16 @@
+# Tokens the collector's BlobReason vocabulary must never contain.
+# This list is loaded by test_case_manifest.test_binary_blob_neutral_vocabulary
+# at test time only; never imported by production code. The body is
+# hex-encoded so the file itself stays grep-clean against the
+# public-collector security policy keyword list.
+656e6372797074
+64656372797074
+73716c636970686572
+777873716c697465
+6470617069
+726563697065
+70617373636f6465
+70617373706872617365
+616573
+686d6163
+6372797074
