@@ -281,6 +281,11 @@ SERVER_TO_COLLECTOR_MAPPING = {
     # iOS notification delivery log (system-side delivered notifications).
     'mobile_ios_notification_history': 'mobile_ios_notification_history',
 
+    # === Samsung Pay / Wallet (Android, Phase 1H gap #2) ===
+    'mobile_android_samsung_pay': 'mobile_android_samsung_pay',
+    'mobile_android_samsung_pay_cards': 'mobile_android_samsung_pay_cards',
+    'mobile_android_samsung_pay_transit': 'mobile_android_samsung_pay_transit',
+
     # === iOS - Messenger Auxiliary (7) ===
     # mobile_ios_kakaotalk_attachments: removed (random filenames, no forensic value)
     'mobile_ios_kakaotalk_profile': 'mobile_ios_kakaotalk_profile',

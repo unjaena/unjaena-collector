@@ -219,6 +219,30 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
         relative_path="databases/KakaoTalk.db",
         description="KakaoTalk message database",
     ),
+    # === Samsung Pay / Samsung Wallet (Phase 1H gap #2) ===
+    # Samsung Pay was renamed to Samsung Wallet in 2022. Both
+    # versions share the com.samsung.android.spay package id and
+    # store transactional/card data in app-data SQLite databases.
+    # Three primary databases per public Android forensics references
+    # (Cellebrite Physical Analyzer + Belkasoft + Magnet AXIOM):
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_samsung_pay",
+        package="com.samsung.android.spay",
+        relative_path="databases/pay.db",
+        description="Samsung Pay payment transaction history",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_samsung_pay_cards",
+        package="com.samsung.android.spay",
+        relative_path="databases/card.db",
+        description="Samsung Pay enrolled cards",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_samsung_pay_transit",
+        package="com.samsung.android.spay",
+        relative_path="databases/transit.db",
+        description="Samsung Pay transit cards",
+    ),
 )
 
 

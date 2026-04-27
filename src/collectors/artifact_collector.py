@@ -820,6 +820,49 @@ ARTIFACT_TYPES = {
         'collector': 'collect_android',
         'artifact_key': 'kakaotalk',
     },
+    # === Samsung Pay / Wallet (Phase 1H gap #2) ===
+    'mobile_android_samsung_pay': {
+        'name': 'Samsung Pay (Transactions)',
+        'description': (
+            'Samsung Pay / Wallet payment transaction history '
+            '(com.samsung.android.spay/databases/pay.db)'
+        ),
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'samsung_pay',
+    },
+    'mobile_android_samsung_pay_cards': {
+        'name': 'Samsung Pay (Enrolled Cards)',
+        'description': (
+            'Samsung Pay / Wallet enrolled payment cards '
+            '(com.samsung.android.spay/databases/card.db)'
+        ),
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'samsung_pay_cards',
+    },
+    'mobile_android_samsung_pay_transit': {
+        'name': 'Samsung Pay (Transit Cards)',
+        'description': (
+            'Samsung Pay / Wallet transit card balances + tap events '
+            '(com.samsung.android.spay/databases/transit.db)'
+        ),
+        'paths': [],
+        'category': 'android',
+        'subcategory': 'app_korean',
+        'requires_adb': True,
+        'requires_root': True,
+        'collector': 'collect_android',
+        'artifact_key': 'samsung_pay_transit',
+    },
     'mobile_android_whatsapp': {
         'name': 'WhatsApp',
         'description': 'WhatsApp messages (3B MAU)',
@@ -1661,6 +1704,53 @@ ARTIFACT_TYPES = {
         'artifact_key': 'siri',
     },
 
+    # === iOS — mobile_ffs path_specs additions ===
+    # These three system-level artifacts are surfaced via the FFS
+    # pipeline (Cellebrite extraction). User-selectable so consent
+    # control is explicit per-artifact.
+    'mobile_ios_lockdown_pairings': {
+        'name': 'Lockdown Pairing Records',
+        'description': (
+            'Per-host pairing records under /private/var/db/lockdown. '
+            'Each plist proves the device was paired with a specific '
+            'computer for trusted USB sync.'
+        ),
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'lockdown_pairings',
+    },
+    'mobile_ios_spotlight_content': {
+        'name': 'Spotlight Content Cache',
+        'description': (
+            'CoreSpotlight per-protection-class .store.db files '
+            '(content-snippet cache). Distinct from Spotlight Index '
+            '(search-query history).'
+        ),
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'spotlight_content',
+    },
+    'mobile_ios_notification_history': {
+        'name': 'Notification History',
+        'description': (
+            'iOS system delivery log of notifications '
+            '(ASPDeliveredNotifications.db). Captures notification '
+            'body at delivery time.'
+        ),
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'system',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'notification_history',
+    },
+
     # =========================================================================
     # iOS Messenger Auxiliary (Attachments / Profiles)
     # =========================================================================
@@ -1887,6 +1977,20 @@ ARTIFACT_TYPES = {
         'requires_backup': True,
         'collector': 'collect_ios',
         'artifact_key': 'ibk',
+    },
+    'mobile_ios_toss': {
+        'name': 'Toss',
+        'description': (
+            'Toss money transfer + payment + linked bank account history '
+            '(viva.republica.toss / Documents). Server parses transaction '
+            'tables heuristically across Toss schema versions.'
+        ),
+        'paths': [],
+        'category': 'ios',
+        'subcategory': 'korean',
+        'requires_backup': True,
+        'collector': 'collect_ios',
+        'artifact_key': 'toss',
     },
     'mobile_ios_nhbank': {
         'name': 'NH Bank',
@@ -3436,14 +3540,46 @@ except Exception:
     pass
 
 # Auto-register iOS artifact types from iOSCollector
+# [2026-04-27] Fix: previously auto-registered entries had no
+# `subcategory` set, which made them invisible in the iOS tab
+# (the GUI iterates IOS_SUBCATEGORIES and skips entries whose
+# subcategory key isn't in that list). Now honour a per-entry
+# 'subcategory' hint from IOS_ARTIFACT_TYPES, with a deterministic
+# fallback so a missing hint never produces an invisible checkbox.
+def _infer_ios_subcategory(name: str, key: str) -> str:
+    n = (name or '').lower() + ' ' + (key or '').lower()
+    if any(t in n for t in ('docs', 'slides', 'sheets', 'pages',
+                             'numbers', 'keynote', 'office',
+                             'notes', 'pdf')):
+        return 'productivity'
+    if any(t in n for t in ('mail', 'gmail', 'outlook', 'browser',
+                             'safari', 'chrome', 'edge')):
+        return 'email_browser'
+    if any(t in n for t in ('messenger', 'chat', 'kakao', 'line',
+                             'whatsapp', 'telegram', 'signal',
+                             'wickr', 'wire')):
+        return 'messenger'
+    if any(t in n for t in ('twitter', 'instagram', 'tiktok',
+                             'facebook', 'snapchat', 'band')):
+        return 'sns'
+    # Default to 'korean' bucket — most auto-registered entries
+    # come from the Korean app block in ios_collector.IOS_ARTIFACT_TYPES.
+    return 'korean'
+
+
 try:
     _existing_ios = {k for k in ARTIFACT_TYPES if k.startswith('mobile_ios_')}
     for _k, _v in IOS_ARTIFACT_TYPES.items():
         if _k not in _existing_ios:
+            _name = _v.get('name', _k.replace('_', ' ').title())
             ARTIFACT_TYPES[_k] = {
-                'name': _v.get('name', _k.replace('_', ' ').title()),
+                'name': _name,
                 'description': _v.get('description', ''),
                 'category': 'ios',
+                'subcategory': _v.get(
+                    'subcategory',
+                    _infer_ios_subcategory(_name, _k),
+                ),
                 'collector': 'collect_ios',
                 'forensic_value': _v.get('forensic_value', 'medium'),
             }
