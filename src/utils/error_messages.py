@@ -21,7 +21,29 @@ class UserFriendlyError:
 # Error pattern mapping (regex pattern -> user-friendly message)
 # Note: Patterns are matched in order, so higher priority patterns should come first
 ERROR_PATTERNS: List[Dict] = [
-    # Cancellation related (highest priority - must match before other patterns)
+    # [2026-04-27 Phase 4] Hard server termination (superseded / token expired / ...)
+    # Must be before generic CANCELLED — terminate also contains "cancel" substring
+    # under re.IGNORECASE so order matters.
+    {
+        "pattern": r"(WS_TERMINATE|terminate:superseded|terminate:token_expired|terminate:)",
+        "title": "Session Terminated by Server",
+        "message": "The server terminated this session.",
+        "solution": "Another collector took over this case, or your session expired. Please re-authenticate from the web platform if you wish to continue.",
+        "error_code": "WS_TERMINATE",
+        "is_recoverable": False,
+    },
+    # [2026-04-27 Phase 4] WebSocket-pushed cancel (server-side push, not 409 response)
+    # Must be before generic CANCELLED — re.IGNORECASE makes "cancel:user_cancelled" match
+    # legacy CANCELLED otherwise.
+    {
+        "pattern": r"(WS_CANCEL|cancel:server_state|cancel:user_cancelled|cancel:previously_cancelled)",
+        "title": "Collection Cancelled by Server",
+        "message": "The server requested cancellation of this collection.",
+        "solution": "The web platform cancelled this collection. Please restart from the web platform if you wish to begin a new session.",
+        "error_code": "WS_CANCEL",
+        "is_recoverable": False,
+    },
+    # Cancellation related (legacy 409 response from REST endpoints)
     {
         "pattern": r"(CANCELLED|409.*cancelled)",
         "title": "Collection Cancelled",
