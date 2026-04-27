@@ -269,6 +269,18 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'mobile_ios_spotlight': 'mobile_ios_spotlight',
     'mobile_ios_siri': 'mobile_ios_siri',
 
+    # === iOS - System extras (mobile_ffs path_specs additions) ===
+    # Lockdown daemon directory: per-host pairing records (one
+    # plist per paired computer). User-selectable so consent stays
+    # explicit.
+    'mobile_ios_lockdown_pairings': 'mobile_ios_lockdown_pairings',
+    # CoreSpotlight content cache: per-protection-class .store.db
+    # files surfaced under Spotlight/CoreSpotlight. Distinct from
+    # mobile_ios_spotlight (search query history).
+    'mobile_ios_spotlight_content': 'mobile_ios_spotlight_content',
+    # iOS notification delivery log (system-side delivered notifications).
+    'mobile_ios_notification_history': 'mobile_ios_notification_history',
+
     # === iOS - Messenger Auxiliary (7) ===
     # mobile_ios_kakaotalk_attachments: removed (random filenames, no forensic value)
     'mobile_ios_kakaotalk_profile': 'mobile_ios_kakaotalk_profile',
