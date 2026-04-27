@@ -60,6 +60,14 @@ Configure your upload endpoint in `config.json` (see [Configuration](#configurat
 
 See the [v2.4.1 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.1) for full technical details.
 
+### 🆕 Latest: v2.4.5 (2026-04-27)
+
+- **Samsung Pay / Samsung Wallet (Android)** — three new artifact types (`mobile_android_samsung_pay`, `mobile_android_samsung_pay_cards`, `mobile_android_samsung_pay_transit`) covering payment transactions, enrolled cards, and transit-card tap events. Heuristic table detector handles both Samsung Pay 1.x and Wallet 2.x/3.x schemas.
+- **iOS Toss app** — added under Korean Apps section as a user-selectable checkbox.
+- **GUI checkbox visibility fix** — 10 previously-invisible iOS apps (BAND, Starbucks Korea, Samjeomssam, Soomgo, MobileFax, HiWorks, Google Slides, Google Docs, Samsung Card, Naver) are now reachable from the iOS tab.
+
+See the [v2.4.5 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.5) and the full [CHANGELOG](CHANGELOG.md) for v2.4.3 / v2.4.4 / v2.4.5 details.
+
 ## 🆚 Why unjaena-collector?
 
 > *Pricing, license terms, and feature sets reflect publicly available information as of 2026-04-22. See each vendor's official site for the latest details. Comparison is provided for informational purposes only.*

@@ -2,6 +2,46 @@
 
 All notable changes to the Intelligence Collector are documented in this file. The project follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.5] - 2026-04-27
+
+### Added
+- **Samsung Pay / Samsung Wallet (Android)** — three new artifact types covering payment transactions, enrolled cards, and transit-card tap events. Heuristic transaction-table detector handles both Samsung Pay 1.x and Wallet 2.x/3.x schemas, with a discovery fallback that emits a per-table inventory record so renamed-table rows are never silently dropped:
+  - `mobile_android_samsung_pay` — `pay.db` payment transaction history
+  - `mobile_android_samsung_pay_cards` — `card.db` enrolled payment instruments
+  - `mobile_android_samsung_pay_transit` — `transit.db` subway / bus tap events
+- **iOS Toss app** — `mobile_ios_toss` is now a user-selectable checkbox under Korean Apps so investigators can opt in or out of Toss money-transfer / payment / linked-bank-account data at consent time.
+
+### Fixed
+- **GUI checkbox visibility for 10 iOS apps** — apps registered through the auto-registration branch (`IOS_ARTIFACT_TYPES`) had `subcategory=None` and silently never rendered as user-selectable checkboxes. The auto-registration loop now infers a subcategory from the entry name (productivity / email_browser / messenger / sns / korean) so every registered iOS app is reachable from the GUI. The previously-invisible apps were:
+  - BAND, Starbucks Korea, Samjeomssam, Soomgo, MobileFax, HiWorks, Google Slides, Google Docs, Samsung Card, Naver
+- **mobile_ffs path-spec exposure** — three Cellebrite-FFS path specs are now wired into the GUI as user-selectable artifacts instead of being driver-internal.
+
+### Verified
+- iOS tab will render 144 user-selectable checkboxes; Android tab will render 54. Zero orphan entries (every registered artifact_type is reachable from the GUI).
+- Samsung Pay heuristic detector tested against schema variants from Samsung Pay 1.x (`paymentTransactionItem` / `price` / `payee`) and Wallet 2.x (`pay_history` / `amount` / `merchant_name`); both produce records with merchant / amount / card / date roles correctly classified.
+- Wallet 3.x discovery fallback emits a per-table inventory record when no transaction-shaped table is found, so future schema renames degrade gracefully instead of silently dropping data.
+
+## [2.4.4] - 2026-04-26
+
+### Added
+- **mobile_ffs (Cellebrite Full File System) workflow** — server-side analysis can now consume publisher-FFS evidence directly:
+  - **`mobile_ffs/format_detector`** — publisher-first FFS detection across Cellebrite UFED, Magnet GrayKey, Oxygen, and other vendors
+  - **`mobile_ffs/safe_zip`** — adversarially-tested zip extractor with path-traversal, symlink, and decompression-bomb defenses
+  - **`mobile_ffs/case_manifest`** — forensic bundle writer producing a single signed manifest per case (paths, hashes, sizes, source container)
+  - **`mobile_ffs/cellebrite_adapter`** — unified Android + iOS view over Cellebrite FFS extractions
+  - **`mobile_ffs/path_specs`** — declarative artifact-path registry (filename, glob, container parent), aligned with server-side ArtifactType enum names
+- **SQLite WAL / SHM sidecar pull** — when the collector picks up a `*.db` file, the matching `-wal` and `-shm` sidecars are pulled in the same operation so the server-side parser can recover uncommitted-but-flushed pages.
+- **Directory-spec fan-out** — single artifact entries can now declare a directory; the collector enumerates and pulls every regular file under it (used by CoreSpotlight, Apple Pay, etc.).
+- **CoreSpotlight V2 path** — added the `Library/CoreSpotlight/V2` path so the V2 protection-class index store is collected alongside the legacy V1 path.
+
+## [2.4.3] - 2026-04-25
+
+### Fixed
+- **Consent dialog hard-block when CONSENT_SIGNING_KEY is unset** — the GUI now wires the server-issued consent signing key into the consent dialog. Previously, the dialog accepted operator approval even when the server had not provided a signing key, producing legally-worthless signatures the server could not verify. The dialog now refuses to record consent when no signing key is present, surfacing the operator-visible message *"A secure signing key is required to record consent"*. This closes the fail-open path discovered in the 2026-04-20 security audit.
+
+### Documentation
+- Added a Windows GUI demo GIF to the README hero alongside the existing macOS terminal demo so readers see both supported workflows on the project landing page.
+
 ## [2.4.2] - 2026-04-23
 
 ### Fixed
