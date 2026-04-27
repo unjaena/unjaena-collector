@@ -1276,19 +1276,22 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # Screen Scraping (Non-Root Accessibility Service)
+    # Screen Scraping (Non-Root Accessibility Service) — DISABLED
     # =========================================================================
-    'mobile_android_screen_scrape': {
-        'name': 'Screen Scraping',
-        'description': 'App screen data via Accessibility Service - KakaoTalk, WhatsApp, Telegram, etc.',
-        'paths': [],
-        'category': 'android',
-        'subcategory': 'screen_scrape',
-        'requires_adb': True,
-        'requires_root': False,
-        'collector': 'collect_android',
-        'artifact_key': 'screen_scrape',
-    },
+    # The screen-scrape collector requires the ForensicAgent.apk binary in
+    # collector/resources/agent_apk/, but the APK is not shipped with the
+    # current release (only the .sha256 stub exists). Without the APK,
+    # _collect_screen_scrape() fails at the install step with
+    # "Failed to install Agent APK", so the checkbox would always produce
+    # an error if the user selected it.
+    #
+    # Removed from ARTIFACT_TYPES to avoid surfacing a non-functional
+    # option in the GUI. The ANDROID_SUBCATEGORIES "screen_scrape" header
+    # auto-hides when no items are present, so the entire Tier 3 section
+    # disappears as well. The collector code path is preserved in
+    # android_collector.py:_collect_screen_scrape so the feature can be
+    # re-enabled by dropping ForensicAgent.apk into resources/agent_apk/
+    # and reinstating this entry.
 
     # =========================================================================
     # iOS Messenger Apps (Global)

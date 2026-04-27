@@ -91,8 +91,15 @@ class ConsentDialog(QDialog):
     def setup_ui(self):
         """Initialize UI (with server API integration)"""
         self.setWindowTitle("AI Forensic Lab - Data Collection Consent")
-        self.setMinimumSize(700, 620)
-        self.setMaximumSize(800, 720)
+        # [2026-04-27] Round 6.6 — taller default + larger maximum so the
+        # required-consent checkbox panel is not squashed into single-line
+        # rows. Operators reported that long consent items (e.g. PIPA/GDPR
+        # full-sentence statements) were being truncated because the
+        # checkbox area only got ~40px of vertical space after the header,
+        # warning, scrolling content, and operator section claimed the
+        # rest of a 620px window.
+        self.setMinimumSize(760, 760)
+        self.setMaximumSize(900, 900)
         self.setModal(True)
         self.setStyleSheet(self._get_stylesheet())
 
@@ -170,13 +177,30 @@ class ConsentDialog(QDialog):
         self._build_operator_section(layout)
 
         # Checkbox area (dynamically generated from server items)
+        # [2026-04-27 Round 6.6] Each consent item can be a full sentence
+        # (e.g. "I consent to the international transfer of my collected
+        # data to the United States in accordance with PIPA Article 28
+        # and GDPR Article 49(1)(a) ..."). QCheckBox does not natively
+        # word-wrap its label, so long items were truncated to a single
+        # line and the operator could not see what they were agreeing
+        # to. We wrap the entire panel in a ScrollArea (so adding new
+        # items doesn't push the buttons off-screen) and the checkbox
+        # itself is paired with a wrapping QLabel in _add_consent_item().
+        self.checkbox_scroll = QScrollArea()
+        self.checkbox_scroll.setWidgetResizable(True)
+        self.checkbox_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.checkbox_scroll.setMinimumHeight(140)
+        self.checkbox_scroll.setMaximumHeight(280)
+
         self.checkbox_frame = QFrame()
         self.checkbox_frame.setObjectName("checkboxFrame")
         self.checkbox_layout = QVBoxLayout(self.checkbox_frame)
-        self.checkbox_layout.setContentsMargins(8, 8, 8, 8)
-        self.checkbox_layout.setSpacing(4)
+        self.checkbox_layout.setContentsMargins(12, 12, 12, 12)
+        self.checkbox_layout.setSpacing(12)
+        self.checkbox_layout.addStretch()
 
-        layout.addWidget(self.checkbox_frame)
+        self.checkbox_scroll.setWidget(self.checkbox_frame)
+        layout.addWidget(self.checkbox_scroll)
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -259,13 +283,24 @@ class ConsentDialog(QDialog):
         html_content = self._markdown_to_html(content)
         self.consent_text.setHtml(html_content)
 
-        # Generate dynamic checkboxes
-        for item in self.required_checkboxes:
-            cb = QCheckBox(item)
-            cb.setObjectName("consentCheck")
-            cb.stateChanged.connect(self._update_button_state)
-            self.checkbox_layout.addWidget(cb)
-            self.checkboxes.append(cb)
+        # Generate dynamic checkboxes (full-text wrapping via _add_consent_item)
+        # [2026-04-27 Round 6.6] Drop existing widgets before re-rendering
+        # so language switches don't accumulate stale rows.
+        while self.checkbox_layout.count() > 0:
+            item = self.checkbox_layout.takeAt(0)
+            if item is None:
+                break
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        self.checkboxes.clear()
+
+        for item_text in self.required_checkboxes:
+            self._add_consent_item(item_text)
+        # Trailing stretch keeps short item lists hugging the top of the
+        # scroll area instead of being centred.
+        self.checkbox_layout.addStretch()
 
         # Button text (by language)
         btn_texts = {
@@ -715,6 +750,49 @@ class ConsentDialog(QDialog):
             self.basis_combo.blockSignals(False)
         except Exception as e:
             logger.debug(f"operator section relocalize failed: {e}")
+
+    def _add_consent_item(self, text: str) -> None:
+        """Add a single consent checkbox row with full word-wrapped text.
+
+        [2026-04-27 Round 6.6] QCheckBox does not natively word-wrap its
+        own label, which truncated long PIPA / GDPR / cross-border-
+        transfer statements to a single line in the dialog. We pair the
+        checkbox with a separate QLabel that has wordWrap=True; clicking
+        the label toggles the checkbox so the pair behaves like a single
+        widget for the operator. The full statement is also set as the
+        checkbox tooltip so on-hover preview works for very long items.
+        """
+        row = QFrame()
+        row.setObjectName("consentRow")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        cb = QCheckBox()
+        cb.setObjectName("consentCheck")
+        cb.setToolTip(text)
+        cb.stateChanged.connect(self._update_button_state)
+
+        label = QLabel(text)
+        label.setObjectName("consentLabel")
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse
+        )
+        # Clicking the label toggles the checkbox — the row behaves as one widget
+        # for the operator. We use mousePressEvent override via lambda
+        # because QLabel has no native click signal.
+        label.mousePressEvent = lambda _e, _cb=cb: _cb.toggle()
+        label.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        row_layout.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
+        row_layout.addWidget(label, 1)
+
+        # Insert before the trailing stretch (last item in layout)
+        insert_at = max(0, self.checkbox_layout.count() - 1)
+        self.checkbox_layout.insertWidget(insert_at, row)
+        self.checkboxes.append(cb)
 
     def _update_button_state(self):
         """Enable button based on checkbox state + operator-section
