@@ -85,6 +85,26 @@ class IOSArtifactSpec:
     relative_path: str           # under per-app container, or absolute for SYSTEM
     container_kind: ContainerKind = ContainerKind.APP_DATA
     description: str = ""
+    # When True, `relative_path` is treated as a directory PREFIX —
+    # the resolver fans out to every entry under it (one resolved
+    # artifact per child file). Used for cases like the lockdown
+    # daemon directory where the meaningful unit is the per-record
+    # file rather than the parent folder. Defaults to False to keep
+    # legacy specs unchanged.
+    is_directory: bool = False
+    # When True, the resolver ALSO pulls the SQLite -wal and -shm
+    # sidecar files (if present) alongside the primary .db. Without
+    # them, transactional state still in WAL is invisible to the
+    # parser pipeline — this matters for deleted-row recovery and
+    # for any DB the OS hasn't checkpointed before acquisition.
+    pull_sqlite_sidecars: bool = False
+    # When `is_directory=True` and this tuple is non-empty, the
+    # resolver fans out only to children whose filename matches one
+    # of the suffixes here (case-insensitive). Used to keep
+    # directory dispatch from pulling in thousands of binary index
+    # files when only the SQLite portion is forensically usable
+    # (e.g. CoreSpotlight where only `.store.db` matters).
+    child_suffix_filter: Tuple[str, ...] = ()
 
 
 # =============================================================================
@@ -309,7 +329,32 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         package=None,
         relative_path="private/var/db/lockdown",
         container_kind=ContainerKind.ROOT_SYSTEM,
-        description="Lockdown daemon pairing records",
+        is_directory=True,
+        description="Lockdown daemon pairing records (per-host plist)",
+    ),
+    # CoreSpotlight content cache. Real iOS 16/17 uses
+    #   Spotlight/CoreSpotlight/<NSFileProtection*>/index.spotlightV2/
+    #     .store.db
+    # The .store.db is the only SQLite-shaped store in the cache;
+    # the rest of the directory holds binary index files. We mark
+    # this as a directory spec and the per-protection-class .store.db
+    # files fan out as individual artifacts.
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_spotlight_content",
+        package=None,
+        relative_path=(
+            "private/var/mobile/Library/Spotlight/CoreSpotlight"
+        ),
+        container_kind=ContainerKind.SYSTEM,
+        is_directory=True,
+        # CoreSpotlight directory holds many binary index files plus
+        # one SQLite store per protection class. Only the SQLite
+        # store carries content snippets parseable by the server.
+        child_suffix_filter=(".store.db",),
+        description=(
+            "CoreSpotlight content index store directory "
+            "(per-protection-class .store.db files)"
+        ),
     ),
 
     # App-specific (bundle id → resolved per-app container at runtime

@@ -158,6 +158,34 @@ class CellebriteAdapter:
     def _iter_ios(self) -> Iterator[ResolvedArtifact]:
         assert self._uuid_map is not None
         for spec in IOS_PATH_SPECS:
+            if spec.is_directory and spec.container_kind in (
+                ContainerKind.SYSTEM, ContainerKind.ROOT_SYSTEM,
+            ):
+                # Fan out: one ResolvedArtifact per child file under
+                # the directory prefix. If the directory has no
+                # children present, emit a single absent record so
+                # the case manifest still shows we looked.
+                children = list(self._ios_directory_children(spec))
+                if children:
+                    for child_path in children:
+                        yield ResolvedArtifact(
+                            artifact_type=spec.artifact_type,
+                            expected_zip_path=child_path,
+                            actual_zip_path=child_path,
+                            present=True,
+                            spec_description=spec.description,
+                        )
+                else:
+                    yield ResolvedArtifact(
+                        artifact_type=spec.artifact_type,
+                        expected_zip_path=(
+                            f"filesystem1/{spec.relative_path}/<children>"
+                        ),
+                        actual_zip_path=None,
+                        present=False,
+                        spec_description=spec.description,
+                    )
+                continue
             expected, actual, present = self._ios_resolve(spec)
             yield ResolvedArtifact(
                 artifact_type=spec.artifact_type,
@@ -166,6 +194,51 @@ class CellebriteAdapter:
                 present=present,
                 spec_description=spec.description,
             )
+
+    # Apple housekeeping dotfiles to exclude from directory dispatch.
+    # Forensically irrelevant; they bloat the manifest if surfaced.
+    _DIRECTORY_DOTFILE_SKIP = frozenset({
+        ".DS_Store", ".metadata_never_index",
+        ".metadata_never_index_unless_rootfs", ".Trashes",
+        ".fseventsd", ".Spotlight-V100",
+    })
+
+    def _ios_directory_children(self, spec) -> Iterator[str]:
+        """Yield zip entry paths under a SYSTEM/ROOT_SYSTEM directory
+        spec. Recurses into subdirectories. Skips zip directory
+        entries (trailing '/') and known-irrelevant Apple housekeeping
+        dotfiles (.DS_Store etc). When the spec carries a non-empty
+        `child_suffix_filter`, ONLY entries whose filename ends in one
+        of those suffixes (case-insensitive) are yielded — this keeps
+        directory specs like CoreSpotlight from pulling thousands of
+        binary index files when only the SQLite portion (.store.db)
+        is forensically usable.
+
+        IMPORTANT: dotfile filtering uses a denylist of known noise
+        names, not a generic `startswith('.')` check. Some real
+        forensic artifacts (e.g. `.store.db`) start with a dot — a
+        blanket dotfile skip would silently drop them.
+        """
+        prefix = f"filesystem1/{spec.relative_path}"
+        # Trailing slash to ensure we match children, not the dir itself
+        prefix_slash = prefix + ("/" if not prefix.endswith("/") else "")
+        suffix_filter = tuple(
+            s.lower() for s in (spec.child_suffix_filter or ())
+        )
+        for entry in self._entry_set or ():
+            if not entry.startswith(prefix_slash):
+                continue
+            if entry.endswith("/"):
+                continue
+            tail = entry[len(prefix_slash):]
+            base = tail.rsplit("/", 1)[-1]
+            if base in self._DIRECTORY_DOTFILE_SKIP:
+                continue
+            if suffix_filter:
+                lname = base.lower()
+                if not any(lname.endswith(s) for s in suffix_filter):
+                    continue
+            yield entry
 
     def _android_expected_path(self, spec: AndroidArtifactSpec) -> str:
         if spec.container_kind == ContainerKind.APP_DATA:
@@ -241,18 +314,70 @@ class CellebriteAdapter:
             else:
                 absent_specs.append(ra)
 
-        # Single pass — extract anything in `wanted`.
-        select = lambda info: info.filename in wanted
-        counts = {"extracted": 0, "absent": 0, "errors": 0}
+        # SQLite sidecar augmentation: for every primary entry whose
+        # path ends in a SQLite suffix, also pull the -wal and -shm
+        # sidecars when present in the zip. They land in the same
+        # destination directory as the primary file so sqlite3.connect
+        # transparently merges WAL state, AND so the recovery pipeline
+        # (deleted-row walker) can locate the WAL file by suffix.
+        # The sidecars are tagged with the SAME artifact_type as the
+        # primary, with a `_wal` / `_shm` filename suffix marker in
+        # the manifest, so the case record carries them as auxiliary
+        # evidence without dispatching them as separate artifacts.
+        zip_entries_set = self._entry_set or set()
+        sqlite_suffixes = (".db", ".sqlite", ".sqlitedb", ".sqlite3")
+        sidecar_extras: Dict[str, ResolvedArtifact] = {}
+        for primary_path, ra in list(wanted.items()):
+            if not primary_path.lower().endswith(sqlite_suffixes):
+                continue
+            for suffix in ("-wal", "-shm"):
+                cand = primary_path + suffix
+                if cand in zip_entries_set and cand not in wanted:
+                    sidecar_extras[cand] = ra
+        # Merge — use a separate map so the dispatcher routes only
+        # the primary, but extraction grabs all three.
+        wanted_extract = dict(wanted)
+        wanted_extract.update(sidecar_extras)
+
+        # Single pass — extract anything in `wanted_extract`.
+        # IMPORTANT: only PRIMARY artifacts get recorded in the
+        # artifacts manifest. Sidecars (-wal/-shm) are extracted to
+        # disk alongside the primary so sqlite3.connect transparently
+        # merges WAL state, but they are NOT separately dispatched to
+        # parsers (they are not standalone SQLite databases — opening
+        # them via sqlite3 raises). Sidecars land in the manifest's
+        # not_extracted list with reason="sidecar_pulled:<artifact>"
+        # for chain-of-custody transparency.
+        select = lambda info: info.filename in wanted_extract
+        counts = {"extracted": 0, "absent": 0, "errors": 0,
+                  "sidecars_pulled": 0}
         try:
             for entry in safe_iter_entries(
                 self._zf, dest_dir, select=select, policy=policy
             ):
-                ra = wanted[entry.zip_entry_path]
-                manifest.append_artifact(
-                    entry, artifact_type=ra.artifact_type
-                )
-                counts["extracted"] += 1
+                ra = wanted_extract[entry.zip_entry_path]
+                if entry.zip_entry_path in sidecar_extras:
+                    # Pull-only — file is on disk for transparent
+                    # WAL merge but NOT dispatched as a separate
+                    # artifact_type. Record under not_extracted with
+                    # a sidecar reason so the chain of custody shows
+                    # exactly what was pulled.
+                    inv = InventoryEntry(
+                        zip_entry_path=entry.zip_entry_path,
+                        source_size=entry.source_size,
+                        compressed_size=0,
+                        central_crc32=entry.source_crc32,
+                        is_symlink=False,
+                        is_dir=False,
+                        reason=f"sidecar_pulled:{ra.artifact_type}",
+                    )
+                    manifest.append_not_extracted(inv)
+                    counts["sidecars_pulled"] += 1
+                else:
+                    manifest.append_artifact(
+                        entry, artifact_type=ra.artifact_type
+                    )
+                    counts["extracted"] += 1
         except ContainerSafetyError as e:
             manifest.append_safety_violation(f"{type(e).__name__}: {e}")
             counts["errors"] += 1
