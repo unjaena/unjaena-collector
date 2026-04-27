@@ -60,13 +60,20 @@ Configure your upload endpoint in `config.json` (see [Configuration](#configurat
 
 See the [v2.4.1 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.1) for full technical details.
 
-### 🆕 Latest: v2.4.5 (2026-04-27)
+### 🆕 Latest: v2.4.6 (2026-04-27)
+
+GUI bug-fix release on top of v2.4.5:
+
+- **Android Tier 3 "Screen Scraping" checkbox hidden** — the screen-scrape collector required `ForensicAgent.apk` which is not shipped with the release, so the checkbox was always failing with *"Failed to install Agent APK"*. Removed from the GUI; the underlying code path is preserved for future re-enablement.
+- **Consent dialog now word-wraps long PIPA / GDPR consent items** — multi-sentence consent statements (cross-border transfer, PIPA Article 28, GDPR Article 49(1)(a) ...) are no longer truncated to a single line. Checkbox + word-wrapped label pair, scrollable panel, taller dialog. Operators can finally read what they are agreeing to.
+
+### v2.4.5 highlights
 
 - **Samsung Pay / Samsung Wallet (Android)** — three new artifact types (`mobile_android_samsung_pay`, `mobile_android_samsung_pay_cards`, `mobile_android_samsung_pay_transit`) covering payment transactions, enrolled cards, and transit-card tap events. Heuristic table detector handles both Samsung Pay 1.x and Wallet 2.x/3.x schemas.
 - **iOS Toss app** — added under Korean Apps section as a user-selectable checkbox.
 - **GUI checkbox visibility fix** — 10 previously-invisible iOS apps (BAND, Starbucks Korea, Samjeomssam, Soomgo, MobileFax, HiWorks, Google Slides, Google Docs, Samsung Card, Naver) are now reachable from the iOS tab.
 
-See the [v2.4.5 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.5) and the full [CHANGELOG](CHANGELOG.md) for v2.4.3 / v2.4.4 / v2.4.5 details.
+See the [v2.4.6 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.6) and the full [CHANGELOG](CHANGELOG.md) for v2.4.3 / v2.4.4 / v2.4.5 / v2.4.6 details.
 
 ## 🆚 Why unjaena-collector?
 

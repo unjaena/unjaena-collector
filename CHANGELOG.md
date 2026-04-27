@@ -2,6 +2,20 @@
 
 All notable changes to the Intelligence Collector are documented in this file. The project follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.6] - 2026-04-27
+
+### Fixed
+- **Android Tier 3 "Screen Scraping" checkbox always failed** — the screen-scrape collector requires `ForensicAgent.apk` in `resources/agent_apk/`, but only the `.sha256` stub ships with the release. Selecting the checkbox previously produced *"Failed to install Agent APK"* with zero records emitted. The checkbox is now hidden (the entire Tier 3 section auto-hides when no items are present). The `android_collector.py` `_collect_screen_scrape()` code path is preserved so the feature can be re-enabled by dropping `ForensicAgent.apk` into `resources/agent_apk/` and reinstating the `mobile_android_screen_scrape` ARTIFACT_TYPES entry.
+- **Consent dialog truncated long PIPA / GDPR consent items** — `QCheckBox` does not natively word-wrap its label, so multi-sentence consent items (cross-border transfer acknowledgment, PIPA Article 28, GDPR Article 49(1)(a) ...) collapsed to a single line and the operator could not see what they were agreeing to. Three layered fixes:
+  - Each consent item is now a checkbox + word-wrapped `QLabel` pair. Clicking the label toggles the checkbox; the row behaves as one widget. Full statement is also set as the checkbox tooltip.
+  - The consent-checkbox panel is wrapped in a `QScrollArea` (140-280 px min/max height) so long lists scroll instead of pushing the Agree / Cancel buttons off-screen.
+  - Dialog default size 700x620 -> 760x760 (max 800x720 -> 900x900) so wrapped consent text + operator section + buttons all fit without squashing.
+  - Layout spacing 4 -> 12 px so adjacent items are visually distinct.
+
+### Verified
+- Android tab will render 53 user-selectable checkboxes (was 54). iOS tab unchanged at 144. Zero orphan entries.
+- Headless dialog inspection confirms `_add_consent_item()`, `setMinimumSize(760, 760)`, the scrollable panel, and the click-label-to-toggle binding are all in place.
+
 ## [2.4.5] - 2026-04-27
 
 ### Added
