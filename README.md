@@ -58,40 +58,7 @@ Configure your upload endpoint in `config.json` (see [Configuration](#configurat
 - **`linux_systemd_journal`** — systemd journal messages across all units.
 - **`linux_container_state`** — Docker + Podman container runtime state snapshots.
 
-See the [v2.4.1 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.1) for full technical details.
-
-### 🆕 Latest: v2.4.8 (2026-04-29)
-
-Consent-dialog layout fix on top of v2.4.7. Field-reported regressions resolved:
-
-- **Panels no longer overlap on first render.** Root cause: under `setFixedSize`, Qt did not consult `heightForWidth()` on wrap-labels and used their unwrapped sizeHint (~150 px) instead of the wrapped height (~50 px), producing 264 px of vertical overflow. Now uses `setMinimumSize / setMaximumSize` plus `setHeightForWidth(True)` on every wrap-label.
-- **Cancel and Agree buttons no longer get clipped** after window move.
-- **Dialog opens centred** on the active screen (multi-monitor aware).
-- **Required-consent checkbox area no longer scrolls infinitely** — the inner ScrollArea plus stretch were dropped in favour of natural layout flow.
-
-No breaking API changes. Drop-in replacement for v2.4.7.
-
-### v2.4.7 highlights
-
-Real-time bidirectional WebSocket between the collector and the analysis service:
-
-- Server can now push `cancel` / `terminate` / `snapshot` directives to a running collection.
-- 15 s heartbeat + exponential reconnect backoff (3 s → 60 s) + 30 s dead-peer detection.
-- Threading-safe abort propagation — in-flight uploads stop gracefully without partial-state corruption.
-
-Older collector releases continue to work against the new server — the bidirectional channel is opt-in.
-
-### v2.4.6 highlights
-
-- **Android Tier 3 "Screen Scraping" checkbox hidden** — `ForensicAgent.apk` not shipped with the release; checkbox was always failing.
-- **Consent dialog word-wraps long PIPA / GDPR consent items** — multi-sentence statements no longer truncate to a single line.
-
-### v2.4.5 highlights
-
-- **Samsung Pay / Samsung Wallet (Android)** — three new artifact types covering payment transactions, enrolled cards, and transit-card tap events.
-- **iOS Toss app** + **10 previously-invisible iOS apps** (BAND, Starbucks Korea, Samjeomssam, Soomgo, MobileFax, HiWorks, Google Slides, Google Docs, Samsung Card, Naver) now reachable from the iOS tab.
-
-See the [v2.4.7 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.7) and the full [CHANGELOG](CHANGELOG.md) for v2.4.3 ~ v2.4.7 details.
+For the latest version download links, see [Releases](https://github.com/unjaena/unjaena-collector/releases).
 
 ## 🆚 Why unjaena-collector?
 
