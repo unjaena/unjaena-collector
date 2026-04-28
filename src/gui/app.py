@@ -8,7 +8,7 @@ import logging
 import requests
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -22,7 +22,7 @@ from PyQt6.QtGui import QFont
 
 from core.token_validator import TokenValidator
 from core.encryptor import FileHashCalculator
-from core.uploader import DirectUploader
+from core.uploader import DirectUploader, RealTimeUploader
 from core.request_signer import RequestSigner
 from collectors.artifact_collector import (
     ArtifactCollector, ARTIFACT_TYPES,
@@ -1623,6 +1623,29 @@ class CollectorWindow(QMainWindow):
             self._log(f"Session ID: {self.session_id}")
             self._log(f"Allowed artifacts: {', '.join(self.allowed_artifacts)}")
 
+            # [2026-04-27 Track 3] Start bidirectional control WebSocket worker.
+            # The server can now push cancel/terminate/snapshot to this collector
+            # in real time (was previously polling-on-next-API-call only).
+            try:
+                if hasattr(self, '_ws_worker') and self._ws_worker.isRunning():
+                    self._ws_worker.stop()
+                    self._ws_worker.wait(1000)
+                self._ws_worker = WsControlWorker(
+                    server_url=self.server_url,
+                    ws_url=self.ws_url,
+                    session_id=self.session_id,
+                    collection_token=self.collection_token,
+                    case_id=self.case_id,
+                    request_signer=self.request_signer,
+                    config=self.config,
+                )
+                self._ws_worker.control_event.connect(self._on_ws_control_event)
+                self._ws_worker.start()
+                self._log("Control WebSocket starting (real-time server notifications enabled)")
+            except Exception as ws_init_err:
+                # Non-fatal — collector still works via legacy 409 fallback
+                self._log(f"[WARN] Control WebSocket init failed: {ws_init_err}", error=False)
+
             # Enable artifact selection
             # Map server artifact names to Collector names for matching
             mapped_allowed = set()
@@ -2868,6 +2891,20 @@ class CollectorWindow(QMainWindow):
         # Stop device monitoring
         self.device_manager.stop_monitoring()
 
+        # [2026-04-27 Track 3] Send graceful shutdown intent over WS first,
+        # then stop the worker thread. The server uses this to immediately
+        # release the case slot (instead of waiting for the server's idle timeout).
+        if hasattr(self, '_ws_worker') and self._ws_worker.isRunning():
+            try:
+                self._ws_worker.request_shutdown('user_close')
+            except Exception:
+                pass
+            try:
+                self._ws_worker.stop()
+                self._ws_worker.wait(2000)
+            except Exception:
+                pass
+
         # Cancel ongoing collection
         if hasattr(self, 'worker') and self.worker.isRunning():
             self.worker.cancel()
@@ -2878,6 +2915,142 @@ class CollectorWindow(QMainWindow):
             self._notify_server_cancel()
 
         super().closeEvent(event)
+
+    def _on_ws_control_event(self, msg_type: str, payload: dict):
+        """[2026-04-27 Track 3] Slot for WsControlWorker.control_event signal.
+
+        Runs in the Qt main thread (signal-marshalled), so it's safe to call
+        UI methods (self._log, etc.) directly here. The asyncio worker thread
+        emits this signal whenever the server pushes a control message.
+        """
+        try:
+            if msg_type == 'cancel':
+                reason = str(payload.get('reason') or 'unspecified')
+                self._log(f"[CANCEL] Server requested cancellation: {reason}", error=False)
+                # If a collection is currently running, abort it immediately
+                if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
+                    self._log("[CANCEL] Aborting active collection worker")
+                    self.worker.cancel()
+            elif msg_type == 'terminate':
+                reason = str(payload.get('reason') or 'unspecified')
+                self._log(f"[TERMINATE] Session terminated by server: {reason}", error=True)
+                # Hard abort — slot is already released server-side
+                if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
+                    self.worker.cancel()
+                # Clear local session state to prevent further API calls
+                self.session_id = None
+                self.collection_token = None
+            elif msg_type == 'snapshot':
+                if payload.get('cancel_flag'):
+                    self._log("[SYNC] Server reports this case was previously cancelled", error=False)
+                stage = payload.get('stage')
+                if stage:
+                    self._log(f"[SYNC] Server stage: {stage}")
+            elif msg_type == 'status':
+                # Pipeline_progress relay — informational
+                data = payload.get('data') if isinstance(payload, dict) else None
+                if isinstance(data, dict):
+                    stage = data.get('stage')
+                    if stage:
+                        self._log(f"[SERVER] Pipeline: {stage}")
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"[_on_ws_control_event] handler error: {e}")
+
+
+class WsControlWorker(QThread):
+    """[2026-04-27 Track 3] Background QThread that runs an asyncio loop hosting the
+    bidirectional /ws/collection/{session_id} WebSocket via RealTimeUploader.
+
+    Why a separate thread:
+      - PyQt main thread runs the Qt event loop and must not block.
+      - asyncio needs its own event loop in the same thread it runs in.
+      - Cross-thread comms via pyqtSignal (thread-safe; slot runs in receiver thread).
+
+    Lifecycle:
+      MainWindow creates after token validation → start() → run() spawns asyncio loop
+      → uploader.connect_websocket() → reconnect_supervisor handles drops.
+      On window close: request_shutdown(reason) sends intent.shutdown over WS,
+      then stop() flips _stop flag, run() exits cleanly.
+    """
+    # (msg_type, payload) — see RealTimeUploader._handle_server_message types
+    control_event = pyqtSignal(str, dict)
+
+    def __init__(self, server_url, ws_url, session_id, collection_token, case_id,
+                 consent_record=None, request_signer=None, config=None, parent=None):
+        super().__init__(parent)
+        self._args = dict(
+            server_url=server_url,
+            ws_url=ws_url,
+            session_id=session_id,
+            collection_token=collection_token,
+            case_id=case_id,
+            consent_record=consent_record,
+            request_signer=request_signer,
+            config=config,
+        )
+        self._loop = None
+        self._uploader: Optional[RealTimeUploader] = None
+        self._stop = False
+
+    def run(self):
+        import asyncio
+        # Each thread needs its own event loop
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_until_complete(self._main())
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"[WsControlWorker] loop crashed: {e}")
+        finally:
+            try:
+                self._loop.close()
+            except Exception:
+                pass
+            self._loop = None
+
+    async def _main(self):
+        try:
+            self._uploader = RealTimeUploader(**self._args)
+            # Wire control callback — runs in asyncio thread, pyqtSignal marshals to main thread
+            def _on_msg(msg_type: str, payload: dict):
+                try:
+                    self.control_event.emit(msg_type, payload or {})
+                except RuntimeError:
+                    # Qt object deleted (e.g., during shutdown) — ignore
+                    pass
+            self._uploader.set_control_callback(_on_msg)
+
+            await self._uploader.connect_websocket()
+
+            # Idle until stop is signaled
+            while not self._stop:
+                await asyncio.sleep(0.5)
+        finally:
+            try:
+                if self._uploader:
+                    await self._uploader.disconnect_websocket()
+            except Exception:
+                pass
+
+    def stop(self):
+        """Signal the asyncio loop to exit. Caller should wait()."""
+        self._stop = True
+
+    def request_shutdown(self, reason: str = 'user_close'):
+        """Schedule send_intent_shutdown on the asyncio loop (thread-safe).
+
+        Best-effort — if the loop is gone, this is a no-op. After this, call stop()+wait().
+        """
+        import asyncio
+        if self._loop is None or self._uploader is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._uploader.send_intent_shutdown(reason),
+                self._loop,
+            )
+        except Exception:
+            pass
 
 
 class CollectionWorker(QThread):

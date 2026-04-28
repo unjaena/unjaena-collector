@@ -4,7 +4,14 @@ Real-time Upload Module
 Handles file uploads with WebSocket progress reporting.
 P2-2: User-friendly error message support
 Direct upload to cloud storage via presigned URLs
+
+[2026-04-27 Phase 4] Bidirectional WebSocket: collector now also RECEIVES
+control messages from the server (cancel, terminate, snapshot, etc.) and
+sends a periodic heartbeat. The receive loop is non-blocking with respect
+to upload work — control messages are dispatched onto self._cancelled and
+self._control_callback so the synchronous upload loop can poll them.
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -12,6 +19,7 @@ import os
 import re
 import ssl
 import sys
+import threading
 import time
 
 import aiohttp
@@ -23,6 +31,12 @@ from datetime import datetime, timezone
 from core.token_validator import _get_ssl_verify
 from typing import Callable, Optional
 from dataclasses import dataclass
+
+# [2026-04-27 Phase 4] WebSocket control protocol tunables
+HEARTBEAT_INTERVAL_SECONDS = 15
+RECONNECT_BACKOFF_INITIAL = 3
+RECONNECT_BACKOFF_MAX = 60
+WS_RECEIVE_TIMEOUT = 30  # if no message for this long, assume dead
 
 # Consolidated API endpoint paths for maintainability.
 _ENDPOINTS = {
@@ -169,9 +183,57 @@ class RealTimeUploader:
         self.request_signer = request_signer
         self.ws = None
 
-    async def connect_websocket(self):
-        """Establish WebSocket connection for progress reporting."""
+        # [2026-04-27 Phase 4] Control-protocol state
+        # Threading-safe flag — synchronous upload code reads this between chunks
+        # to decide whether to abort. Set by _handle_server_message when server
+        # sends 'cancel' or 'terminate'.
+        self._cancel_event = threading.Event()
+        self._terminate_reason: Optional[str] = None
+        # Optional callback the GUI can register to surface control messages
+        # (cancel/terminate/snapshot) into the activity log immediately.
+        # Signature: (msg_type: str, payload: dict) -> None
+        self._control_callback: Optional[Callable[[str, dict], None]] = None
+        # Background tasks created by connect_websocket()
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._receiver_task: Optional[asyncio.Task] = None
+        self._reconnect_stop = asyncio.Event()
 
+    def is_cancelled(self) -> bool:
+        """[Phase 4] Synchronous check used by upload loops between chunks."""
+        return self._cancel_event.is_set()
+
+    def get_terminate_reason(self) -> Optional[str]:
+        """[Phase 4] Last termination reason from server, or None."""
+        return self._terminate_reason
+
+    def set_control_callback(self, cb: Callable[[str, dict], None]) -> None:
+        """[Phase 4] GUI registers a callback to receive control events.
+
+        The callback is invoked from the asyncio loop thread; the GUI must
+        marshal back to the Qt main thread (e.g., via QMetaObject.invokeMethod
+        or pyqtSignal.emit which is thread-safe).
+        """
+        self._control_callback = cb
+
+    async def connect_websocket(self):
+        """Establish bidirectional WebSocket and start heartbeat + receiver tasks.
+
+        [2026-04-27 Phase 4] Previously this was a one-way send-only channel.
+        It now:
+          - Connects to /ws/collection/{session_id}
+          - Spawns a background heartbeat sender (15s interval)
+          - Spawns a background receiver that dispatches server control messages
+          - On any disconnect, schedules reconnect with exponential backoff
+            (unless self._reconnect_stop is set by disconnect_websocket()).
+        Failure to connect is non-fatal — uploads still work over HTTP.
+        """
+        self._reconnect_stop.clear()
+        await self._connect_once()
+        # Start reconnect supervisor (no-op if connect succeeded; retries if not)
+        asyncio.ensure_future(self._reconnect_supervisor())
+
+    async def _connect_once(self) -> bool:
+        """Single connection attempt. Returns True on success."""
         try:
             ws_endpoint = f"{self.ws_url}/ws/collection/{self.session_id}"
 
@@ -200,19 +262,190 @@ class RealTimeUploader:
                 ssl=ssl_context
             )
             logger.info(f"[WebSocket] Connected to {ws_endpoint[:50]}...")
+
+            # Start heartbeat + receiver tasks
+            self._heartbeat_task = asyncio.ensure_future(self._heartbeat_loop())
+            self._receiver_task = asyncio.ensure_future(self._receive_loop())
+            return True
         except ssl.SSLError as ssl_err:
             logger.error(f"[WebSocket] SSL error: {ssl_err}")
             logger.error("WebSocket SSL authentication failed - please verify server certificate")
             self.ws = None
+            return False
         except Exception as e:
             logger.warning(f"[WebSocket] Connection failed: {e}")
-            logger.warning(f"WebSocket connection failed: {e}")
             self.ws = None
+            return False
+
+    async def _heartbeat_loop(self):
+        """[Phase 4] Send heartbeat every HEARTBEAT_INTERVAL_SECONDS."""
+        try:
+            while self.ws is not None:
+                try:
+                    await self.ws.send(json.dumps({
+                        'type': 'heartbeat',
+                        'ts': datetime.now(timezone.utc).isoformat(),
+                    }))
+                except Exception as e:
+                    logger.debug(f"[WebSocket] heartbeat send failed: {e}")
+                    return  # connection broken; receiver will reconnect
+                await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            pass
+
+    async def _receive_loop(self):
+        """[Phase 4] Receive server control messages until connection drops."""
+        try:
+            while self.ws is not None:
+                try:
+                    raw = await asyncio.wait_for(self.ws.recv(), timeout=WS_RECEIVE_TIMEOUT * 2)
+                except asyncio.TimeoutError:
+                    # No message for too long — likely a half-open connection. Force reconnect.
+                    logger.warning("[WebSocket] receive timeout — assuming dead, reconnecting")
+                    try:
+                        await self.ws.close()
+                    except Exception:
+                        pass
+                    self.ws = None
+                    return
+                except Exception as e:
+                    logger.debug(f"[WebSocket] recv ended: {e}")
+                    self.ws = None
+                    return
+
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+
+                self._handle_server_message(msg)
+        except asyncio.CancelledError:
+            pass
+
+    def _handle_server_message(self, msg: dict) -> None:
+        """[Phase 4] Dispatch a single inbound server message.
+
+        Server message types (see server-side api/routes/collector_ws.py):
+          - snapshot:      initial / on-reconnect state — includes cancel_flag
+          - cancel:        server-side cancel happened (web UI or auto-cleanup)
+          - terminate:     hard termination (superseded, token expired, ...)
+          - status:        relayed pipeline_progress envelope
+          - heartbeat_ack: response to our heartbeat
+          - pipeline_progress: full envelope for clients that understand it
+        """
+        mtype = msg.get('type')
+
+        if mtype == 'snapshot':
+            # Initial state. Surface cancel_flag if set.
+            if msg.get('cancel_flag'):
+                self._cancel_event.set()
+                self._terminate_reason = 'snapshot_indicated_cancelled'
+            if self._control_callback:
+                try:
+                    self._control_callback('snapshot', msg)
+                except Exception as e:
+                    logger.debug(f"[WebSocket] control_callback(snapshot) error: {e}")
+
+        elif mtype == 'cancel':
+            reason = str(msg.get('reason') or 'unspecified')
+            logger.warning(f"[WebSocket] Server-side CANCEL received: {reason}")
+            self._cancel_event.set()
+            self._terminate_reason = f"cancel:{reason}"
+            if self._control_callback:
+                try:
+                    self._control_callback('cancel', msg)
+                except Exception as e:
+                    logger.debug(f"[WebSocket] control_callback(cancel) error: {e}")
+
+        elif mtype == 'terminate':
+            reason = str(msg.get('reason') or 'unspecified')
+            logger.warning(f"[WebSocket] Server TERMINATE received: {reason}")
+            self._cancel_event.set()
+            self._terminate_reason = f"terminate:{reason}"
+            if self._control_callback:
+                try:
+                    self._control_callback('terminate', msg)
+                except Exception as e:
+                    logger.debug(f"[WebSocket] control_callback(terminate) error: {e}")
+            # Stop reconnect attempts on hard terminate
+            self._reconnect_stop.set()
+
+        elif mtype == 'status' or mtype == 'pipeline_progress':
+            # Just surface to the GUI if it cares — no protocol-level action needed.
+            if self._control_callback:
+                try:
+                    self._control_callback('status', msg)
+                except Exception as e:
+                    logger.debug(f"[WebSocket] control_callback(status) error: {e}")
+
+        elif mtype == 'heartbeat_ack':
+            pass  # noop
+
+    async def _reconnect_supervisor(self):
+        """[Phase 4] Re-establish WS with exponential backoff on disconnect."""
+        backoff = RECONNECT_BACKOFF_INITIAL
+        while not self._reconnect_stop.is_set():
+            # Wait until ws is None (disconnected)
+            while self.ws is not None and not self._reconnect_stop.is_set():
+                await asyncio.sleep(2)
+            if self._reconnect_stop.is_set():
+                return
+            # Reconnect
+            logger.info(f"[WebSocket] Reconnecting in {backoff}s...")
+            try:
+                await asyncio.wait_for(self._reconnect_stop.wait(), timeout=backoff)
+                return  # stop signaled during sleep
+            except asyncio.TimeoutError:
+                pass
+            ok = await self._connect_once()
+            if ok:
+                backoff = RECONNECT_BACKOFF_INITIAL  # reset on success
+            else:
+                backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
+
+    async def send_intent_shutdown(self, reason: str = 'user_close') -> None:
+        """[Phase 4] Send graceful shutdown intent over WS before close.
+
+        Signals the server that we're closing cleanly so it can immediately
+        release the case slot (instead of waiting for the server's idle timeout).
+        Best-effort — failure is non-fatal.
+        """
+        if not self.ws:
+            return
+        try:
+            await asyncio.wait_for(
+                self.ws.send(json.dumps({
+                    'type': 'intent',
+                    'action': 'shutdown',
+                    'reason': reason,
+                    'ts': datetime.now(timezone.utc).isoformat(),
+                })),
+                timeout=2.0,
+            )
+        except Exception as e:
+            logger.debug(f"[WebSocket] intent.shutdown send failed: {e}")
 
     async def disconnect_websocket(self):
-        """Close WebSocket connection."""
+        """Close WebSocket connection and stop background tasks."""
+        # Stop reconnect supervisor first so it doesn't fight us
+        self._reconnect_stop.set()
+        # Cancel background tasks
+        for t in (self._heartbeat_task, self._receiver_task):
+            if t is not None and not t.done():
+                t.cancel()
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+        self._heartbeat_task = None
+        self._receiver_task = None
         if self.ws:
-            await self.ws.close()
+            try:
+                await self.ws.close()
+            except Exception:
+                pass
             self.ws = None
 
     async def send_progress(
