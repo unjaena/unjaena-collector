@@ -18,9 +18,9 @@ import logging
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
     QPushButton, QTextEdit, QFrame, QScrollArea, QWidget,
-    QComboBox, QMessageBox
+    QComboBox, QMessageBox, QSizePolicy
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSize
 
 from gui.styles import COLORS
 
@@ -91,16 +91,11 @@ class ConsentDialog(QDialog):
     def setup_ui(self):
         """Initialize UI (with server API integration)"""
         self.setWindowTitle("AI Forensic Lab - Data Collection Consent")
-        # [2026-04-27] Round 6.6 — taller default + larger maximum so the
-        # required-consent checkbox panel is not squashed into single-line
-        # rows. Operators reported that long consent items (e.g. PIPA/GDPR
-        # full-sentence statements) were being truncated because the
-        # checkbox area only got ~40px of vertical space after the header,
-        # warning, scrolling content, and operator section claimed the
-        # rest of a 620px window.
-        self.setMinimumSize(760, 760)
-        self.setMaximumSize(900, 900)
+        self.setMinimumSize(QSize(780, 720))
+        self.setMaximumSize(QSize(960, 920))
+        self.resize(QSize(820, 780))
         self.setModal(True)
+        self.setSizeGripEnabled(False)
         self.setStyleSheet(self._get_stylesheet())
 
         layout = QVBoxLayout(self)
@@ -146,24 +141,14 @@ class ConsentDialog(QDialog):
         warning_layout.addWidget(self.warning_label)
         layout.addWidget(self.warning_frame)
 
-        # Scroll area (consent content)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setSpacing(12)
-
-        # Display consent content
         self.consent_text = QTextEdit()
+        self.consent_text.setObjectName("consentDocument")
         self.consent_text.setReadOnly(True)
-        self.consent_text.setMinimumHeight(280)
-        self.consent_text.setMaximumHeight(380)
-        content_layout.addWidget(self.consent_text)
-
-        scroll.setWidget(content_widget)
-        layout.addWidget(scroll)
+        self.consent_text.setMinimumHeight(160)
+        self.consent_text.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        layout.addWidget(self.consent_text, 1)
 
         # ------------------------------------------------------------------
         # Operator role + legal basis + international transfer acknowledgment
@@ -186,21 +171,15 @@ class ConsentDialog(QDialog):
         # to. We wrap the entire panel in a ScrollArea (so adding new
         # items doesn't push the buttons off-screen) and the checkbox
         # itself is paired with a wrapping QLabel in _add_consent_item().
-        self.checkbox_scroll = QScrollArea()
-        self.checkbox_scroll.setWidgetResizable(True)
-        self.checkbox_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.checkbox_scroll.setMinimumHeight(140)
-        self.checkbox_scroll.setMaximumHeight(280)
-
         self.checkbox_frame = QFrame()
         self.checkbox_frame.setObjectName("checkboxFrame")
         self.checkbox_layout = QVBoxLayout(self.checkbox_frame)
-        self.checkbox_layout.setContentsMargins(12, 12, 12, 12)
-        self.checkbox_layout.setSpacing(12)
-        self.checkbox_layout.addStretch()
-
-        self.checkbox_scroll.setWidget(self.checkbox_frame)
-        layout.addWidget(self.checkbox_scroll)
+        self.checkbox_layout.setContentsMargins(10, 8, 10, 8)
+        self.checkbox_layout.setSpacing(6)
+        self.checkbox_frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
+        layout.addWidget(self.checkbox_frame)
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -222,6 +201,22 @@ class ConsentDialog(QDialog):
 
         # Load consent template from server
         self._load_consent_template()
+
+    def _center_on_screen(self) -> None:
+        from PyQt6.QtGui import QGuiApplication
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        frame = self.frameGeometry()
+        x = geo.x() + (geo.width() - frame.width()) // 2
+        y = geo.y() + (geo.height() - frame.height()) // 2
+        self.move(x, y)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.adjustSize()
+        self._center_on_screen()
 
     def _on_language_changed(self, index: int):
         """Reload consent when language changes"""
@@ -298,9 +293,6 @@ class ConsentDialog(QDialog):
 
         for item_text in self.required_checkboxes:
             self._add_consent_item(item_text)
-        # Trailing stretch keeps short item lists hugging the top of the
-        # scroll area instead of being centred.
-        self.checkbox_layout.addStretch()
 
         # Button text (by language)
         btn_texts = {
@@ -693,13 +685,35 @@ class ConsentDialog(QDialog):
 
         # International transfer acknowledgment (required under PIPA §28-8
         # + GDPR Chap. V). Disables the Agree button until ticked.
-        self.transfer_checkbox = QCheckBox(self._OPERATOR_LABELS["transfer_label"][self.language])
-        self.transfer_checkbox.setStyleSheet(f"color: {COLORS.get('text_primary', '#f3f4f6')}; font-size: 12px;")
-        self.transfer_checkbox.setToolTip(
-            "PIPA §28-8 / GDPR Art. 44-49 cross-border transfer disclosure"
-        )
+        transfer_text = self._OPERATOR_LABELS["transfer_label"][self.language]
+        self.transfer_checkbox = QCheckBox()
+        self.transfer_checkbox.setObjectName("consentCheck")
+        self.transfer_checkbox.setToolTip(transfer_text)
         self.transfer_checkbox.stateChanged.connect(self._on_transfer_changed)
-        vbox.addWidget(self.transfer_checkbox)
+
+        self._transfer_label_widget = QLabel(transfer_text)
+        self._transfer_label_widget.setObjectName("consentLabel")
+        self._transfer_label_widget.setWordWrap(True)
+        self._transfer_label_widget.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        transfer_policy = QSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
+        transfer_policy.setHeightForWidth(True)
+        self._transfer_label_widget.setSizePolicy(transfer_policy)
+        self._transfer_label_widget.setMinimumWidth(1)
+        self._transfer_label_widget.mousePressEvent = (
+            lambda _e, _cb=self.transfer_checkbox: _cb.toggle()
+        )
+        self._transfer_label_widget.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        transfer_row = QHBoxLayout()
+        transfer_row.setContentsMargins(0, 0, 0, 0)
+        transfer_row.setSpacing(8)
+        transfer_row.addWidget(self.transfer_checkbox, 0, Qt.AlignmentFlag.AlignTop)
+        transfer_row.addWidget(self._transfer_label_widget, 1)
+        vbox.addLayout(transfer_row)
 
         parent_layout.addWidget(frame)
 
@@ -727,7 +741,10 @@ class ConsentDialog(QDialog):
             self._operator_section_title.setText(self._OPERATOR_LABELS["section_title"][self.language])
             self._role_label_widget.setText(self._OPERATOR_LABELS["role_label"][self.language])
             self._basis_label_widget.setText(self._OPERATOR_LABELS["basis_label"][self.language])
-            self.transfer_checkbox.setText(self._OPERATOR_LABELS["transfer_label"][self.language])
+            new_transfer = self._OPERATOR_LABELS["transfer_label"][self.language]
+            self.transfer_checkbox.setToolTip(new_transfer)
+            if hasattr(self, "_transfer_label_widget"):
+                self._transfer_label_widget.setText(new_transfer)
             # Re-populate combo labels, preserving current selection.
             cur_role = self.role_combo.currentData() or self.operator_role
             self.role_combo.blockSignals(True)
@@ -780,6 +797,12 @@ class ConsentDialog(QDialog):
             Qt.TextInteractionFlag.TextSelectableByMouse
             | Qt.TextInteractionFlag.LinksAccessibleByMouse
         )
+        label_policy = QSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
+        label_policy.setHeightForWidth(True)
+        label.setSizePolicy(label_policy)
+        label.setMinimumWidth(1)
         # Clicking the label toggles the checkbox — the row behaves as one widget
         # for the operator. We use mousePressEvent override via lambda
         # because QLabel has no native click signal.
@@ -789,9 +812,7 @@ class ConsentDialog(QDialog):
         row_layout.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
         row_layout.addWidget(label, 1)
 
-        # Insert before the trailing stretch (last item in layout)
-        insert_at = max(0, self.checkbox_layout.count() - 1)
-        self.checkbox_layout.insertWidget(insert_at, row)
+        self.checkbox_layout.addWidget(row)
         self.checkboxes.append(cb)
 
     def _update_button_state(self):
@@ -1040,9 +1061,23 @@ class ConsentDialog(QDialog):
             }}
             #checkboxFrame {{
                 background-color: {COLORS['bg_secondary']};
-                border: 1px solid {COLORS['border_subtle']};
-                border-radius: 6px;
+                border: 1px solid {COLORS.get('border', '#374151')};
+                border-radius: 8px;
                 padding: 8px;
+            }}
+            #checkboxScroll {{
+                background-color: transparent;
+                border: none;
+            }}
+            #consentRow {{
+                background-color: transparent;
+                border: none;
+            }}
+            #consentLabel {{
+                color: {COLORS['text_primary']};
+                background-color: transparent;
+                font-size: 12px;
+                line-height: 1.4;
             }}
             #consentCheck {{
                 color: {COLORS['text_primary']};
@@ -1063,8 +1098,8 @@ class ConsentDialog(QDialog):
                 border-color: {COLORS['brand_primary']};
             }}
             QTextEdit {{
-                background-color: {COLORS['bg_tertiary']};
-                border: 1px solid {COLORS['border_subtle']};
+                background-color: {COLORS['bg_secondary']};
+                border: 1px solid {COLORS.get('border', '#374151')};
                 border-radius: 8px;
                 color: {COLORS['text_primary']};
                 padding: 12px;
