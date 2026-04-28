@@ -2,6 +2,25 @@
 
 All notable changes to the Intelligence Collector are documented in this file. The project follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.7] - 2026-04-27
+
+### Added
+- **Real-time bidirectional WebSocket control channel** — a persistent connection between the collector and the analysis service so the server can push `cancel` / `terminate` / `snapshot` directives to a running collection in real time. Previously the collector relied only on REST polling; the operator had no way to be notified of a server-initiated abort until the next polling tick.
+  - `uploader.py` — control loop with 15-second heartbeat, exponential reconnect backoff (3 s → 60 s), 30-second receive-timeout dead-peer detection, `intent.shutdown` on close.
+  - Threading-safe `_cancelled` flag is set when the server pushes `cancel` or `terminate`; the synchronous upload loop polls between chunks so any in-flight upload aborts gracefully without partial-state corruption.
+  - Optional `control_callback` API for the GUI to react to server directives (toast, dialog, take-over confirmation).
+- **Operator visibility for server-initiated events** (`gui/app.py`) — server abort / take-over events are now surfaced to the user instead of being silently dropped.
+
+### Fixed
+- **`error_messages.py` — `ERROR_PATTERNS` priority order** — the legacy `(CANCELLED|409.*cancelled)` regex was matching the new server-pushed strings (`cancel:user_cancelled`, `terminate:superseded`, …) under `re.IGNORECASE` because every one of those strings contains the substring "cancel" case-insensitively. The activity log was therefore mis-classifying server-pushed events as legacy REST 409 cancels. More-specific `WS_TERMINATE` / `WS_CANCEL` patterns are now ordered **before** the generic `CANCELLED` rule:
+  - `WS_TERMINATE` — *"Another collector took over this case, or your session expired."*
+  - `WS_CANCEL` — *"The web platform cancelled this collection."*
+  - `CANCELLED` — legacy 409 response from REST endpoints.
+
+### Compatibility
+- No breaking API changes. Drop-in replacement for v2.4.6.
+- Older collector releases continue to work against the new server — the bidirectional channel is opt-in: a collector that has not been upgraded simply does not open the new control WebSocket and falls back to the previous polling behaviour.
+
 ## [2.4.6] - 2026-04-27
 
 ### Fixed

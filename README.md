@@ -60,20 +60,28 @@ Configure your upload endpoint in `config.json` (see [Configuration](#configurat
 
 See the [v2.4.1 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.1) for full technical details.
 
-### 🆕 Latest: v2.4.6 (2026-04-27)
+### 🆕 Latest: v2.4.7 (2026-04-27)
 
-GUI bug-fix release on top of v2.4.5:
+Architectural release: real-time bidirectional WebSocket between the collector and the analysis service.
 
-- **Android Tier 3 "Screen Scraping" checkbox hidden** — the screen-scrape collector required `ForensicAgent.apk` which is not shipped with the release, so the checkbox was always failing with *"Failed to install Agent APK"*. Removed from the GUI; the underlying code path is preserved for future re-enablement.
-- **Consent dialog now word-wraps long PIPA / GDPR consent items** — multi-sentence consent statements (cross-border transfer, PIPA Article 28, GDPR Article 49(1)(a) ...) are no longer truncated to a single line. Checkbox + word-wrapped label pair, scrollable panel, taller dialog. Operators can finally read what they are agreeing to.
+- **Real-time control channel** — the server can now push `cancel` / `terminate` / `snapshot` directives to a running collection. Previously the collector polled REST and the operator had no way to be notified of a server-initiated abort until the next polling tick.
+- **15s heartbeat + exponential reconnect backoff** (3 s → 60 s) + 30 s dead-peer detection + `intent.shutdown` on close.
+- **Threading-safe abort propagation** — in-flight uploads see `_cancelled` between chunks and stop gracefully without partial-state corruption.
+- **Operator-readable activity-log messages** for new server-pushed events (`WS_TERMINATE` / `WS_CANCEL`), with a regex-priority fix so they no longer mis-classify as legacy REST 409 `CANCELLED`.
+
+Older collector releases continue to work against the new server — the bidirectional channel is opt-in.
+
+### v2.4.6 highlights
+
+- **Android Tier 3 "Screen Scraping" checkbox hidden** — `ForensicAgent.apk` not shipped with the release; checkbox was always failing.
+- **Consent dialog word-wraps long PIPA / GDPR consent items** — multi-sentence statements no longer truncate to a single line.
 
 ### v2.4.5 highlights
 
-- **Samsung Pay / Samsung Wallet (Android)** — three new artifact types (`mobile_android_samsung_pay`, `mobile_android_samsung_pay_cards`, `mobile_android_samsung_pay_transit`) covering payment transactions, enrolled cards, and transit-card tap events. Heuristic table detector handles both Samsung Pay 1.x and Wallet 2.x/3.x schemas.
-- **iOS Toss app** — added under Korean Apps section as a user-selectable checkbox.
-- **GUI checkbox visibility fix** — 10 previously-invisible iOS apps (BAND, Starbucks Korea, Samjeomssam, Soomgo, MobileFax, HiWorks, Google Slides, Google Docs, Samsung Card, Naver) are now reachable from the iOS tab.
+- **Samsung Pay / Samsung Wallet (Android)** — three new artifact types covering payment transactions, enrolled cards, and transit-card tap events.
+- **iOS Toss app** + **10 previously-invisible iOS apps** (BAND, Starbucks Korea, Samjeomssam, Soomgo, MobileFax, HiWorks, Google Slides, Google Docs, Samsung Card, Naver) now reachable from the iOS tab.
 
-See the [v2.4.6 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.6) and the full [CHANGELOG](CHANGELOG.md) for v2.4.3 / v2.4.4 / v2.4.5 / v2.4.6 details.
+See the [v2.4.7 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.7) and the full [CHANGELOG](CHANGELOG.md) for v2.4.3 ~ v2.4.7 details.
 
 ## 🆚 Why unjaena-collector?
 
