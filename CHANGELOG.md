@@ -2,6 +2,22 @@
 
 All notable changes to the Intelligence Collector are documented in this file. The project follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.8] - 2026-04-29
+
+### Fixed
+- **Consent dialog: panels no longer overlap on first render.** Under `setFixedSize`, Qt's layout engine does not consult `heightForWidth()` on `QLabel(wordWrap=True)` and falls back to the unwrapped `sizeHint().height`. The four required-consent labels reported 126-154 px each (preferred-width single line) instead of the actual 42-56 px when wrapped at the dialog's available width, producing ~264 px of vertical overflow that Qt resolved by overlapping children. The dialog now uses `setMinimumSize / setMaximumSize` and applies `QSizePolicy(Expanding, Minimum) + setHeightForWidth(True)` on every wrap-label so Qt gets the correct wrapped height.
+- **Consent dialog: Cancel and Agree buttons no longer get clipped** after the operator moves the window (same root cause).
+- **Consent dialog opens centred on the active screen** — multi-monitor aware via `self.screen()` + `frameGeometry()` so window decorations are accounted for.
+- **Consent dialog: required-consent checkbox area no longer scrolls infinitely.** The inner `QScrollArea` plus a trailing `addStretch()` produced unbounded vertical room inside the scroll viewport, producing the "infinite scroll" symptom. The scroll area is dropped in favour of the natural layout flow — four wrapped checkbox rows fit cleanly without scrolling.
+
+### Verified
+- Headless instantiation at 780x720 default: no overlaps, all six sections (header, warning, consent text, operator authorization, four wrap-checkboxes, Cancel + Agree buttons) in clean stack order.
+- en / ko / ja layouts: Cancel + Agree y=669 (visible inside dialog).
+- Language switch en→ko→ja→en: no widget leak, four checkboxes stable.
+
+### Compatibility
+- No breaking API changes. Drop-in replacement for v2.4.7. PyQt6-only changes confined to `src/gui/consent_dialog.py`. No new dependencies, no schema changes, no protocol changes.
+
 ## [2.4.7] - 2026-04-27
 
 ### Added

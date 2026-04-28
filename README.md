@@ -60,14 +60,24 @@ Configure your upload endpoint in `config.json` (see [Configuration](#configurat
 
 See the [v2.4.1 release notes](https://github.com/unjaena/unjaena-collector/releases/tag/collector-v2.4.1) for full technical details.
 
-### 🆕 Latest: v2.4.7 (2026-04-27)
+### 🆕 Latest: v2.4.8 (2026-04-29)
 
-Architectural release: real-time bidirectional WebSocket between the collector and the analysis service.
+Consent-dialog layout fix on top of v2.4.7. Field-reported regressions resolved:
 
-- **Real-time control channel** — the server can now push `cancel` / `terminate` / `snapshot` directives to a running collection. Previously the collector polled REST and the operator had no way to be notified of a server-initiated abort until the next polling tick.
-- **15s heartbeat + exponential reconnect backoff** (3 s → 60 s) + 30 s dead-peer detection + `intent.shutdown` on close.
-- **Threading-safe abort propagation** — in-flight uploads see `_cancelled` between chunks and stop gracefully without partial-state corruption.
-- **Operator-readable activity-log messages** for new server-pushed events (`WS_TERMINATE` / `WS_CANCEL`), with a regex-priority fix so they no longer mis-classify as legacy REST 409 `CANCELLED`.
+- **Panels no longer overlap on first render.** Root cause: under `setFixedSize`, Qt did not consult `heightForWidth()` on wrap-labels and used their unwrapped sizeHint (~150 px) instead of the wrapped height (~50 px), producing 264 px of vertical overflow. Now uses `setMinimumSize / setMaximumSize` plus `setHeightForWidth(True)` on every wrap-label.
+- **Cancel and Agree buttons no longer get clipped** after window move.
+- **Dialog opens centred** on the active screen (multi-monitor aware).
+- **Required-consent checkbox area no longer scrolls infinitely** — the inner ScrollArea plus stretch were dropped in favour of natural layout flow.
+
+No breaking API changes. Drop-in replacement for v2.4.7.
+
+### v2.4.7 highlights
+
+Real-time bidirectional WebSocket between the collector and the analysis service:
+
+- Server can now push `cancel` / `terminate` / `snapshot` directives to a running collection.
+- 15 s heartbeat + exponential reconnect backoff (3 s → 60 s) + 30 s dead-peer detection.
+- Threading-safe abort propagation — in-flight uploads stop gracefully without partial-state corruption.
 
 Older collector releases continue to work against the new server — the bidirectional channel is opt-in.
 
