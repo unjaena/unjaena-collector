@@ -1411,6 +1411,14 @@ class CollectorWindow(QMainWindow):
                 target_tab = tab_map['ios']
                 break
 
+            elif device.device_type == DeviceType.MOBILE_FFS_BUNDLE_ANDROID:
+                target_tab = tab_map['android']
+                break
+
+            elif device.device_type == DeviceType.MOBILE_FFS_BUNDLE_IOS:
+                target_tab = tab_map['ios']
+                break
+
             elif device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
                                         DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
                                         DeviceType.VHDX_IMAGE, DeviceType.QCOW2_IMAGE,
@@ -1429,17 +1437,35 @@ class CollectorWindow(QMainWindow):
         # Update Linux/macOS tab info labels
         self._update_linux_macos_info_labels(selected_devices)
 
-        # Update Android root status banner
-        android_device = None
-        for device in selected_devices:
-            if device.device_type == DeviceType.ANDROID_DEVICE:
-                android_device = device
-                break
-        if android_device:
-            is_rooted = android_device.metadata.get('rooted', False)
-            self._update_android_root_status(is_rooted=is_rooted, connected=True)
+        # Detect FFS bundle devices (offline forensic image — no live phone controls)
+        android_bundle = next(
+            (d for d in selected_devices
+             if d.device_type == DeviceType.MOBILE_FFS_BUNDLE_ANDROID),
+            None,
+        )
+        ios_bundle = next(
+            (d for d in selected_devices
+             if d.device_type == DeviceType.MOBILE_FFS_BUNDLE_IOS),
+            None,
+        )
+
+        # Update Android tab: prefer bundle banner over live-device root banner
+        if android_bundle:
+            self._update_android_bundle_status(android_bundle)
         else:
-            self._update_android_root_status(is_rooted=False, connected=False)
+            android_device = next(
+                (d for d in selected_devices
+                 if d.device_type == DeviceType.ANDROID_DEVICE),
+                None,
+            )
+            if android_device:
+                is_rooted = android_device.metadata.get('rooted', False)
+                self._update_android_root_status(is_rooted=is_rooted, connected=True)
+            else:
+                self._update_android_root_status(is_rooted=False, connected=False)
+
+        # Update iOS tab info label
+        self._update_ios_info_label(ios_bundle, selected_devices)
 
         # Auto-navigate to detected tab (only if different from current)
         if target_tab is not None and self.artifacts_tab.currentIndex() != target_tab:
@@ -1494,6 +1520,74 @@ class CollectorWindow(QMainWindow):
             else:
                 self.macos_info_label.setText("Select a macOS disk image or local system from device list")
                 self.macos_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
+
+    def _update_android_bundle_status(self, bundle_device):
+        """Display Android tab status for an FFS bundle (offline filesystem image)."""
+        if not hasattr(self, 'android_root_banner'):
+            return
+
+        fmt = bundle_device.metadata.get('format_id', 'FFS')
+        size = bundle_device.size_display
+        self.android_root_banner.setText(
+            f"FFS Bundle Loaded — {fmt} ({size}) — Full filesystem access"
+        )
+        self.android_root_banner.setStyleSheet(
+            f"background: {COLORS['success_bg']}; color: {COLORS['success']}; "
+            f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
+        )
+        if hasattr(self, 'android_limitation_label'):
+            self.android_limitation_label.setVisible(False)
+
+        # FFS bundle exposes the full filesystem; treat all Android artifacts as collectable
+        for artifact_type, cb in self.artifact_checks.items():
+            info = ARTIFACT_TYPES.get(artifact_type, {})
+            if info.get('category') != 'android':
+                continue
+            cb.setEnabled(True)
+            cb.setChecked(True)
+            cb.setToolTip(
+                info.get('description', '') +
+                " | Source: FFS bundle (offline filesystem image)"
+            )
+
+    def _update_ios_info_label(self, ios_bundle, selected_devices):
+        """Update iOS tab info label for backup or FFS bundle selection."""
+        if not hasattr(self, 'ios_info_label'):
+            return
+
+        if ios_bundle:
+            fmt = ios_bundle.metadata.get('format_id', 'FFS')
+            size = ios_bundle.size_display
+            self.ios_info_label.setText(
+                f"✓ FFS Bundle: {ios_bundle.display_name} — {fmt} ({size})"
+            )
+            self.ios_info_label.setStyleSheet(
+                f"color: {COLORS['success']}; font-size: 9px;"
+            )
+
+            # Auto-enable all iOS artifacts (full filesystem access)
+            for artifact_type, cb in self.artifact_checks.items():
+                info = ARTIFACT_TYPES.get(artifact_type, {})
+                if info.get('category') != 'ios':
+                    continue
+                cb.setEnabled(True)
+                cb.setChecked(True)
+                cb.setToolTip(
+                    info.get('description', '') +
+                    " | Source: FFS bundle (offline filesystem image)"
+                )
+            return
+
+        ios_backup = next(
+            (d for d in selected_devices if d.device_type == DeviceType.IOS_BACKUP),
+            None,
+        )
+        if ios_backup:
+            self.ios_info_label.setText(f"✓ Backup: {ios_backup.display_name}")
+            self.ios_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
+        else:
+            self.ios_info_label.setText("Select iOS backup or FFS bundle from device list")
+            self.ios_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
 
     def _update_collect_button_state(self):
         """Update collect button state"""
@@ -3431,6 +3525,23 @@ class CollectionWorker(QThread):
                 collector = iOSCollector(output_dir, encrypted_backup=encrypted_backup_obj)
                 if backup_path:
                     collector.select_backup(backup_path)
+                return collector
+
+            # Cellebrite UFED FFS / CLBX zip bundle (offline mobile image)
+            elif device_type in (DeviceType.MOBILE_FFS_BUNDLE_IOS,
+                                 DeviceType.MOBILE_FFS_BUNDLE_ANDROID):
+                from collectors.mobile_ffs_collector import MobileFFSBundleCollector
+                bundle_path = device.metadata.get('bundle_path')
+                if not bundle_path:
+                    self.log_message.emit(
+                        f"FFS bundle path missing: {device.display_name}", True
+                    )
+                    return None
+                collector = MobileFFSBundleCollector(output_dir, bundle_path)
+                fmt = device.metadata.get('format_id', 'FFS')
+                self.log_message.emit(
+                    f"FFS bundle loaded: {fmt} ({device.size_display})", False
+                )
                 return collector
 
             # iOS USB direct connection device

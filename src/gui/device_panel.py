@@ -7,12 +7,13 @@ beginner-friendly setup guidance.
 """
 
 import sys
-from typing import Dict
+from typing import Dict, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QCheckBox, QLabel, QPushButton, QFileDialog
+    QCheckBox, QLabel, QPushButton, QFileDialog,
+    QProgressDialog
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QThread
 
 from core.device_manager import (
     UnifiedDeviceManager,
@@ -21,6 +22,28 @@ from core.device_manager import (
 )
 from core.device_enumerators import diagnose_device_prerequisites
 from gui.styles import COLORS
+
+
+class _BundleRegistrationWorker(QThread):
+    """Run device_manager.add_bundle_file off the GUI thread.
+
+    A 30-50 GB Cellebrite zip's central directory + msgpack metadata
+    parse takes ~10s; running it on the GUI thread freezes the window.
+    """
+    finished_with_device = pyqtSignal(object, str)  # (device|None, error_msg)
+
+    def __init__(self, device_manager: UnifiedDeviceManager, file_path: str,
+                 parent=None):
+        super().__init__(parent)
+        self._device_manager = device_manager
+        self._file_path = file_path
+
+    def run(self):
+        try:
+            device = self._device_manager.add_bundle_file(self._file_path)
+            self.finished_with_device.emit(device, "")
+        except Exception as e:
+            self.finished_with_device.emit(None, str(e))
 
 
 class DeviceListPanel(QWidget):
@@ -54,7 +77,7 @@ class DeviceListPanel(QWidget):
         refresh_btn.clicked.connect(self._on_refresh_clicked)
         header.addWidget(refresh_btn)
 
-        add_btn = QPushButton("+ Add Disk Image")
+        add_btn = QPushButton("+ Add Image / Bundle")
         add_btn.setFixedHeight(20)
         add_btn.clicked.connect(self._on_add_image_clicked)
         header.addWidget(add_btn)
@@ -272,18 +295,81 @@ class DeviceListPanel(QWidget):
         self._update_mobile_guide()
 
     def _on_add_image_clicked(self):
-        """Add image"""
-        file_path, _ = QFileDialog.getOpenFileName(
+        """Add image or mobile FFS bundle"""
+        file_path, selected_filter = QFileDialog.getOpenFileName(
             self,
-            "Select Forensic Image",
+            "Select Forensic Image or Mobile Bundle",
             "",
             "Forensic Images (*.E01 *.e01 *.Ex01 *.ex01 *.s01 *.S01 *.l01 *.L01 *.dd *.raw *.img *.bin *.vmdk *.vhd *.vhdx *.qcow2 *.vdi *.dmg *.DMG)"
+            ";;Mobile FFS Bundle (*.zip)"
             ";;All Files (*)"
         )
-        if file_path:
+        if not file_path:
+            return
+
+        is_zip = file_path.lower().endswith(".zip")
+        if is_zip:
+            self._register_ffs_bundle(file_path)
+        else:
             device = self.device_manager.add_image_file(file_path)
             if device:
                 self.image_file_requested.emit()
+
+    def _register_ffs_bundle(self, file_path: str) -> None:
+        """Register a mobile FFS bundle off the GUI thread (large zip
+        central-directory + metadata parse can take 10-30 seconds)."""
+        progress = QProgressDialog(
+            "Analyzing bundle...\n"
+            "(Reading central directory and metadata; large extractions "
+            "may take 10-30 seconds.)",
+            None, 0, 0, self,
+        )
+        progress.setWindowTitle("Mobile FFS Bundle")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+
+        worker = _BundleRegistrationWorker(self.device_manager, file_path, self)
+        self._bundle_worker: Optional[_BundleRegistrationWorker] = worker
+
+        def _on_done(device, error_msg: str):
+            progress.close()
+            self._bundle_worker = None
+            self._show_bundle_registration_result(device, error_msg)
+
+        worker.finished_with_device.connect(_on_done)
+        worker.start()
+        progress.exec()
+
+    def _show_bundle_registration_result(self,
+                                         device: Optional[UnifiedDeviceInfo],
+                                         error_msg: str) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+        if error_msg:
+            QMessageBox.warning(
+                self, "Bundle Registration Failed",
+                f"Could not register bundle:\n{error_msg}"
+            )
+            return
+        if not device:
+            QMessageBox.warning(
+                self, "Bundle Registration Failed",
+                "The selected file is not a recognised mobile FFS bundle.\n\n"
+                "Supported: Cellebrite UFED CLBX (iOS / Android)."
+            )
+            return
+        meta = device.metadata
+        signals = "\n".join(f"  - {s}" for s in meta.get("signals_fired", []))
+        body = (
+            f"<b>{device.display_name}</b><br><br>"
+            f"<b>Format</b>: {meta.get('format_id', '')}<br>"
+            f"<b>Publisher</b>: {meta.get('publisher_software') or 'unknown'}<br>"
+            f"<b>Confidence</b>: {meta.get('confidence', '')}<br>"
+            f"<b>Size</b>: {device.size_display}<br>"
+            f"<br><b>Detection signals</b>:<br><pre>{signals}</pre>"
+        )
+        QMessageBox.information(self, "Bundle Registered", body)
+        self.image_file_requested.emit()
 
     # =========================================================================
     # Display Helpers

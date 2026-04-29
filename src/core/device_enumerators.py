@@ -710,6 +710,93 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
             return True
         return False
 
+
+class MobileFFSBundleEnumerator(BaseDeviceEnumerator):
+    """Mobile FFS bundle enumerator (Cellebrite UFED CLBX zip)."""
+
+    BUNDLE_EXTENSIONS = {'.zip'}
+
+    def __init__(self):
+        self._registered: Dict[str, UnifiedDeviceInfo] = {}
+        logger.info("Mobile FFS bundle enumerator initialized")
+
+    def is_available(self) -> bool:
+        try:
+            from collectors.mobile_ffs.format_detector import detect_zip_format  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def supports_realtime(self) -> bool:
+        return False
+
+    def enumerate(self) -> List[UnifiedDeviceInfo]:
+        return list(self._registered.values())
+
+    def register_bundle(self, file_path: str) -> UnifiedDeviceInfo:
+        """Register a Cellebrite UFED FFS / CLBX zip bundle.
+
+        Raises:
+            FileNotFoundError: zip not found
+            ValueError: not a recognised mobile FFS bundle
+        """
+        from collectors.mobile_ffs.format_detector import detect_zip_format, FormatID
+
+        raw_path = str(file_path)
+        if '..' in raw_path:
+            raise ValueError("Path traversal detected")
+        path = Path(file_path).resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        if path.suffix.lower() not in self.BUNDLE_EXTENSIONS:
+            raise ValueError(f"Unsupported bundle extension: {path.suffix}")
+
+        detection = detect_zip_format(str(path))
+        fmt = detection.format_id
+        if fmt == FormatID.CELLEBRITE_CLBX_IOS:
+            device_type = DeviceType.MOBILE_FFS_BUNDLE_IOS
+            platform = "iOS"
+        elif fmt == FormatID.CELLEBRITE_CLBX_ANDROID:
+            device_type = DeviceType.MOBILE_FFS_BUNDLE_ANDROID
+            platform = "Android"
+        else:
+            raise ValueError(
+                f"Unsupported bundle format: {fmt.name} "
+                f"(only Cellebrite CLBX iOS / Android supported in this build)"
+            )
+
+        device_id = f"mobile_ffs_{path.stem}_{path.stat().st_mtime_ns}"
+        size_bytes = path.stat().st_size
+        info = UnifiedDeviceInfo(
+            device_id=device_id,
+            device_type=device_type,
+            display_name=f"FFS Bundle ({platform}) — {path.name}",
+            status=DeviceStatus.READY,
+            size_bytes=size_bytes,
+            metadata={
+                "bundle_path": str(path),
+                "format_id": fmt.name,
+                "publisher_software": detection.publisher_software or "",
+                "publisher_version": detection.publisher_version or "",
+                "confidence": detection.confidence,
+                "signals_fired": list(detection.signals_fired),
+                "platform": platform,
+            },
+        )
+        self._registered[device_id] = info
+        logger.info(
+            f"Registered mobile FFS bundle: {info.display_name} "
+            f"({fmt.name}, {detection.confidence})"
+        )
+        return info
+
+    def unregister_bundle(self, device_id: str) -> bool:
+        if device_id in self._registered:
+            del self._registered[device_id]
+            logger.info(f"Unregistered mobile FFS bundle: {device_id}")
+            return True
+        return False
+
     def _get_e01_disk_size(self, path: Path) -> Optional[int]:
         """Get actual disk size from E01 image"""
         try:
@@ -992,6 +1079,11 @@ def create_default_enumerators() -> Dict[str, BaseDeviceEnumerator]:
 
     # Forensic images (always available)
     enumerators['images'] = ForensicImageEnumerator()
+
+    # Mobile FFS bundles (Cellebrite UFED CLBX zip)
+    ffs_enum = MobileFFSBundleEnumerator()
+    if ffs_enum.is_available():
+        enumerators['mobile_ffs'] = ffs_enum
 
     # Hardware-level enumerators (EDL / MTK BROM via USB VID/PID)
     hw_enum = AndroidHardwareEnumerator()

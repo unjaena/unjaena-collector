@@ -45,6 +45,8 @@ class DeviceType(Enum):
     ANDROID_MTK_BROM = auto()          # Android device in MTK BROM mode
     IOS_BACKUP = auto()
     IOS_DEVICE = auto()  # iOS device via USB direct connection
+    MOBILE_FFS_BUNDLE_IOS = auto()      # Cellebrite UFED FFS / CLBX iOS zip
+    MOBILE_FFS_BUNDLE_ANDROID = auto()  # Cellebrite UFED FFS / CLBX Android zip
 
 
 class DeviceStatus(Enum):
@@ -106,7 +108,16 @@ class UnifiedDeviceInfo:
         """Check if mobile device"""
         return self.device_type in (
             DeviceType.ANDROID_DEVICE,
-            DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE
+            DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE,
+            DeviceType.MOBILE_FFS_BUNDLE_IOS,
+            DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
+        )
+
+    @property
+    def is_mobile_ffs_bundle(self) -> bool:
+        return self.device_type in (
+            DeviceType.MOBILE_FFS_BUNDLE_IOS,
+            DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
         )
 
     @property
@@ -373,6 +384,40 @@ class UnifiedDeviceManager(QObject):
         except Exception as e:
             logger.error(f"Failed to add image file: {e}")
             return None
+
+    def add_bundle_file(self, file_path: str) -> Optional[UnifiedDeviceInfo]:
+        """Manually add a Cellebrite UFED FFS / CLBX zip bundle.
+
+        Args:
+            file_path: zip file path
+
+        Returns:
+            Added device info (None on failure)
+        """
+        if 'mobile_ffs' not in self._enumerators:
+            logger.error("MobileFFSBundleEnumerator not registered")
+            return None
+        try:
+            enumerator = self._enumerators['mobile_ffs']
+            device = enumerator.register_bundle(file_path)
+            self._devices[device.device_id] = device
+            logger.info(f"FFS bundle added: {device.display_name}")
+            self.device_added.emit(device)
+            return device
+        except Exception as e:
+            logger.error(f"Failed to add FFS bundle: {e}")
+            return None
+
+    def remove_bundle_file(self, device_id: str):
+        if device_id in self._devices:
+            device = self._devices[device_id]
+            if device.is_mobile_ffs_bundle:
+                del self._devices[device_id]
+                self._selected_devices.discard(device_id)
+                if 'mobile_ffs' in self._enumerators:
+                    self._enumerators['mobile_ffs'].unregister_bundle(device_id)
+                logger.info(f"FFS bundle removed: {device_id}")
+                self.device_removed.emit(device_id)
 
     def remove_image_file(self, device_id: str):
         """
