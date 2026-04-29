@@ -67,6 +67,12 @@ class AndroidArtifactSpec:
     relative_path: str           # under /data/data/<package>/
     container_kind: ContainerKind = ContainerKind.APP_DATA
     description: str = ""
+    # When True, `relative_path` is treated as a directory PREFIX —
+    # the resolver fans out to every entry under it.
+    is_directory: bool = False
+    # When `is_directory=True` and non-empty, restrict children to
+    # filenames ending in one of these suffixes (case-insensitive).
+    child_suffix_filter: Tuple[str, ...] = ()
 
     @property
     def full_path_pattern(self) -> str:
@@ -243,6 +249,84 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
         relative_path="databases/transit.db",
         description="Samsung Pay transit cards",
     ),
+    # === Round 7 Phase 2 — DFIR baseline gap closure ===
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_bluetooth_pairings",
+        package="android",
+        relative_path="data/misc/bluedroid/bt_config.conf",
+        container_kind=ContainerKind.SYSTEM,
+        description="Bluedroid paired devices (MACs, names, last-connected)",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_dropbox_logs",
+        package="android",
+        relative_path="data/system/dropbox",
+        container_kind=ContainerKind.SYSTEM,
+        is_directory=True,
+        description="System dropbox logs (boot/restart/app crashes)",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_batterystats",
+        package="android",
+        relative_path="data/system/batterystats.bin",
+        container_kind=ContainerKind.SYSTEM,
+        description="Per-app wake/run intervals (binary)",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_downloads",
+        package="com.android.providers.downloads",
+        relative_path="databases/downloads.db",
+        description="System downloads provider (URL, filename, status)",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_chrome_cookies",
+        package="com.android.chrome",
+        relative_path="app_chrome/Default/Cookies",
+        description="Chrome cookies (session/login attribution)",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_chrome_login_data",
+        package="com.android.chrome",
+        relative_path="app_chrome/Default/Login Data",
+        description="Chrome saved-credential metadata",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_chrome_bookmarks",
+        package="com.android.chrome",
+        relative_path="app_chrome/Default/Bookmarks",
+        description="Chrome bookmarks (JSON)",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_google_maps",
+        package="com.google.android.apps.maps",
+        relative_path="databases/gmm_storage.db",
+        description="Google Maps searches, places, routes",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_google_pay",
+        package="com.google.android.gms",
+        relative_path="databases/android_pay",
+        description="Google Wallet / Pay card history (no extension)",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_locksettings",
+        package="android",
+        relative_path="data/system/locksettings.db",
+        container_kind=ContainerKind.SYSTEM,
+        description="Lock screen attempt counters + lockout state",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_twitter",
+        package="com.twitter.android",
+        relative_path="databases/0-66.db",
+        description="Twitter/X DMs + timeline cache",
+    ),
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_gmail",
+        package="com.google.android.gm",
+        relative_path="databases/EmailProvider.db",
+        description="Gmail Email provider database",
+    ),
 )
 
 
@@ -294,7 +378,16 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         package=None,
         relative_path="private/var/mobile/Library/Notes/notes.sqlite",
         container_kind=ContainerKind.SYSTEM,
-        description="iOS Notes database",
+        description="iOS Notes database (legacy iOS 9-)",
+    ),
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_notes",
+        package=None,
+        relative_path="private/var/mobile/Containers/Shared/AppGroup",
+        container_kind=ContainerKind.SYSTEM,
+        is_directory=True,
+        child_suffix_filter=("NoteStore.sqlite",),
+        description="iOS Notes database (modern iOS 9+, AppGroup-scoped)",
     ),
     IOSArtifactSpec(
         artifact_type="mobile_ios_calendar",
@@ -379,6 +472,81 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
             "CoreSpotlight content index store directory "
             "(per-protection-class .store.db files)"
         ),
+    ),
+    # Accounts3 — every signed-in account (iCloud / Google / Exchange / etc.)
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_accounts",
+        package=None,
+        relative_path="private/var/mobile/Library/Accounts/Accounts3.sqlite",
+        container_kind=ContainerKind.SYSTEM,
+        description="iOS account inventory (iCloud, Google, Exchange, etc.)",
+    ),
+    # FrontBoard application state — install / launch / crash timeline
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_app_state",
+        package=None,
+        relative_path="private/var/mobile/Library/FrontBoard/applicationState.db",
+        container_kind=ContainerKind.SYSTEM,
+        description="iOS application state (FrontBoard install/launch timeline)",
+    ),
+    # Voicemail — voicemail audio + transcripts + caller log
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_voicemail",
+        package=None,
+        relative_path="private/var/mobile/Library/Voicemail/voicemail.db",
+        container_kind=ContainerKind.SYSTEM,
+        description="iOS voicemail database (calls + transcripts)",
+    ),
+    # Apple Mail — Envelope Index (headers, threads) + sidecars
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_mail_envelope",
+        package=None,
+        relative_path="private/var/mobile/Library/Mail/Envelope Index",
+        container_kind=ContainerKind.SYSTEM,
+        description="Apple Mail Envelope Index (headers, threads, message metadata)",
+    ),
+    # Safari Cookies (root system store; per-app cookies fan out separately)
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_safari_cookies",
+        package=None,
+        relative_path="private/var/mobile/Library/Cookies/Cookies.binarycookies",
+        container_kind=ContainerKind.SYSTEM,
+        description="Safari root cookie jar (binarycookies binary format)",
+    ),
+    # CoreDuet — interactionC (contact-of-interest scoring; communication frequency)
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_interaction_c",
+        package=None,
+        relative_path="private/var/mobile/Library/CoreDuet/People/interactionC.db",
+        container_kind=ContainerKind.SYSTEM,
+        description="CoreDuet interactionC — contact-of-interest scoring",
+    ),
+    # routined — Significant Locations + visit history (location pivot)
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_routined",
+        package=None,
+        relative_path="private/var/mobile/Library/Caches/com.apple.routined",
+        container_kind=ContainerKind.SYSTEM,
+        is_directory=True,
+        child_suffix_filter=("Local.sqlite", "Cache.sqlite"),
+        description="routined Significant Locations + visit cache",
+    ),
+    # Biome — iOS 16+ SEGB streams (app launches, Bluetooth, lock, focus)
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_biome",
+        package=None,
+        relative_path="private/var/mobile/Library/Biome/streams",
+        container_kind=ContainerKind.SYSTEM,
+        is_directory=True,
+        description="Biome SEGB streams (app launches, lock, Bluetooth, focus)",
+    ),
+    # WiFi known networks plist
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_wifi",
+        package=None,
+        relative_path="private/var/preferences/SystemConfiguration/com.apple.wifi.plist",
+        container_kind=ContainerKind.ROOT_SYSTEM,
+        description="WiFi known networks (SSIDs, BSSIDs, last-join timestamps)",
     ),
 
     # App-specific (bundle id → resolved per-app container at runtime

@@ -145,6 +145,29 @@ class CellebriteAdapter:
 
     def _iter_android(self) -> Iterator[ResolvedArtifact]:
         for spec in ANDROID_PATH_SPECS:
+            if getattr(spec, "is_directory", False):
+                # Fan out: one ResolvedArtifact per child file under
+                # the directory prefix. Mirrors iOS directory handling.
+                children = list(self._android_directory_children(spec))
+                if children:
+                    for child_path in children:
+                        yield ResolvedArtifact(
+                            artifact_type=spec.artifact_type,
+                            expected_zip_path=child_path,
+                            actual_zip_path=child_path,
+                            present=True,
+                            spec_description=spec.description,
+                        )
+                else:
+                    expected = self._android_expected_path(spec)
+                    yield ResolvedArtifact(
+                        artifact_type=spec.artifact_type,
+                        expected_zip_path=f"{expected}/<children>",
+                        actual_zip_path=None,
+                        present=False,
+                        spec_description=spec.description,
+                    )
+                continue
             expected = self._android_expected_path(spec)
             present = expected in self._entry_set
             yield ResolvedArtifact(
@@ -154,6 +177,29 @@ class CellebriteAdapter:
                 present=present,
                 spec_description=spec.description,
             )
+
+    def _android_directory_children(self, spec) -> Iterator[str]:
+        """Yield zip entry paths under an Android directory spec.
+        Optional `child_suffix_filter` narrows to forensically-useful
+        files (e.g. only `.db` under a databases/ dir)."""
+        prefix = self._android_expected_path(spec)
+        prefix_slash = prefix + ("/" if not prefix.endswith("/") else "")
+        suffix_filter = tuple(
+            s.lower() for s in (
+                getattr(spec, "child_suffix_filter", ()) or ()
+            )
+        )
+        for entry in self._entry_set or ():
+            if not entry.startswith(prefix_slash):
+                continue
+            if entry.endswith("/"):
+                continue
+            base = entry.rsplit("/", 1)[-1]
+            if suffix_filter:
+                lname = base.lower()
+                if not any(lname.endswith(s) for s in suffix_filter):
+                    continue
+            yield entry
 
     def _iter_ios(self) -> Iterator[ResolvedArtifact]:
         assert self._uuid_map is not None
