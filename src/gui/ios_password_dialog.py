@@ -3,7 +3,7 @@
 iOS Encrypted Backup Password Dialog
 
 Simple password input dialog for encrypted iOS backups.
-No background verification - key derivation key derivation is performed once
+No background verification - key derivation is performed once
 in the CollectionWorker thread during collection.
 
 Security:

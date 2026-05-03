@@ -393,7 +393,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_telegram': {
         'name': 'Telegram',
-        'description': 'Telegram messages (TDS serialized, not encrypted)',
+        'description': 'Telegram messages',
         'package': 'org.telegram.messenger',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -461,7 +461,7 @@ ANDROID_ARTIFACT_TYPES = {
     },
     'mobile_android_facebook_messenger': {
         'name': 'Facebook Messenger',
-        'description': 'Facebook Messenger messages (unencrypted)',
+        'description': 'Facebook Messenger messages',
         'package': 'com.facebook.orca',
         'forensic_value': 'critical',
         'subcategory': 'app_messenger',
@@ -5733,7 +5733,7 @@ class AndroidCollector:
             # Check Agent logcat for fatal errors (profile download failure, crash, etc.)
             try:
                 logcat_out, _ = self._adb_shell(
-                    f'logcat -d -t 20 -s RecipeExecutor RecipeDownloader 2>/dev/null'
+                    f'logcat -d -t 20 -s CollectionProfileExecutor ProfileDownloader 2>/dev/null'
                 )
                 if logcat_out and ('Failed to download collection profiles' in logcat_out
                                    or 'FATAL EXCEPTION' in logcat_out):

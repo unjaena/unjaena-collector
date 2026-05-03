@@ -376,7 +376,7 @@ if current_os == 'darwin':
     app = BUNDLE(
         coll,
         name=f'{exe_name}.app',
-        bundle_identifier='com.forensics.collector',
+        bundle_identifier='com.unjaena.collector',
     )
 else:
     # Windows & Linux: single-file binary

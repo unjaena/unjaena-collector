@@ -30,35 +30,25 @@ Cross-platform digital forensic artifact collection tool with GUI. Collects evid
 git clone https://github.com/unjaena/unjaena-collector.git
 cd unjaena-collector
 pip install -r requirements.txt
-python run.py
+python src/main.py        # or:  ./run.sh   (Linux/macOS)   |   run.bat  (Windows)
 ```
 
 Or download a pre-built binary for your platform from [Releases](https://github.com/unjaena/unjaena-collector/releases/latest) (Windows `.exe`, macOS `.dmg`, Linux AppImage).
 
 Configure your upload endpoint in `config.json` (see [Configuration](#configuration)) — defaults to `https://app.unjaena.com` for users of the hosted analysis service.
 
-## 🌟 What's New in v2.4.1 — Tier S 2026 Expansion
+## 🌟 What's New
 
-**11 new artifact types** covering gaps in Windows 11 24H2, macOS Sequoia, and modern Linux distros. These artifacts had limited or no public collector support prior to this release.
+The latest release is **[`collector-v2.5.0`](https://github.com/unjaena/unjaena-collector/releases/latest)**. For per-version detail see the [Releases page](https://github.com/unjaena/unjaena-collector/releases) or the [Changelog](CHANGELOG.md).
 
-### 🍎 macOS / iOS
-- **`macos_biome_stream`** — Apple pattern-of-life framework streams (Ventura+, iOS 15+). Covers notification, Safari history, location activity, and device-pairing event streams. Full **SEGB v1 + v2** container parser.
-- **`macos_xprotect_remediator_db`** — Apple's built-in behavior-rule detection database (XPdb). Ventura+ only, SIP-protected (requires root + Full Disk Access).
+### Recent highlights
 
-### 🪟 Windows 11 24H2+
-- **`teams_v2_local_cache`** — New Teams (MSIX) Chromium LevelDB cache for messages, calls, meetings, and attachment references.
-- **`credential_manager_vault`** — Windows Credential Manager Vault record structure (`VAULT_VCRD` + attribute map + attribute body). Structure only — credential contents never surfaced.
-- **`credential_protection_blobs`** — Windows credential protection key storage (filename + size + hash inventory only).
-- **`onedrive_sync_log`** — OneDrive client sync activity log records.
-- **`chrome_state_file`** — Chromium Local State profile inventory across Chrome / Edge / Brave / Chromium.
-- **`defender_operational_log`** — Windows Defender MPLog operational events (scans, detections, quarantine).
-
-### 🐧 Linux (modern distros)
-- **`linux_auditd_log`** — Kernel audit records (syscall / execve / login events).
-- **`linux_systemd_journal`** — systemd journal messages across all units.
-- **`linux_container_state`** — Docker + Podman container runtime state snapshots.
-
-For the latest version download links, see [Releases](https://github.com/unjaena/unjaena-collector/releases).
+- **v2.5.0** — 22 new iOS17 / Android14 artifact types: Apple Mail Envelope Index, Safari binarycookies, CoreDuet, routined Significant Locations, Biome SEGB streams, Accounts3, voicemail, WiFi known networks; Bluetooth pairings, system dropbox, Chrome cookies / login data / bookmarks, Google Maps, Google Pay / Wallet card history, Twitter/X, Gmail, locksettings.
+- **v2.4.9** — UFED FFS zip bundle ingest (Cellebrite CLBX iOS / Android, no live phone required).
+- **v2.4.7** — Real-time bidirectional WebSocket sync, 15s heartbeat, 3→60s exponential backoff, server-side abort / take-over UX.
+- **v2.4.5** — Samsung Pay / Wallet (Android) collection support + GUI checkbox visibility for 10 previously-invisible iOS apps + Toss.
+- **v2.4.4** — SQLite -wal / -shm sidecar pull, directory-spec fan-out, CoreSpotlight V2 per-protection-class store paths.
+- **v2.4.1** — Tier S 2026 expansion: 11 new artifact types covering Windows 11 24H2 (Teams v2 cache, Credential Manager Vault structure, OneDrive sync log, Chrome state file, Defender MPLog), macOS Sequoia (Biome SEGB, XProtect Remediator), and modern Linux (auditd, systemd-journal, container state).
 
 ## 🆚 Why unjaena-collector?
 
@@ -79,7 +69,7 @@ For the latest version download links, see [Releases](https://github.com/unjaena
 **Where unjaena-collector leads**:
 1. **Native 4-language UI and reports** (Korean / English / Japanese / Chinese) — competing tools mostly require paid translation modules or lack Korean entirely.
 2. **Free, AGPL-3.0, cross-platform** with both endpoint and mobile collection — Autopsy is free but macOS/Linux functionality is limited; Velociraptor is endpoint-only with English UI.
-3. **Windows 11 24H2 Tier S coverage** — 11 new artifact parsers (Teams v2, Credential Manager Vault structure, Defender MPLog, OneDrive sync log, etc.) shipped in v2.4.1.
+3. **Modern OS coverage shipped early** — Windows 11 24H2 / macOS Sequoia / Linux Tier S 2026 artifacts added in v2.4.1, plus broader iOS 17 / Android 14 mobile coverage (22 new types) added in v2.5.0.
 
 **Where it's comparable**:
 4. **Cross-platform artifact collection** across Windows / macOS / Linux / Android / iOS — Magnet AXIOM Cyber and Oxygen Detective offer similar breadth.

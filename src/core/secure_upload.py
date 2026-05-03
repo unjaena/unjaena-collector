@@ -268,7 +268,7 @@ class SecureUploadManager:
         case_id: Optional[str] = None
     ) -> bool:
         """
-        Server authentication and session key issuance.
+        Authenticate with server and establish upload session.
 
         Args:
             user_token: JWT user token

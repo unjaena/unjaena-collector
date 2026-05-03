@@ -620,7 +620,7 @@ ARTIFACT_TYPES = {
     },
     'windows_telegram': {
         'name': 'Telegram Desktop',
-        'description': 'Telegram Desktop tdata, session keys, and process memory',
+        'description': 'Telegram Desktop messages, application data, and process memory',
         'paths': [
             r'%APPDATA%\Telegram Desktop\tdata\key_datas',
             r'%APPDATA%\Telegram Desktop\tdata\settingss',
@@ -642,7 +642,7 @@ ARTIFACT_TYPES = {
         'requires_admin': False,
         'collector': 'collect_messenger_with_memory',
         'artifact_key': 'telegram_pc',
-        'forensic_value': 'messages, session data, settings',
+        'forensic_value': 'messages, settings, application data',
         'process_name': 'Telegram.exe',
     },
     'windows_wechat': {
