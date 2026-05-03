@@ -1,4 +1,4 @@
-"""Tests for cellebrite_adapter — synthetic + real-corpus end-to-end.
+"""Tests for cellebrite_adapter -- synthetic + real-corpus end-to-end.
 
 Real-corpus tests skipped if D:\\Images Hickman zips are not present.
 """
@@ -75,8 +75,22 @@ class PathSpecsBasic(unittest.TestCase):
 
     def test_artifact_types_unique_and_namespaced(self):
         types = all_artifact_types()
-        self.assertEqual(len(types), len(set(types)),
-                         "artifact_type values must be unique")
+        # Some artifact_types are intentionally dual-spec across two
+        # paths so a single key can address both a legacy and a modern
+        # storage location of the same data. Example: mobile_ios_notes
+        # covers both the iOS 9 path Library/Notes/notes.sqlite AND
+        # the modern AppGroup NoteStore.sqlite directory glob. The
+        # collector dispatches both to the same server-side parser.
+        KNOWN_DUAL_SPEC = {"mobile_ios_notes"}
+        from collections import Counter
+        counts = Counter(types)
+        unexpected_dups = [
+            t for t, n in counts.items() if n > 1 and t not in KNOWN_DUAL_SPEC
+        ]
+        self.assertEqual(
+            [], unexpected_dups,
+            f"unexpected artifact_type duplicates: {unexpected_dups}",
+        )
         for t in types:
             self.assertTrue(
                 t.startswith("mobile_android_") or t.startswith("mobile_ios_"),
@@ -208,7 +222,7 @@ class IOSDirectorySpecDispatch(unittest.TestCase):
         )
         from collectors.mobile_ffs.path_specs import IOSArtifactSpec
 
-        # Build a CellebriteAdapter shell — bypass __enter__ since we
+        # Build a CellebriteAdapter shell -- bypass __enter__ since we
         # only exercise the helper. Set _entry_set manually with a mix
         # of valid children, a dotfile that must be skipped, and a
         # subdirectory entry (zipfile encodes directories with trailing /).
@@ -278,11 +292,20 @@ class IOSDirectorySpecDispatch(unittest.TestCase):
 
     def test_legacy_specs_unchanged(self):
         """Default is_directory=False keeps non-directory specs from
-        accidentally triggering the new fan-out path."""
+        accidentally triggering the new fan-out path. The whitelist
+        below tracks every iOS spec that intentionally uses directory
+        fan-out -- adding a new directory spec must explicitly land in
+        this set so a future regression cannot silently turn a
+        single-file spec into a directory walker.
+        """
         from collectors.mobile_ffs.path_specs import IOS_PATH_SPECS
         directory_specs = {
             "mobile_ios_lockdown_pairings",
             "mobile_ios_spotlight_content",
+            "mobile_ios_notes",      # modern AppGroup NoteStore.sqlite glob
+            "mobile_ios_routined",   # Significant Locations directory
+            "mobile_ios_biome",      # SEGB streams directory
+            "mobile_ios_findmy",     # searchpartyd user-data directory
         }
         for s in IOS_PATH_SPECS:
             if s.artifact_type in directory_specs:
@@ -324,7 +347,7 @@ class IOSDirectorySpecDispatch(unittest.TestCase):
         self.assertEqual(len(children), 2)
         for c in children:
             self.assertTrue(c.endswith(".store.db"))
-        # .DS_Store is in dotfile denylist — must be skipped
+        # .DS_Store is in dotfile denylist -- must be skipped
         self.assertNotIn(
             "filesystem1/private/var/mobile/Library/Spotlight/CoreSpotlight/B/index.spotlightV2/.DS_Store",
             children,
@@ -357,10 +380,57 @@ class IOSDirectorySpecDispatch(unittest.TestCase):
         names = sorted(c.rsplit("/", 1)[-1] for c in children)
         self.assertEqual(names, [".store.db", "normal_file.db"])
 
+    def test_filename_globs_match_modern_and_legacy_db_names(self):
+        """Round 7 schema-drift fix: AndroidArtifactSpec.filename_globs
+        lets a single spec match across renamed-app DB filenames. The
+        Facebook Messenger spec now uses both `msys_database_*`
+        (Android 12+ modern) and `threads_db2*` (legacy + sidecars).
+        """
+        from collectors.mobile_ffs.cellebrite_adapter import (
+            CellebriteAdapter,
+        )
+        from collectors.mobile_ffs.path_specs import AndroidArtifactSpec
+
+        ad = CellebriteAdapter.__new__(CellebriteAdapter)
+        ad._entry_set = {
+            # Modern FB Messenger (Android 12+) -- DB + sidecars
+            "Dump/data/data/com.facebook.orca/databases/msys_database_100083016626357",
+            "Dump/data/data/com.facebook.orca/databases/msys_database_100083016626357-wal",
+            "Dump/data/data/com.facebook.orca/databases/msys_database_100083016626357-shm",
+            # Legacy FB Messenger DB + sidecars
+            "Dump/data/data/com.facebook.orca/databases/threads_db2",
+            "Dump/data/data/com.facebook.orca/databases/threads_db2-wal",
+            # Unrelated DBs that must NOT match
+            "Dump/data/data/com.facebook.orca/databases/prefs_db",
+            "Dump/data/data/com.facebook.orca/databases/inbox_units_db",
+        }
+        spec = AndroidArtifactSpec(
+            artifact_type="mobile_android_facebook_messenger",
+            package="com.facebook.orca",
+            relative_path="databases",
+            is_directory=True,
+            filename_globs=("msys_database_*", "threads_db2*"),
+            description="test",
+        )
+        children = sorted(ad._android_directory_children(spec))
+        names = sorted(c.rsplit("/", 1)[-1] for c in children)
+        # Five matches: 3 modern (DB + 2 sidecars) + 2 legacy (DB + 1 sidecar)
+        self.assertEqual(names, [
+            "msys_database_100083016626357",
+            "msys_database_100083016626357-shm",
+            "msys_database_100083016626357-wal",
+            "threads_db2",
+            "threads_db2-wal",
+        ])
+        # Unrelated DBs are filtered out
+        for c in children:
+            self.assertFalse(c.endswith("prefs_db"))
+            self.assertFalse(c.endswith("inbox_units_db"))
+
 
 class CellebriteAdapterRealCorpus(unittest.TestCase):
     HICKMAN_ANDROID = (
-        r"D:\Images\public-corpus\catalog\Android_14_Public_Image"
+        r"D:\image\hickman_android14\Android_14_Public_Image"
         r"\UFED Google Pixel 7a 2024_07_28 (001)"
         r"\EXTRACTION_FFS 01\EXTRACTION_FFS.zip"
     )
@@ -383,6 +453,23 @@ class CellebriteAdapterRealCorpus(unittest.TestCase):
             self.assertIn("mobile_android_telegram", artifact_types)
             self.assertIn("mobile_android_line", artifact_types)
             self.assertIn("mobile_android_viber", artifact_types)
+            # Round 7 path-spec gap-fix coverage on real Hickman bundle.
+            # mobile_android_wifi was added with the apex path; the
+            # Hickman Pixel 7a has WifiConfigStore.xml at that location.
+            self.assertIn("mobile_android_wifi", artifact_types)
+            # mobile_android_media now fans out under /data/media/0
+            # with a suffix filter -- every modern Pixel dump has user
+            # photos / downloads under that root.
+            self.assertIn("mobile_android_media", artifact_types)
+            # mobile_android_facebook_messenger schema-drift fix:
+            # the legacy threads_db2 path no longer exists on this
+            # bundle (only msys_database_<USER_ID>); the new directory
+            # spec with filename_globs picks up the modern files.
+            self.assertIn(
+                "mobile_android_facebook_messenger", artifact_types,
+                "FB Messenger msys_database_<UID> schema-drift fix "
+                "should resolve on Hickman Pixel 7a",
+            )
 
     def test_hickman_ios_artifacts(self):
         if not Path(self.HICKMAN_IOS).exists():
@@ -399,6 +486,18 @@ class CellebriteAdapterRealCorpus(unittest.TestCase):
             self.assertIn("mobile_ios_sms", artifact_types)
             self.assertIn("mobile_ios_call", artifact_types)
             self.assertIn("mobile_ios_contacts", artifact_types)
+            # Round 7 path-spec gap-fix coverage on real Hickman bundle.
+            # findmy under Library/com.apple.icloud.searchpartyd holds
+            # the .record location archives + DBs for offline-finding.
+            self.assertIn(
+                "mobile_ios_findmy", artifact_types,
+                "Find My searchpartyd directory spec should resolve "
+                "on Hickman iPhone 11 / iOS 17",
+            )
+            # TCC.db is a single SYSTEM-rooted file; every iOS dump has
+            # one because every iOS app that has ever requested mic /
+            # camera / location permission has an entry.
+            self.assertIn("mobile_ios_tcc", artifact_types)
 
     def test_hickman_ios_full_pipeline(self):
         if not Path(self.HICKMAN_IOS).exists():

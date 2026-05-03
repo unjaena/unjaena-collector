@@ -20,12 +20,12 @@ Design intent:
 
 For iOS specs, `package` is the bundle id (e.g. `net.whatsapp.WhatsApp`)
 and the path is *relative to the per-app data container*. The runtime
-adapter resolves bundle id → UUID → absolute path inside the FFS dump
+adapter resolves bundle id -> UUID -> absolute path inside the FFS dump
 by parsing each app's `.com.apple.mobile_container_manager.metadata.plist`.
 
 For Android specs, `package` is the package name (e.g. `com.whatsapp`)
 and the path is relative to `/data/data/<package>/` inside the FFS
-dump. Mapping is direct — no UUID resolution needed.
+dump. Mapping is direct -- no UUID resolution needed.
 
 System-level paths (not tied to an app bundle) use `package=None` and
 the path is relative to the appropriate filesystem root.
@@ -41,16 +41,16 @@ class ContainerKind(Enum):
     """Where in the FFS layout a file lives.
 
     For Android:
-      APP_DATA          — /data/data/<package>/...
-      SYSTEM            — /data/system/, /system/, /vendor/, etc.
-      USER_MEDIA        — /sdcard/, /storage/emulated/0/...
+      APP_DATA          -- /data/data/<package>/...
+      SYSTEM            -- /data/system/, /system/, /vendor/, etc.
+      USER_MEDIA        -- /sdcard/, /storage/emulated/0/...
 
     For iOS:
-      APP_DATA          — Containers/Data/Application/<UUID>/...
-      APP_GROUP         — Containers/Shared/AppGroup/<UUID>/...
-      APP_BUNDLE        — Containers/Bundle/Application/<UUID>/<App>.app/...
-      SYSTEM            — /private/var/mobile/Library/...
-      ROOT_SYSTEM       — /System/, /usr/, /Library/ (rarely useful)
+      APP_DATA          -- Containers/Data/Application/<UUID>/...
+      APP_GROUP         -- Containers/Shared/AppGroup/<UUID>/...
+      APP_BUNDLE        -- Containers/Bundle/Application/<UUID>/<App>.app/...
+      SYSTEM            -- /private/var/mobile/Library/...
+      ROOT_SYSTEM       -- /System/, /usr/, /Library/ (rarely useful)
     """
     APP_DATA = "app_data"
     APP_GROUP = "app_group"
@@ -67,12 +67,20 @@ class AndroidArtifactSpec:
     relative_path: str           # under /data/data/<package>/
     container_kind: ContainerKind = ContainerKind.APP_DATA
     description: str = ""
-    # When True, `relative_path` is treated as a directory PREFIX —
+    # When True, `relative_path` is treated as a directory PREFIX --
     # the resolver fans out to every entry under it.
     is_directory: bool = False
     # When `is_directory=True` and non-empty, restrict children to
     # filenames ending in one of these suffixes (case-insensitive).
     child_suffix_filter: Tuple[str, ...] = ()
+    # When `is_directory=True` and non-empty, ONLY children whose
+    # basename matches one of these fnmatch-style globs are yielded.
+    # Lets a single spec handle both the modern and legacy filename
+    # of an app DB that has been renamed across versions
+    # (e.g. Facebook Messenger `threads_db2*` -> `msys_database_*`),
+    # and lets us pull the SQLite -wal / -shm sidecars by including
+    # `<name>*` in the glob list.
+    filename_globs: Tuple[str, ...] = ()
 
     @property
     def full_path_pattern(self) -> str:
@@ -91,7 +99,7 @@ class IOSArtifactSpec:
     relative_path: str           # under per-app container, or absolute for SYSTEM
     container_kind: ContainerKind = ContainerKind.APP_DATA
     description: str = ""
-    # When True, `relative_path` is treated as a directory PREFIX —
+    # When True, `relative_path` is treated as a directory PREFIX --
     # the resolver fans out to every entry under it (one resolved
     # artifact per child file). Used for cases like the lockdown
     # daemon directory where the meaningful unit is the per-record
@@ -101,7 +109,7 @@ class IOSArtifactSpec:
     # When True, the resolver ALSO pulls the SQLite -wal and -shm
     # sidecar files (if present) alongside the primary .db. Without
     # them, transactional state still in WAL is invisible to the
-    # parser pipeline — this matters for deleted-row recovery and
+    # parser pipeline -- this matters for deleted-row recovery and
     # for any DB the OS hasn't checkpointed before acquisition.
     pull_sqlite_sidecars: bool = False
     # When `is_directory=True` and this tuple is non-empty, the
@@ -114,13 +122,13 @@ class IOSArtifactSpec:
 
 
 # =============================================================================
-# Android path specs — neutral artifact_type names, public package ids only
+# Android path specs -- neutral artifact_type names, public package ids only
 # =============================================================================
 ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
     # System-level core artifacts (no app package). artifact_type values
     # mirror the server-side ArtifactType enum so the collector ships
     # uploads with labels that route directly into the existing parser
-    # dispatch table — no enum churn required.
+    # dispatch table -- no enum churn required.
     AndroidArtifactSpec(
         artifact_type="mobile_android_sms",
         package="com.android.providers.telephony",
@@ -164,7 +172,7 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
         relative_path="app_sbrowser/Default/History",
         description="Samsung Internet browser history",
     ),
-    # Third-party messengers — bundle IDs are public
+    # Third-party messengers -- bundle IDs are public
     AndroidArtifactSpec(
         artifact_type="mobile_android_whatsapp",
         package="com.whatsapp",
@@ -192,8 +200,17 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
     AndroidArtifactSpec(
         artifact_type="mobile_android_facebook_messenger",
         package="com.facebook.orca",
-        relative_path="databases/threads_db2",
-        description="Facebook Messenger database",
+        relative_path="databases",
+        description="Facebook Messenger database (covers both legacy threads_db2 and modern msys_database_<USER_ID>)",
+        is_directory=True,
+        # Modern FB Messenger (Android 12+) stores the chat DB at
+        # databases/msys_database_<USER_ID>. Older versions used
+        # databases/threads_db2. The glob handles both, plus their
+        # SQLite -wal / -shm sidecars (which the suffix `*` catches).
+        filename_globs=(
+            "msys_database_*",
+            "threads_db2*",
+        ),
     ),
     AndroidArtifactSpec(
         artifact_type="mobile_android_signal",
@@ -249,7 +266,7 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
         relative_path="databases/transit.db",
         description="Samsung Pay transit cards",
     ),
-    # === Round 7 Phase 2 — DFIR baseline gap closure ===
+    # === Round 7 Phase 2 -- DFIR baseline gap closure ===
     AndroidArtifactSpec(
         artifact_type="mobile_android_bluetooth_pairings",
         package="android",
@@ -327,11 +344,47 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
         relative_path="databases/EmailProvider.db",
         description="Gmail Email provider database",
     ),
+    # ------------------------------------------------------------------
+    # System-level: WiFi configuration (Android 11+ apexdata path).
+    # Earlier releases stored saved-network state under
+    # /data/misc/wifi/WifiConfigStore.xml; the apex packaging in
+    # Android 11 moved the canonical copy under apexdata. Both paths
+    # are still produced by Cellebrite FFS dumps; the apex copy is
+    # the modern source of truth.
+    # ------------------------------------------------------------------
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_wifi",
+        package=None,
+        relative_path="data/misc/apexdata/com.android.wifi/WifiConfigStore.xml",
+        container_kind=ContainerKind.SYSTEM,
+        description="WiFi saved-networks store (Android 11+ apex path)",
+    ),
+    # ------------------------------------------------------------------
+    # User-media directory fan-out: DCIM, Pictures, Download. These
+    # are the three canonical user-photo / screenshot / received-file
+    # locations on every Android device. Mounted under /sdcard which
+    # is itself a symlink to /storage/self/primary or
+    # /storage/emulated/0; Cellebrite FFS dumps surface them under
+    # the ANDROID_DATA root.
+    # ------------------------------------------------------------------
+    AndroidArtifactSpec(
+        artifact_type="mobile_android_media",
+        package=None,
+        relative_path="data/media/0",
+        container_kind=ContainerKind.SYSTEM,
+        description="User media root (DCIM, Pictures, Download, Movies)",
+        is_directory=True,
+        child_suffix_filter=(
+            ".jpg", ".jpeg", ".png", ".heic", ".webp", ".gif", ".bmp",
+            ".mp4", ".mov", ".m4v", ".3gp", ".mkv", ".webm",
+            ".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".zip",
+        ),
+    ),
 )
 
 
 # =============================================================================
-# iOS path specs — system DBs by absolute path, app DBs by bundle id
+# iOS path specs -- system DBs by absolute path, app DBs by bundle id
 # =============================================================================
 IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
     # System databases at well-known absolute paths.
@@ -431,7 +484,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="Wallet passes + transactions",
     ),
-    # New artifact_types — server enum extension required (added in
+    # New artifact_types -- server enum extension required (added in
     # the server-side companion commit). Daubert: explicit, neutral,
     # bundle-name-free.
     IOSArtifactSpec(
@@ -473,7 +526,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
             "(per-protection-class .store.db files)"
         ),
     ),
-    # Accounts3 — every signed-in account (iCloud / Google / Exchange / etc.)
+    # Accounts3 -- every signed-in account (iCloud / Google / Exchange / etc.)
     IOSArtifactSpec(
         artifact_type="mobile_ios_accounts",
         package=None,
@@ -481,7 +534,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="iOS account inventory (iCloud, Google, Exchange, etc.)",
     ),
-    # FrontBoard application state — install / launch / crash timeline
+    # FrontBoard application state -- install / launch / crash timeline
     IOSArtifactSpec(
         artifact_type="mobile_ios_app_state",
         package=None,
@@ -489,7 +542,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="iOS application state (FrontBoard install/launch timeline)",
     ),
-    # Voicemail — voicemail audio + transcripts + caller log
+    # Voicemail -- voicemail audio + transcripts + caller log
     IOSArtifactSpec(
         artifact_type="mobile_ios_voicemail",
         package=None,
@@ -497,7 +550,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="iOS voicemail database (calls + transcripts)",
     ),
-    # Apple Mail — Envelope Index (headers, threads) + sidecars
+    # Apple Mail -- Envelope Index (headers, threads) + sidecars
     IOSArtifactSpec(
         artifact_type="mobile_ios_mail_envelope",
         package=None,
@@ -513,15 +566,15 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="Safari root cookie jar (binarycookies binary format)",
     ),
-    # CoreDuet — interactionC (contact-of-interest scoring; communication frequency)
+    # CoreDuet -- interactionC (contact-of-interest scoring; communication frequency)
     IOSArtifactSpec(
         artifact_type="mobile_ios_interaction_c",
         package=None,
         relative_path="private/var/mobile/Library/CoreDuet/People/interactionC.db",
         container_kind=ContainerKind.SYSTEM,
-        description="CoreDuet interactionC — contact-of-interest scoring",
+        description="CoreDuet interactionC -- contact-of-interest scoring",
     ),
-    # routined — Significant Locations + visit history (location pivot)
+    # routined -- Significant Locations + visit history (location pivot)
     IOSArtifactSpec(
         artifact_type="mobile_ios_routined",
         package=None,
@@ -531,7 +584,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         child_suffix_filter=("Local.sqlite", "Cache.sqlite"),
         description="routined Significant Locations + visit cache",
     ),
-    # Biome — iOS 16+ SEGB streams (app launches, Bluetooth, lock, focus)
+    # Biome -- iOS 16+ SEGB streams (app launches, Bluetooth, lock, focus)
     IOSArtifactSpec(
         artifact_type="mobile_ios_biome",
         package=None,
@@ -549,7 +602,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         description="WiFi known networks (SSIDs, BSSIDs, last-join timestamps)",
     ),
 
-    # App-specific (bundle id → resolved per-app container at runtime
+    # App-specific (bundle id -> resolved per-app container at runtime
     # by ios_uuid_resolver). artifact_type values match the server's
     # existing per-app enum so the dispatcher routes them.
     IOSArtifactSpec(
@@ -586,6 +639,40 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         relative_path="Library/PrivateDocuments/talk.sqlite",
         container_kind=ContainerKind.APP_DATA,
         description="KakaoTalk iOS message database",
+    ),
+    # ------------------------------------------------------------------
+    # iOS Find My -- searchpartyd user-data directory. Holds the
+    # OwnedBeacons / BeaconStore plists, encrypted offline-finding
+    # location archives, and the per-AirTag and per-device record
+    # files that Find My v3 (iOS 14+) uses. Distinct from the
+    # CloudKit framework cache under `Library/Caches/CloudKit/...`,
+    # which only contains framework-internal asset DBs. The
+    # `Library/com.apple.icloud.searchpartyd/` path is the canonical
+    # user-actionable source.
+    # ------------------------------------------------------------------
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_findmy",
+        package=None,
+        relative_path="private/var/mobile/Library/com.apple.icloud.searchpartyd",
+        container_kind=ContainerKind.SYSTEM,
+        description="Find My / searchpartyd user data (OwnedBeacons, BeaconStore, location archives)",
+        is_directory=True,
+        child_suffix_filter=(".archive", ".plist", ".sqlite", ".db", ".record"),
+    ),
+    # ------------------------------------------------------------------
+    # iOS TCC -- Transparency, Consent, and Control. Records every
+    # permission grant for microphone, camera, location, contacts,
+    # photos, etc., with first-grant timestamp and granting agent.
+    # Critical for understanding which apps had access to sensitive
+    # subsystems during the relevant period.
+    # ------------------------------------------------------------------
+    IOSArtifactSpec(
+        artifact_type="mobile_ios_tcc",
+        package=None,
+        relative_path="private/var/mobile/Library/TCC/TCC.db",
+        container_kind=ContainerKind.SYSTEM,
+        description="TCC permission grant history (mic / camera / location / etc.)",
+        pull_sqlite_sidecars=True,
     ),
 )
 

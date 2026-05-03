@@ -5,9 +5,9 @@ read-only FFSView so downstream code can treat Android and iOS
 extractions identically. Works in tandem with:
 
   - safe_zip          : safe streaming extraction primitives
-  - format_detector   : zip → FormatID classification
-  - path_specs        : artifact-type → expected path table
-  - ios_uuid_resolver : iOS bundle-id → UUID resolution
+  - format_detector   : zip -> FormatID classification
+  - path_specs        : artifact-type -> expected path table
+  - ios_uuid_resolver : iOS bundle-id -> UUID resolution
   - case_manifest     : Daubert-grade bundle writer
 
 The adapter is the integration point. Downstream callers do not see
@@ -105,7 +105,7 @@ class CellebriteAdapter:
         # iOS-only: build UUID map up front (single pass over central dir).
         if self._format_id == FormatID.CELLEBRITE_CLBX_IOS:
             logger.info(
-                "Building iOS UUID → bundle-id map for %s", self.zip_path
+                "Building iOS UUID -> bundle-id map for %s", self.zip_path
             )
             self._uuid_map = build_uuid_map(self._zf)
         return self
@@ -135,7 +135,7 @@ class CellebriteAdapter:
     def iter_known_artifacts(self) -> Iterator[ResolvedArtifact]:
         """Yield one ResolvedArtifact per entry in the relevant
         path-spec table for this zip's platform. Includes specs whose
-        target file is *absent* from the source — the caller decides
+        target file is *absent* from the source -- the caller decides
         whether to record those as "expected but absent" in the case
         manifest."""
         if self._format_id == FormatID.CELLEBRITE_CLBX_ANDROID:
@@ -181,7 +181,12 @@ class CellebriteAdapter:
     def _android_directory_children(self, spec) -> Iterator[str]:
         """Yield zip entry paths under an Android directory spec.
         Optional `child_suffix_filter` narrows to forensically-useful
-        files (e.g. only `.db` under a databases/ dir)."""
+        files (e.g. only `.db` under a databases/ dir). Optional
+        `filename_globs` (fnmatch-style) lets a single spec match
+        across renamed-app DB names -- useful when an app vendor has
+        switched the DB filename between versions and both legacy and
+        modern forms need to be collected with one spec."""
+        import fnmatch
         prefix = self._android_expected_path(spec)
         prefix_slash = prefix + ("/" if not prefix.endswith("/") else "")
         suffix_filter = tuple(
@@ -189,6 +194,7 @@ class CellebriteAdapter:
                 getattr(spec, "child_suffix_filter", ()) or ()
             )
         )
+        glob_filter = tuple(getattr(spec, "filename_globs", ()) or ())
         for entry in self._entry_set or ():
             if not entry.startswith(prefix_slash):
                 continue
@@ -198,6 +204,9 @@ class CellebriteAdapter:
             if suffix_filter:
                 lname = base.lower()
                 if not any(lname.endswith(s) for s in suffix_filter):
+                    continue
+            if glob_filter:
+                if not any(fnmatch.fnmatch(base, g) for g in glob_filter):
                     continue
             yield entry
 
@@ -255,14 +264,14 @@ class CellebriteAdapter:
         entries (trailing '/') and known-irrelevant Apple housekeeping
         dotfiles (.DS_Store etc). When the spec carries a non-empty
         `child_suffix_filter`, ONLY entries whose filename ends in one
-        of those suffixes (case-insensitive) are yielded — this keeps
+        of those suffixes (case-insensitive) are yielded -- this keeps
         directory specs like CoreSpotlight from pulling thousands of
         binary index files when only the SQLite portion (.store.db)
         is forensically usable.
 
         IMPORTANT: dotfile filtering uses a denylist of known noise
         names, not a generic `startswith('.')` check. Some real
-        forensic artifacts (e.g. `.store.db`) start with a dot — a
+        forensic artifacts (e.g. `.store.db`) start with a dot -- a
         blanket dotfile skip would silently drop them.
         """
         prefix = f"filesystem1/{spec.relative_path}"
@@ -291,7 +300,7 @@ class CellebriteAdapter:
             return f"Dump/data/data/{spec.package}/{spec.relative_path}"
         if spec.container_kind == ContainerKind.SYSTEM:
             return f"Dump/{spec.relative_path}"
-        # Fallback for less-common kinds — direct join under Dump/
+        # Fallback for less-common kinds -- direct join under Dump/
         return f"Dump/{spec.relative_path}"
 
     def _ios_resolve(self, spec: IOSArtifactSpec
@@ -342,7 +351,7 @@ class CellebriteAdapter:
         dest_dir under safe_iter_entries; record results in manifest.
 
         Also writes one `not_extracted` row for every spec whose target
-        was absent — that's how the case proves we looked.
+        was absent -- that's how the case proves we looked.
         """
         if self._zf is None:
             raise RuntimeError("adapter not entered")
@@ -350,7 +359,7 @@ class CellebriteAdapter:
         policy = policy or ExtractionPolicy()
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build a quick map: actual_zip_path → ResolvedArtifact for
+        # Build a quick map: actual_zip_path -> ResolvedArtifact for
         # entries that should be extracted.
         wanted: Dict[str, ResolvedArtifact] = {}
         absent_specs: List[ResolvedArtifact] = []
@@ -380,17 +389,17 @@ class CellebriteAdapter:
                 cand = primary_path + suffix
                 if cand in zip_entries_set and cand not in wanted:
                     sidecar_extras[cand] = ra
-        # Merge — use a separate map so the dispatcher routes only
+        # Merge -- use a separate map so the dispatcher routes only
         # the primary, but extraction grabs all three.
         wanted_extract = dict(wanted)
         wanted_extract.update(sidecar_extras)
 
-        # Single pass — extract anything in `wanted_extract`.
+        # Single pass -- extract anything in `wanted_extract`.
         # IMPORTANT: only PRIMARY artifacts get recorded in the
         # artifacts manifest. Sidecars (-wal/-shm) are extracted to
         # disk alongside the primary so sqlite3.connect transparently
         # merges WAL state, but they are NOT separately dispatched to
-        # parsers (they are not standalone SQLite databases — opening
+        # parsers (they are not standalone SQLite databases -- opening
         # them via sqlite3 raises). Sidecars land in the manifest's
         # not_extracted list with reason="sidecar_pulled:<artifact>"
         # for chain-of-custody transparency.
@@ -403,7 +412,7 @@ class CellebriteAdapter:
             ):
                 ra = wanted_extract[entry.zip_entry_path]
                 if entry.zip_entry_path in sidecar_extras:
-                    # Pull-only — file is on disk for transparent
+                    # Pull-only -- file is on disk for transparent
                     # WAL merge but NOT dispatched as a separate
                     # artifact_type. Record under not_extracted with
                     # a sidecar reason so the chain of custody shows
@@ -456,8 +465,8 @@ class CellebriteAdapter:
             raise RuntimeError("adapter not entered")
         exclude = exclude or set()
         # Selection predicate: True if we previously extracted it
-        # (so inventory_all marks the *opposite* — entries it didn't
-        # select — as not_in_extraction_spec).
+        # (so inventory_all marks the *opposite* -- entries it didn't
+        # select -- as not_in_extraction_spec).
         select = lambda info: info.filename in exclude
         n = 0
         for inv in inventory_all(self._zf, select_predicate=select):
