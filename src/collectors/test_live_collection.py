@@ -211,7 +211,7 @@ def test_macos_live_collection():
     from collectors.macos_collector import macOSCollector  # noqa: PLC0415
 
     _reset_output_dir()
-    collector = macOSCollector()
+    collector = macOSCollector(output_dir=str(OUTPUT_DIR))
 
     # System-level artifacts that exist on a fresh macOS runner.
     # User-level artifacts (Safari, iMessage, Notes) are included but expected
@@ -268,7 +268,7 @@ def test_linux_live_collection():
     from collectors.linux_collector import LinuxCollector  # noqa: PLC0415
 
     _reset_output_dir()
-    collector = LinuxCollector()
+    collector = LinuxCollector(output_dir=str(OUTPUT_DIR))
 
     # System-level artifacts that exist on a fresh Ubuntu runner.
     artifact_types = [
@@ -318,13 +318,13 @@ def test_local_sanity_dump_artifact_types():
     Useful when adding new types and verifying registration."""
     if sys.platform == "darwin":
         from collectors.macos_collector import macOSCollector
-        types = list(macOSCollector().get_artifact_types().keys())
+        types = list(macOSCollector(output_dir="/tmp/_dump").get_artifact_types().keys())
         print(f"macOS: {len(types)} types")
         for t in sorted(types):
             print(f"  {t}")
     elif sys.platform == "linux":
         from collectors.linux_collector import LinuxCollector
-        types = list(LinuxCollector().get_artifact_types().keys())
+        types = list(LinuxCollector(output_dir="/tmp/_dump").get_artifact_types().keys())
         print(f"Linux: {len(types)} types")
         for t in sorted(types):
             print(f"  {t}")
