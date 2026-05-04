@@ -686,7 +686,9 @@ class macOSCollector:
                 'file_size': stat_info.st_size,
                 'modified_time': datetime.fromtimestamp(stat_info.st_mtime, tz=timezone.utc).isoformat(),
                 'accessed_time': datetime.fromtimestamp(stat_info.st_atime, tz=timezone.utc).isoformat(),
-                'created_time': datetime.fromtimestamp(getattr(stat_info, 'st_birthtime', stat_info.st_ctime, tz=timezone.utc)
+                'created_time': datetime.fromtimestamp(
+                    getattr(stat_info, 'st_birthtime', stat_info.st_ctime),
+                    tz=timezone.utc,
                 ).isoformat(),
                 'hash_sha256': hash_sha256,
                 'forensic_value': config.get('forensic_value', 'medium'),

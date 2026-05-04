@@ -194,7 +194,9 @@ def _assert_manifest_schema(manifest: dict, *, min_artifacts: int) -> None:
         } <= entry.keys(), f"missing fields in {entry}"
         assert len(entry["source_sha256"]) == 64
         assert all(c in "0123456789abcdef" for c in entry["source_sha256"])
-        assert entry["size_bytes"] > 0
+        # Zero-byte files are valid forensic evidence (empty plists, empty
+        # service files, etc.) so we accept >= 0, not > 0.
+        assert entry["size_bytes"] >= 0
 
 
 # ---------------------------------------------------------------------------
