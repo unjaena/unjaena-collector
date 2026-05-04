@@ -2,6 +2,18 @@
 
 All notable changes to the Intelligence Collector are documented in this file. The project follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.2] - 2026-05-04
+
+### Fixed
+- **macOS collection silently failed every file (CRITICAL).** In `_collect_file`, `tz=timezone.utc` was passed as a keyword argument to `getattr()` instead of `datetime.fromtimestamp()`. Because `getattr()` does not accept keyword arguments, every file collected on macOS raised `TypeError: getattr() takes no keyword arguments` and was logged as an error -- the collector returned zero files for every artifact type. Users running v2.5.1 on macOS were affected for every artifact type (Unified Log, Launch Agents/Daemons, TCC.db, Keychain, Safari, iMessage, Notes, etc.). The fix re-orders parens so `getattr(stat_info, 'st_birthtime', stat_info.st_ctime)` is the inner expression and `tz=timezone.utc` applies to `fromtimestamp`.
+
+### Added
+- **CI live-collection workflow.** New `.github/workflows/live-collection-test.yml` runs the actual collector against the GitHub Actions runner's own filesystem on macos-14 (Apple Silicon) and ubuntu-latest. Validates path resolution, file copy, SHA-256 hashing, manifest schema, and permission-denied graceful handling end-to-end. Uploads `manifest.json` plus sample collected files as workflow artifacts (14-day retention) so each run produces an inspectable baseline. The workflow caught the v2.5.1 macOS bug above on its first real run.
+
+### Verified
+- macOS arm64 (14.8.5): 517 files / 626 MB collected across 13 of 16 system-level artifact types (3 user-data types correctly empty on a fresh runner). Real `/var/db/diagnostics/*.tracev3`, `/Library/LaunchAgents/`, `/Library/LaunchDaemons/`, `/var/log/system.log`, `/var/log/install.log`, TCC.db, Keychain, chat.db, NoteStore.sqlite all collected with valid SHA-256.
+- Linux x86_64 (Ubuntu 24.04): 611 files / 835 KB collected across 11 of 16 system-level artifact types. `/etc/passwd`, `/etc/group`, `/etc/hosts`, `/var/log/syslog`, `/var/log/auth.log`, `/var/log/kern.log`, dmesg, all systemd unit files, and crontabs all collected. `/etc/shadow` correctly returned permission-denied (root-only).
+
 ## [2.5.1] - 2026-05-03
 
 ### Fixed
