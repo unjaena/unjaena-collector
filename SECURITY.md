@@ -48,10 +48,11 @@ If you discover a security vulnerability in this project, please report it respo
 
 ## Supported Versions
 
-| Version | Supported |
-|---------|-----------|
-| 1.0.x   | Yes       |
-| < 1.0   | No        |
+| Version | Supported          |
+|---------|--------------------|
+| 2.5.x   | Yes (active)       |
+| 2.4.x   | Yes (security fixes only) |
+| < 2.4   | No                 |
 
 ## Scope
 

@@ -854,7 +854,7 @@ class BaseMFTCollector(ABC):
         artifact_dir = self.output_dir / artifact_type
         artifact_dir.mkdir(exist_ok=True)
 
-        # Handle special artifacts ($MFT, $LogFile, $UsnJrnl) — NTFS only
+        # Handle special artifacts ($MFT, $LogFile, $UsnJrnl) -- NTFS only
         if 'special' in mft_filter:
             os_type = mft_filter.get('os_type', 'windows')
             if os_type != 'windows':
@@ -976,7 +976,7 @@ class BaseMFTCollector(ABC):
                         full_path = f"{parent_path}/{remaining}".replace('//', '/')
 
                         if '*' in full_path:
-                            # Still has wildcards (nested glob) — list and match
+                            # Still has wildcards (nested glob) -- list and match
                             dir_path = '/'.join(full_path.split('/')[:-1])
                             file_pattern = full_path.split('/')[-1]
                             try:
@@ -1009,7 +1009,7 @@ class BaseMFTCollector(ABC):
                     logger.debug(f"[direct_paths] Glob expansion failed for {path_pattern}: {e}")
                     continue
             else:
-                # Exact path — direct access
+                # Exact path -- direct access
                 try:
                     if accessor.path_exists(path_pattern):
                         yield from self._extract_direct_path(
@@ -1096,7 +1096,7 @@ class BaseMFTCollector(ABC):
         full_disk_scan = mft_filter.get('full_disk_scan', False)
         max_file_size = mft_filter.get('max_file_size', 0)  # 0 = unlimited
 
-        # Files to collect — iterate cache directly, no copy
+        # Files to collect -- iterate cache directly, no copy
         files_to_check = self._mft_cache['active_files']
         if include_deleted:
             files_to_check = itertools.chain(files_to_check, self._mft_cache['deleted_files'])
@@ -1277,9 +1277,10 @@ class BaseMFTCollector(ABC):
         if inode is None:
             return
 
-        # Debug: Large file warning
+        # Large file diagnostic -- useful when a single MFT entry expands
+        # to a multi-GB resident file via $DATA streams.
         if file_size > 100 * 1024 * 1024:  # 100MB or larger
-            logger.debug(f"[DEBUG] Large file detected: {filename} ({file_size / 1024 / 1024:.1f}MB)")
+            logger.debug("Large file detected: %s (%.1fMB)", filename, file_size / 1024 / 1024)
 
         try:
             # Generate output filename
@@ -1399,7 +1400,7 @@ class BaseMFTCollector(ABC):
 
         try:
             if special_method == 'collect_mft_raw':
-                # $MFT (inode 0) — streaming to avoid loading entire MFT into memory
+                # $MFT (inode 0) -- streaming to avoid loading entire MFT into memory
                 logger.info(f"[{source}] Collecting $MFT (inode 0)...")
                 output_file = artifact_dir / '$MFT'
                 md5_hash = hashlib.md5()
@@ -1445,7 +1446,7 @@ class BaseMFTCollector(ABC):
                         output_file.unlink()
 
             elif special_method == 'collect_logfile':
-                # $LogFile (inode 2) — streaming to avoid loading entire LogFile into memory
+                # $LogFile (inode 2) -- streaming to avoid loading entire LogFile into memory
                 logger.info(f"[{source}] Collecting $LogFile (inode 2)...")
                 output_file = artifact_dir / '$LogFile'
                 md5_hash = hashlib.md5()

@@ -11,7 +11,7 @@ Concrete implementations for disk sources:
 6. VHDXDiskBackend - Hyper-V VHDX
 7. QCOW2DiskBackend - KVM/QEMU QCOW2
 8. VDIDiskBackend - VirtualBox VDI
-9. DMGDiskBackend - Apple DMG (UDIF) — cross-platform, pure Python
+9. DMGDiskBackend - Apple DMG (UDIF) -- cross-platform, pure Python
 
 Usage:
     # Physical disk
@@ -426,11 +426,13 @@ class VMDKDiskBackend(UnifiedDiskReader):
     def close(self):
         if self._vmdk and hasattr(self._vmdk, 'close'):
             try: self._vmdk.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
         self._vmdk = None
         if self._fh:
             try: self._fh.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
             self._fh = None
         self._is_open = False
 
@@ -495,11 +497,13 @@ class VHDDiskBackend(UnifiedDiskReader):
     def close(self):
         if self._vhd and hasattr(self._vhd, 'close'):
             try: self._vhd.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
         self._vhd = None
         if self._fh:
             try: self._fh.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
             self._fh = None
         self._is_open = False
 
@@ -564,11 +568,13 @@ class VHDXDiskBackend(UnifiedDiskReader):
     def close(self):
         if self._vhdx and hasattr(self._vhdx, 'close'):
             try: self._vhdx.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
         self._vhdx = None
         if self._fh:
             try: self._fh.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
             self._fh = None
         self._is_open = False
 
@@ -633,11 +639,13 @@ class QCOW2DiskBackend(UnifiedDiskReader):
     def close(self):
         if self._qcow2 and hasattr(self._qcow2, 'close'):
             try: self._qcow2.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
         self._qcow2 = None
         if self._fh:
             try: self._fh.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
             self._fh = None
         self._is_open = False
 
@@ -707,17 +715,19 @@ class VDIDiskBackend(UnifiedDiskReader):
     def close(self):
         if self._vdi and hasattr(self._vdi, 'close'):
             try: self._vdi.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
         self._vdi = None
         if self._fh:
             try: self._fh.close()
-            except Exception: pass
+            except Exception as exc:
+                logger.warning("Disk backend close failed: %s", exc)
             self._fh = None
         self._is_open = False
 
 
 # ==============================================================================
-# DMG (Apple UDIF) Backend — cross-platform, pure Python
+# DMG (Apple UDIF) Backend -- cross-platform, pure Python
 # ==============================================================================
 
 class _BLKXChunkEntry(NamedTuple):
@@ -731,7 +741,7 @@ class _BLKXChunkEntry(NamedTuple):
 
 class DMGDiskBackend(UnifiedDiskReader):
     """
-    Apple DMG (UDIF) disk image backend — cross-platform, pure Python
+    Apple DMG (UDIF) disk image backend -- cross-platform, pure Python
 
     Parses the UDIF koly trailer, XML plist resource fork, and BLKXTable
     block maps to provide transparent random-access reads over compressed
@@ -767,7 +777,7 @@ class DMGDiskBackend(UnifiedDiskReader):
     # Sector size (always 512 for DMG)
     _SECTOR_SIZE    = 512
 
-    # Decompressed chunk LRU cache — cap at ~64 MB worth of entries
+    # Decompressed chunk LRU cache -- cap at ~64 MB worth of entries
     _CACHE_MAX_BYTES = 64 * 1024 * 1024
 
     def __init__(self, dmg_path: str):
@@ -996,12 +1006,12 @@ class DMGDiskBackend(UnifiedDiskReader):
         BLKXTable header (200 bytes):
             0: signature(4) = 'mish'
             4: version(4)
-            8: sector_number(8)    — first sector of this partition
-           16: sector_count(8)     — total sectors in this partition
+            8: sector_number(8)    -- first sector of this partition
+           16: sector_count(8)     -- total sectors in this partition
            24: data_offset(8)
            32: buffers_needed(4)
            36: block_descriptors(4)
-           40: reserved(24)        — 6 × uint32
+           40: reserved(24)        -- 6 x uint32
            64: checksum_type(4)
            68: checksum_size(4)
            72: checksum(128)
@@ -1010,9 +1020,9 @@ class DMGDiskBackend(UnifiedDiskReader):
         Each chunk entry is 40 bytes:
             0: entry_type(4)
             4: comment(4)
-            8: sector_number(8)      — sector offset relative to partition start
+            8: sector_number(8)      -- sector offset relative to partition start
            16: sector_count(8)
-           24: compressed_offset(8)  — absolute offset in DMG file
+           24: compressed_offset(8)  -- absolute offset in DMG file
            32: compressed_length(8)
 
         Returns:
@@ -1052,7 +1062,7 @@ class DMGDiskBackend(UnifiedDiskReader):
                 break
 
             entry_type       = struct.unpack('>I', data[offset:offset+4])[0]
-            # comment at offset+4 (4 bytes) — unused
+            # comment at offset+4 (4 bytes) -- unused
             rel_sector_num   = struct.unpack('>Q', data[offset+8:offset+16])[0]
             sector_count     = struct.unpack('>Q', data[offset+16:offset+24])[0]
             compressed_off   = struct.unpack('>Q', data[offset+24:offset+32])[0]
@@ -1133,7 +1143,7 @@ class DMGDiskBackend(UnifiedDiskReader):
             # Find the chunk containing this sector
             chunk = self._find_chunk(sector_num)
             if chunk is None:
-                # Unmapped region — treat as zeros
+                # Unmapped region -- treat as zeros
                 # Advance to next chunk start or to end
                 next_start = self._next_chunk_start_after(sector_num)
                 if next_start is not None:

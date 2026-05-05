@@ -1,4 +1,4 @@
-# unJaena AI — Digital Intelligence Collector
+# unJaena AI -- Digital Intelligence Collector
 
 > The official evidence collection tool for the **unJaena AI** forensic analysis platform.
 > Collected artifacts are automatically uploaded for AI-powered analysis including MITRE ATT&CK mapping, timeline reconstruction, and multilingual investigation reports.
@@ -35,20 +35,22 @@ python src/main.py        # or:  ./run.sh   (Linux/macOS)   |   run.bat  (Window
 
 Or download a pre-built binary for your platform from [Releases](https://github.com/unjaena/unjaena-collector/releases/latest) (Windows `.exe`, macOS `.dmg`, Linux AppImage).
 
-Configure your upload endpoint in `config.json` (see [Configuration](#configuration)) — defaults to `https://app.unjaena.com` for users of the hosted analysis service.
+Configure your upload endpoint in `config.json` (see [Configuration](#configuration)) -- defaults to `https://app.unjaena.com` for users of the hosted analysis service.
 
 ## 🌟 What's New
 
-The latest release is **[`collector-v2.5.0`](https://github.com/unjaena/unjaena-collector/releases/latest)**. For per-version detail see the [Releases page](https://github.com/unjaena/unjaena-collector/releases) or the [Changelog](CHANGELOG.md).
+The latest release is **[`collector-v2.5.2`](https://github.com/unjaena/unjaena-collector/releases/latest)**. For per-version detail see the [Releases page](https://github.com/unjaena/unjaena-collector/releases) or the [Changelog](CHANGELOG.md).
 
 ### Recent highlights
 
-- **v2.5.0** — 22 new iOS17 / Android14 artifact types: Apple Mail Envelope Index, Safari binarycookies, CoreDuet, routined Significant Locations, Biome SEGB streams, Accounts3, voicemail, WiFi known networks; Bluetooth pairings, system dropbox, Chrome cookies / login data / bookmarks, Google Maps, Google Pay / Wallet card history, Twitter/X, Gmail, locksettings.
-- **v2.4.9** — UFED FFS zip bundle ingest (Cellebrite CLBX iOS / Android, no live phone required).
-- **v2.4.7** — Real-time bidirectional WebSocket sync, 15s heartbeat, 3→60s exponential backoff, server-side abort / take-over UX.
-- **v2.4.5** — Samsung Pay / Wallet (Android) collection support + GUI checkbox visibility for 10 previously-invisible iOS apps + Toss.
-- **v2.4.4** — SQLite -wal / -shm sidecar pull, directory-spec fan-out, CoreSpotlight V2 per-protection-class store paths.
-- **v2.4.1** — Tier S 2026 expansion: 11 new artifact types covering Windows 11 24H2 (Teams v2 cache, Credential Manager Vault structure, OneDrive sync log, Chrome state file, Defender MPLog), macOS Sequoia (Biome SEGB, XProtect Remediator), and modern Linux (auditd, systemd-journal, container state).
+- **v2.5.2** -- Critical macOS hotfix (v2.5.1 macOS builds returned zero files for every artifact type due to a kwarg passed to `getattr()` instead of `datetime.fromtimestamp()`). New CI live-collection workflow runs the actual collector against macOS Apple Silicon and Linux GitHub Actions runners and validates path resolution, file copy, SHA-256, and manifest schema end-to-end. Caught the v2.5.1 macOS bug on the first real run.
+- **v2.5.1** -- FFS Tier 1+2 path-spec gap-fix: 5 mobile artifact types (iOS Find My, iOS TCC, Android WiFi config, Android user media, Facebook Messenger Android 12+) had `ArtifactType` registrations and server parsers but no path resolution. Adds `filename_globs` to `AndroidArtifactSpec` so a single directory spec covers both legacy and modern DB names (`threads_db2*` plus `msys_database_*`) plus their SQLite -wal / -shm sidecars.
+- **v2.5.0** -- 22 new iOS17 / Android14 artifact types: Apple Mail Envelope Index, Safari binarycookies, CoreDuet, routined Significant Locations, Biome SEGB streams, Accounts3, voicemail, WiFi known networks; Bluetooth pairings, system dropbox, Chrome cookies / login data / bookmarks, Google Maps, Google Pay / Wallet card history, Twitter/X, Gmail, locksettings.
+- **v2.4.9** -- UFED FFS zip bundle ingest (Cellebrite CLBX iOS / Android, no live phone required).
+- **v2.4.7** -- Real-time bidirectional WebSocket sync, 15s heartbeat, 3->60s exponential backoff, server-side abort / take-over UX.
+- **v2.4.5** -- Samsung Pay / Wallet (Android) collection support + GUI checkbox visibility for 10 previously-invisible iOS apps + Toss.
+- **v2.4.4** -- SQLite -wal / -shm sidecar pull, directory-spec fan-out, CoreSpotlight V2 per-protection-class store paths.
+- **v2.4.1** -- Tier S 2026 expansion: 11 new artifact types covering Windows 11 24H2 (Teams v2 cache, Credential Manager Vault structure, OneDrive sync log, Chrome state file, Defender MPLog), macOS Sequoia (Biome SEGB, XProtect Remediator), and modern Linux (auditd, systemd-journal, container state).
 
 ## 🆚 Why unjaena-collector?
 
@@ -67,25 +69,25 @@ The latest release is **[`collector-v2.5.0`](https://github.com/unjaena/unjaena-
 ### Honest positioning
 
 **Where unjaena-collector leads**:
-1. **Native 4-language UI and reports** (Korean / English / Japanese / Chinese) — competing tools mostly require paid translation modules or lack Korean entirely.
-2. **Free, AGPL-3.0, cross-platform** with both endpoint and mobile collection — Autopsy is free but macOS/Linux functionality is limited; Velociraptor is endpoint-only with English UI.
-3. **Modern OS coverage shipped early** — Windows 11 24H2 / macOS Sequoia / Linux Tier S 2026 artifacts added in v2.4.1, plus broader iOS 17 / Android 14 mobile coverage (22 new types) added in v2.5.0.
+1. **Native 4-language UI and reports** (Korean / English / Japanese / Chinese) -- competing tools mostly require paid translation modules or lack Korean entirely.
+2. **Free, AGPL-3.0, cross-platform** with both endpoint and mobile collection -- Autopsy is free but macOS/Linux functionality is limited; Velociraptor is endpoint-only with English UI.
+3. **Modern OS coverage shipped early** -- Windows 11 24H2 / macOS Sequoia / Linux Tier S 2026 artifacts added in v2.4.1, plus broader iOS 17 / Android 14 mobile coverage (22 new types) added in v2.5.0.
 
 **Where it's comparable**:
-4. **Cross-platform artifact collection** across Windows / macOS / Linux / Android / iOS — Magnet AXIOM Cyber and Oxygen Detective offer similar breadth.
+4. **Cross-platform artifact collection** across Windows / macOS / Linux / Android / iOS -- Magnet AXIOM Cyber and Oxygen Detective offer similar breadth.
 
 **Where it's honestly behind**:
 5. **No court admissibility certification, no vendor training/certification program, no 24/7 commercial support.** For legal proceedings requiring admissibility, use in parallel with NIST-tested commercial suites. unjaena-collector is appropriate for in-house incident response, authorized investigations, and academic research.
 
 > *Trade names (Magnet AXIOM, Magnet AXIOM Cyber, Cellebrite, UFED, Inseyets, Physical Analyzer, Oxygen Forensic Detective, Autopsy, Velociraptor) are trademarks of their respective owners and are used here solely for factual identification.*
 >
-> *Sources: [Magnet Free Tools](https://www.magnetforensics.com/free-tools/) · [Magnet AXIOM Cyber](https://www.magnetforensics.com/products/magnet-axiom-cyber/) · [Cellebrite licensing](https://cellebrite.com/en/changes-to-cellebrite-licensing-model/) · [Oxygen Forensic Detective](https://www.oxygenforensics.com/products/oxygen-forensic-detective/) · [Autopsy GitHub](https://github.com/sleuthkit/autopsy) · [Velociraptor GitHub](https://github.com/Velocidex/velociraptor).*
+> *Sources: [Magnet Free Tools](https://www.magnetforensics.com/free-tools/) : [Magnet AXIOM Cyber](https://www.magnetforensics.com/products/magnet-axiom-cyber/) : [Cellebrite licensing](https://cellebrite.com/en/changes-to-cellebrite-licensing-model/) : [Oxygen Forensic Detective](https://www.oxygenforensics.com/products/oxygen-forensic-detective/) : [Autopsy GitHub](https://github.com/sleuthkit/autopsy) : [Velociraptor GitHub](https://github.com/Velocidex/velociraptor).*
 
 ## 💬 Community
 
-- **GitHub Discussions** — [Ask questions or share artifact requests](https://github.com/unjaena/unjaena-collector/discussions)
-- **GitHub Issues** — [Report bugs or propose new artifact types](https://github.com/unjaena/unjaena-collector/issues)
-- **Follow the project** — [LinkedIn profile](https://www.linkedin.com/in/unjaena) for technical deep-dives and release notes
+- **GitHub Discussions** -- [Ask questions or share artifact requests](https://github.com/unjaena/unjaena-collector/discussions)
+- **GitHub Issues** -- [Report bugs or propose new artifact types](https://github.com/unjaena/unjaena-collector/issues)
+- **Follow the project** -- [LinkedIn profile](https://www.linkedin.com/in/unjaena) for technical deep-dives and release notes
 
 ## How It Works
 
@@ -101,10 +103,10 @@ The latest release is **[`collector-v2.5.0`](https://github.com/unjaena/unjaena-
 └─────────────────────┘        └──────────────────────────────┘
 ```
 
-1. **Collect Evidence** — Automatically extract forensic artifacts from target devices
-2. **Encrypted Transfer** — Upload with AES-256-GCM encryption
-3. **AI Analysis** — Automatic parsing, vector indexing, and LLM-powered analysis
-4. **Generate Reports** — Query forensic findings in natural language (Korean / English / Japanese / Chinese)
+1. **Collect Evidence** -- Automatically extract forensic artifacts from target devices
+2. **Encrypted Transfer** -- Upload with AES-256-GCM encryption
+3. **AI Analysis** -- Automatic parsing, vector indexing, and LLM-powered analysis
+4. **Generate Reports** -- Query forensic findings in natural language (Korean / English / Japanese / Chinese)
 
 ## Features
 
@@ -121,7 +123,7 @@ The latest release is **[`collector-v2.5.0`](https://github.com/unjaena/unjaena-
 
 ## Legal Notice
 
-This software is provided strictly for **authorized forensic activities** — including but not limited to in-house incident response, contracted penetration testing, and authorized digital investigations. You are solely responsible for ensuring that you have the legal authority to run this tool against any target system, and for complying with all applicable laws and regulations in your jurisdiction.
+This software is provided strictly for **authorized forensic activities** -- including but not limited to in-house incident response, contracted penetration testing, and authorized digital investigations. You are solely responsible for ensuring that you have the legal authority to run this tool against any target system, and for complying with all applicable laws and regulations in your jurisdiction.
 
 The maintainers disclaim any liability arising from unauthorized or unlawful use.
 
@@ -129,7 +131,7 @@ This tool is **not purpose-built for court-admissible evidence collection**. If 
 
 ### AGPL-3.0 Network Use
 
-This project is distributed under the GNU Affero General Public License v3.0. Because the AGPL treats network interaction as a form of distribution (§13), if you modify this collector and allow third parties to interact with your modified version — for example by operating an analysis service that receives uploads from the modified client — you must make the corresponding source of the modified client available to those users under the same license.
+This project is distributed under the GNU Affero General Public License v3.0. Because the AGPL treats network interaction as a form of distribution (Section 13), if you modify this collector and allow third parties to interact with your modified version -- for example by operating an analysis service that receives uploads from the modified client -- you must make the corresponding source of the modified client available to those users under the same license.
 
 The AGPL obligation applies to this collector only. The separate server-side analysis platform is independently developed and is not a covered work of this repository.
 
@@ -205,7 +207,7 @@ python tools/download_libimobiledevice.py
 
 ### Android Collection Setup
 
-USB drivers are handled via the `adb-shell[usb]` and `libusb1` packages. On Windows you may additionally need [Zadig](https://zadig.akeo.ie/) to bind the WinUSB driver to the target device — note that Zadig changes the driver at the system level, which can affect other USB devices. See [`resources/USB_DEPENDENCIES.md`](resources/USB_DEPENDENCIES.md) for details.
+USB drivers are handled via the `adb-shell[usb]` and `libusb1` packages. On Windows you may additionally need [Zadig](https://zadig.akeo.ie/) to bind the WinUSB driver to the target device -- note that Zadig changes the driver at the system level, which can affect other USB devices. See [`resources/USB_DEPENDENCIES.md`](resources/USB_DEPENDENCIES.md) for details.
 
 ### Memory Acquisition Setup (optional)
 
@@ -232,7 +234,7 @@ python build.py --production
 python build.py --check-deps
 ```
 
-The production build reads `config.json` for `server_url` / `ws_url` / `dev_mode` / `allow_insecure`. Copy `config.example.json` to `config.json` and edit before building. (The GitHub Actions release workflow generates a `config.production.json` at build time from the `PRODUCTION_SERVER_URL` secret — that file is not required for local builds.)
+The production build reads `config.json` for `server_url` / `ws_url` / `dev_mode` / `allow_insecure`. Copy `config.example.json` to `config.json` and edit before building. (The GitHub Actions release workflow generates a `config.production.json` at build time from the `PRODUCTION_SERVER_URL` secret -- that file is not required for local builds.)
 
 ## Configuration
 
@@ -258,7 +260,7 @@ See `config.example.json` for all available options including:
 
 - **AES-256-GCM** authenticated encryption for all file transfers, with the per-file SHA-256 hash bound as additional authenticated data
 - **SHA-256** file integrity verification for every collected artifact
-- **HTTPS/WSS enforced** in production (PyInstaller) builds — TLS verification cannot be disabled at runtime; the dev-mode and `FORENSIC_VERIFY_SSL` flags apply only to source builds
+- **HTTPS/WSS enforced** in production (PyInstaller) builds -- TLS verification cannot be disabled at runtime; the dev-mode and `FORENSIC_VERIFY_SSL` flags apply only to source builds
 - **One-time session tokens** with replay prevention (used-token set with expiry)
 - **Operator consent record** captured with HMAC-SHA256 integrity tag over the user's selections, timestamp, and hostname hash. Server-side verification of this record against an analysis session is planned for a future release (see CHANGELOG.md, Known Limitations).
 
@@ -292,7 +294,7 @@ unjaena-collector/
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0** — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **GNU Affero General Public License v3.0** -- see the [LICENSE](LICENSE) file for details.
 
 This project depends on [dissect.fve](https://github.com/fox-it/dissect.fve) (AGPL-3.0) for BitLocker decryption, which requires the entire work to be distributed under AGPL-3.0.
 
@@ -312,8 +314,8 @@ This project depends on [dissect.fve](https://github.com/fox-it/dissect.fve) (AG
 ## Contributing
 
 This project is **source-open for transparency**, not for community-driven development.
-As a forensic evidence collection tool, code integrity directly impacts legal admissibility — all changes are reviewed and authored by the internal team.
+As a forensic evidence collection tool, code integrity directly impacts legal admissibility -- all changes are reviewed and authored by the internal team.
 
 - **Bug reports & security issues**: Please open a [GitHub Issue](https://github.com/unjaena/unjaena-collector/issues) or email `contact@unjaena.com`
-- **Feature requests**: Welcome via Issues — we review and prioritize internally
+- **Feature requests**: Welcome via Issues -- we review and prioritize internally
 - **Pull requests**: Not accepted at this time

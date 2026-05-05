@@ -863,7 +863,7 @@ ARTIFACT_TYPES = {
         'collector': 'collect_android',
         'artifact_key': 'samsung_pay_transit',
     },
-    # === Round 7 Phase 2 — DFIR baseline gap closure (Android) ===
+    # === Round 7 Phase 2 -- DFIR baseline gap closure (Android) ===
     'mobile_android_bluetooth_pairings': {
         'name': 'Bluetooth Pairings',
         'description': 'Paired devices (MACs, names, last-connected)',
@@ -1347,7 +1347,7 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # Screen Scraping (Non-Root Accessibility Service) — DISABLED
+    # Screen Scraping (Non-Root Accessibility Service) -- DISABLED
     # =========================================================================
     # The screen-scrape collector requires the ForensicAgent.apk binary in
     # collector/resources/agent_apk/, but the APK is not shipped with the
@@ -1778,7 +1778,7 @@ ARTIFACT_TYPES = {
         'artifact_key': 'siri',
     },
 
-    # === iOS — mobile_ffs path_specs additions ===
+    # === iOS -- mobile_ffs path_specs additions ===
     # These three system-level artifacts are surfaced via the FFS
     # pipeline (Cellebrite extraction). User-selectable so consent
     # control is explicit per-artifact.
@@ -2694,7 +2694,7 @@ ARTIFACT_TYPES = {
         'collector': 'collect_ios',
         'artifact_key': 'app_state',
     },
-    # === Round 7 Phase 2 — DFIR baseline gap closure (iOS) ===
+    # === Round 7 Phase 2 -- DFIR baseline gap closure (iOS) ===
     'mobile_ios_mail_envelope': {
         'name': 'Apple Mail Envelope',
         'description': 'Native Apple Mail headers, threads, message metadata',
@@ -3125,7 +3125,7 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # [2026-04-21] Tier S expansion — Windows
+    # [2026-04-21] Tier S expansion -- Windows
     # =========================================================================
     'credential_manager_vault': {
         'name': 'Windows Credential Manager Vault',
@@ -3133,7 +3133,7 @@ ARTIFACT_TYPES = {
             'Windows Credential Manager vault directory files: '
             'Policy.vpol, *.vsch schemas, *.vcrd records, plus '
             'generic credential files under Credentials. Inventory '
-            'headers only — record bodies are processed by downstream '
+            'headers only -- record bodies are processed by downstream '
             'server components.'
         ),
         'paths': [
@@ -3165,7 +3165,7 @@ ARTIFACT_TYPES = {
         'name': 'Windows User Protection Blobs',
         'description': (
             'Binary protection blob files under Roaming\\Microsoft\\'
-            'Protect. Structural inventory only — filename, size, '
+            'Protect. Structural inventory only -- filename, size, '
             'timestamps. Required as dependency input for downstream '
             'credential-store processing.'
         ),
@@ -3240,7 +3240,7 @@ ARTIFACT_TYPES = {
             'Messages (verbatim content + thread + sender), meeting '
             'records (participants + subject + time), call logs '
             '(duration + direction + type), contact roster, file-'
-            'transfer attachments (SharePoint URLs — exfil evidence)'
+            'transfer attachments (SharePoint URLs -- exfil evidence)'
         ),
     },
     'onedrive_sync_log': {
@@ -3389,7 +3389,7 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # [2026-04-21] Tier S expansion — Linux
+    # [2026-04-21] Tier S expansion -- Linux
     # =========================================================================
     'linux_systemd_journal': {
         'name': 'Linux systemd Journal',
@@ -3546,12 +3546,12 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # [2026-04-21] Tier S expansion — macOS
+    # [2026-04-21] Tier S expansion -- macOS
     # =========================================================================
     'macos_xprotect_remediator_db': {
         'name': 'macOS XProtect Behavior DB',
         'description': (
-            'Apple XProtect Behavior Service database (XPdb) — '
+            'Apple XProtect Behavior Service database (XPdb) -- '
             'Ventura 13+ detection events from built-in behavior '
             'rules. SIP-protected; requires root + Full Disk Access.'
         ),
@@ -3598,7 +3598,7 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # macOS Extended Artifacts (from MACOS_ARTIFACT_FILTERS — auto-registered)
+    # macOS Extended Artifacts (from MACOS_ARTIFACT_FILTERS -- auto-registered)
     # =========================================================================
     **{k: {'name': v.get('description', k), 'description': v.get('description', ''),
            'category': 'macos', 'paths': [], 'forensic_value': v.get('forensic_value', 'medium'),
@@ -3672,7 +3672,7 @@ def _infer_ios_subcategory(name: str, key: str) -> str:
     if any(t in n for t in ('twitter', 'instagram', 'tiktok',
                              'facebook', 'snapchat', 'band')):
         return 'sns'
-    # Default to 'korean' bucket — most auto-registered entries
+    # Default to 'korean' bucket -- most auto-registered entries
     # come from the Korean app block in ios_collector.IOS_ARTIFACT_TYPES.
     return 'korean'
 
@@ -4989,7 +4989,7 @@ class ArtifactCollector:
         # Flag for compatibility
         self.use_mft = self.collection_mode in ('forensic_disk_accessor', 'mft')
 
-        # Cache for scan_all_files() results — avoids repeated full MFT scans
+        # Cache for scan_all_files() results -- avoids repeated full MFT scans
         self._scan_cache = None
         # Pre-built index from scan cache for O(1) extension/filename lookups
         self._scan_index = None
@@ -5529,7 +5529,7 @@ class ArtifactCollector:
         mft_config = artifact_info.get('mft_config', {})
 
         # ==========================================================
-        # No mft_config → use legacy fallback
+        # No mft_config -> use legacy fallback
         # ==========================================================
         if not mft_config:
             logger.info(f"[ForensicDisk] {artifact_type}: no mft_config, using legacy fallback")
@@ -5654,7 +5654,7 @@ class ArtifactCollector:
         """
         try:
             if method_name == 'collect_mft_raw':
-                # $MFT (inode 0) — streaming to avoid loading entire MFT into memory
+                # $MFT (inode 0) -- streaming to avoid loading entire MFT into memory
                 logger.debug("[ForensicDisk] Collecting $MFT (inode 0)...")
                 output_file = artifact_dir / '$MFT'
                 md5_hash = hashlib.md5()
@@ -5708,7 +5708,7 @@ class ArtifactCollector:
                     # Skip sparse regions (fix memory/size issues)
                     data = self.forensic_disk_accessor.read_usnjrnl_raw(skip_sparse=True)
                 except Exception as e1:
-                    logger.debug(f"[DEBUG] read_usnjrnl_raw failed: {e1}")
+                    logger.debug("read_usnjrnl_raw failed: %s", e1)
                     # Alternative: find directly in $Extend directory
                     try:
                         # Find $UsnJrnl in $Extend directory (inode 11)
@@ -5719,7 +5719,7 @@ class ArtifactCollector:
                                 usnjrnl_inode, stream_name='$J'
                             )
                     except Exception as e2:
-                        logger.debug(f"[DEBUG] Alternative USN Journal collection failed: {e2}")
+                        logger.debug("Alternative USN Journal collection failed: %s", e2)
 
                 if data and len(data) > 0:
                     # USN Journal is sparse file, mostly filled with zeros
@@ -5749,7 +5749,7 @@ class ArtifactCollector:
                     logger.debug("[WARNING] $UsnJrnl:$J not found or empty (data is None or 0 bytes)")
 
             elif method_name == 'collect_logfile':
-                # $LogFile (inode 2) — streaming to avoid loading entire LogFile into memory
+                # $LogFile (inode 2) -- streaming to avoid loading entire LogFile into memory
                 logger.debug("[ForensicDisk] Collecting $LogFile (inode 2)...")
                 output_file = artifact_dir / '$LogFile'
                 md5_hash = hashlib.md5()
@@ -5921,7 +5921,7 @@ class ArtifactCollector:
                                 progress_callback(str(output_file))
 
                     except Exception as entry_err:
-                        logger.debug(f"[DEBUG] Zone.Identifier entry error: {entry_err}")
+                        logger.debug("Zone.Identifier entry error: %s", entry_err)
                         continue
 
                 logger.debug(f"[ForensicDisk] Zone.Identifier: checked {checked_count} user files, collected {collected_count} ADS streams")
@@ -6080,12 +6080,12 @@ class ArtifactCollector:
                     if not include_deleted:
                         candidate_entries = [e for e in candidate_entries if not e.is_deleted]
                 else:
-                    # Wildcard pattern — fall back to full list
+                    # Wildcard pattern -- fall back to full list
                     candidate_entries = list(scan_result.get('active_files', []))
                     if include_deleted:
                         candidate_entries.extend(scan_result.get('deleted_files', []))
             else:
-                # No extension filter and no simple pattern — use full list
+                # No extension filter and no simple pattern -- use full list
                 candidate_entries = list(scan_result.get('active_files', []))
                 if include_deleted:
                     candidate_entries.extend(scan_result.get('deleted_files', []))
@@ -6259,7 +6259,7 @@ class ArtifactCollector:
         """
         mft_config = artifact_info.get('mft_config', {})
 
-        # No mft_config → use legacy fallback
+        # No mft_config -> use legacy fallback
         if not mft_config:
             logger.info(f"[MFT] {artifact_type}: no mft_config, using legacy fallback")
             yield from self._collect_legacy(
