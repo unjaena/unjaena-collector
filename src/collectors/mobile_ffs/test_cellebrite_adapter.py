@@ -1,4 +1,4 @@
-"""Tests for cellebrite_adapter -- synthetic + real-corpus end-to-end.
+"""Tests for cellebrite_adapter — synthetic + real-corpus end-to-end.
 
 Real-corpus tests skipped if D:\\Images Hickman zips are not present.
 """
@@ -81,7 +81,24 @@ class PathSpecsBasic(unittest.TestCase):
         # covers both the iOS 9 path Library/Notes/notes.sqlite AND
         # the modern AppGroup NoteStore.sqlite directory glob. The
         # collector dispatches both to the same server-side parser.
-        KNOWN_DUAL_SPEC = {"mobile_ios_notes"}
+        KNOWN_DUAL_SPEC = {
+            "mobile_ios_notes",
+            "ai_mobile_chatgpt",
+            "ai_mobile_claude",
+            "ai_mobile_copilot",
+            "ai_mobile_gemini",
+            "ai_mobile_perplexity",
+            "ai_mobile_replika",
+            "ai_mobile_otter",
+            "ai_mobile_deepseek",
+            "ai_mobile_wrtn",
+            "ai_mobile_character_ai",
+            "ai_mobile_poe",
+            "ai_mobile_grok",
+            "ai_mobile_le_chat",
+            "ai_mobile_meta_ai",
+            "ai_mobile_pi",
+        }
         from collections import Counter
         counts = Counter(types)
         unexpected_dups = [
@@ -93,8 +110,10 @@ class PathSpecsBasic(unittest.TestCase):
         )
         for t in types:
             self.assertTrue(
-                t.startswith("mobile_android_") or t.startswith("mobile_ios_"),
-                f"artifact_type {t!r} must use the mobile_* namespace"
+                t.startswith("mobile_android_")
+                or t.startswith("mobile_ios_")
+                or t.startswith("ai_mobile_"),
+                f"artifact_type {t!r} must use the mobile or ai_mobile namespace"
             )
 
 
@@ -222,7 +241,7 @@ class IOSDirectorySpecDispatch(unittest.TestCase):
         )
         from collectors.mobile_ffs.path_specs import IOSArtifactSpec
 
-        # Build a CellebriteAdapter shell -- bypass __enter__ since we
+        # Build a CellebriteAdapter shell — bypass __enter__ since we
         # only exercise the helper. Set _entry_set manually with a mix
         # of valid children, a dotfile that must be skipped, and a
         # subdirectory entry (zipfile encodes directories with trailing /).
@@ -294,7 +313,7 @@ class IOSDirectorySpecDispatch(unittest.TestCase):
         """Default is_directory=False keeps non-directory specs from
         accidentally triggering the new fan-out path. The whitelist
         below tracks every iOS spec that intentionally uses directory
-        fan-out -- adding a new directory spec must explicitly land in
+        fan-out — adding a new directory spec must explicitly land in
         this set so a future regression cannot silently turn a
         single-file spec into a directory walker.
         """
@@ -306,6 +325,22 @@ class IOSDirectorySpecDispatch(unittest.TestCase):
             "mobile_ios_routined",   # Significant Locations directory
             "mobile_ios_biome",      # SEGB streams directory
             "mobile_ios_findmy",     # searchpartyd user-data directory
+            "ai_mobile_chatgpt",
+            "ai_mobile_claude",
+            "ai_mobile_copilot",
+            "ai_mobile_gemini",
+            "ai_mobile_perplexity",
+            "ai_mobile_replika",
+            "ai_mobile_otter",
+            "ai_mobile_deepseek",
+            "ai_mobile_wrtn",
+            "ai_mobile_character_ai",
+            "ai_mobile_poe",
+            "ai_mobile_grok",
+            "ai_mobile_le_chat",
+            "ai_mobile_meta_ai",
+            "ai_mobile_pi",
+            "ai_mobile_clova",
         }
         for s in IOS_PATH_SPECS:
             if s.artifact_type in directory_specs:
@@ -347,7 +382,7 @@ class IOSDirectorySpecDispatch(unittest.TestCase):
         self.assertEqual(len(children), 2)
         for c in children:
             self.assertTrue(c.endswith(".store.db"))
-        # .DS_Store is in dotfile denylist -- must be skipped
+        # .DS_Store is in dotfile denylist — must be skipped
         self.assertNotIn(
             "filesystem1/private/var/mobile/Library/Spotlight/CoreSpotlight/B/index.spotlightV2/.DS_Store",
             children,
@@ -393,7 +428,7 @@ class IOSDirectorySpecDispatch(unittest.TestCase):
 
         ad = CellebriteAdapter.__new__(CellebriteAdapter)
         ad._entry_set = {
-            # Modern FB Messenger (Android 12+) -- DB + sidecars
+            # Modern FB Messenger (Android 12+) — DB + sidecars
             "Dump/data/data/com.facebook.orca/databases/msys_database_100083016626357",
             "Dump/data/data/com.facebook.orca/databases/msys_database_100083016626357-wal",
             "Dump/data/data/com.facebook.orca/databases/msys_database_100083016626357-shm",
@@ -458,7 +493,7 @@ class CellebriteAdapterRealCorpus(unittest.TestCase):
             # Hickman Pixel 7a has WifiConfigStore.xml at that location.
             self.assertIn("mobile_android_wifi", artifact_types)
             # mobile_android_media now fans out under /data/media/0
-            # with a suffix filter -- every modern Pixel dump has user
+            # with a suffix filter — every modern Pixel dump has user
             # photos / downloads under that root.
             self.assertIn("mobile_android_media", artifact_types)
             # mobile_android_facebook_messenger schema-drift fix:

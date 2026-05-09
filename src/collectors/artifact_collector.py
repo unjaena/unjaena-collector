@@ -30,6 +30,15 @@ try:
 except ImportError:
     _MACOS_FILTERS = {}
 
+try:
+    from collectors.mobile_ffs.path_specs import (
+        ANDROID_PATH_SPECS as _ANDROID_FFS_SPECS,
+        IOS_PATH_SPECS as _IOS_FFS_SPECS,
+    )
+except ImportError:
+    _ANDROID_FFS_SPECS = ()
+    _IOS_FFS_SPECS = ()
+
 logger = logging.getLogger(__name__)
 
 # Try to import BaseMFTCollector (unified base class)
@@ -863,7 +872,7 @@ ARTIFACT_TYPES = {
         'collector': 'collect_android',
         'artifact_key': 'samsung_pay_transit',
     },
-    # === Round 7 Phase 2 -- DFIR baseline gap closure (Android) ===
+    # === Round 7 Phase 2 — DFIR baseline gap closure (Android) ===
     'mobile_android_bluetooth_pairings': {
         'name': 'Bluetooth Pairings',
         'description': 'Paired devices (MACs, names, last-connected)',
@@ -1347,7 +1356,7 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # Screen Scraping (Non-Root Accessibility Service) -- DISABLED
+    # Screen Scraping (Non-Root Accessibility Service) — DISABLED
     # =========================================================================
     # The screen-scrape collector requires the ForensicAgent.apk binary in
     # collector/resources/agent_apk/, but the APK is not shipped with the
@@ -1778,7 +1787,7 @@ ARTIFACT_TYPES = {
         'artifact_key': 'siri',
     },
 
-    # === iOS -- mobile_ffs path_specs additions ===
+    # === iOS — mobile_ffs path_specs additions ===
     # These three system-level artifacts are surfaced via the FFS
     # pipeline (Cellebrite extraction). User-selectable so consent
     # control is explicit per-artifact.
@@ -2694,7 +2703,7 @@ ARTIFACT_TYPES = {
         'collector': 'collect_ios',
         'artifact_key': 'app_state',
     },
-    # === Round 7 Phase 2 -- DFIR baseline gap closure (iOS) ===
+    # === Round 7 Phase 2 — DFIR baseline gap closure (iOS) ===
     'mobile_ios_mail_envelope': {
         'name': 'Apple Mail Envelope',
         'description': 'Native Apple Mail headers, threads, message metadata',
@@ -3125,7 +3134,7 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # [2026-04-21] Tier S expansion -- Windows
+    # [2026-04-21] Tier S expansion — Windows
     # =========================================================================
     'credential_manager_vault': {
         'name': 'Windows Credential Manager Vault',
@@ -3133,7 +3142,7 @@ ARTIFACT_TYPES = {
             'Windows Credential Manager vault directory files: '
             'Policy.vpol, *.vsch schemas, *.vcrd records, plus '
             'generic credential files under Credentials. Inventory '
-            'headers only -- record bodies are processed by downstream '
+            'headers only — record bodies are processed by downstream '
             'server components.'
         ),
         'paths': [
@@ -3165,7 +3174,7 @@ ARTIFACT_TYPES = {
         'name': 'Windows User Protection Blobs',
         'description': (
             'Binary protection blob files under Roaming\\Microsoft\\'
-            'Protect. Structural inventory only -- filename, size, '
+            'Protect. Structural inventory only — filename, size, '
             'timestamps. Required as dependency input for downstream '
             'credential-store processing.'
         ),
@@ -3240,7 +3249,7 @@ ARTIFACT_TYPES = {
             'Messages (verbatim content + thread + sender), meeting '
             'records (participants + subject + time), call logs '
             '(duration + direction + type), contact roster, file-'
-            'transfer attachments (SharePoint URLs -- exfil evidence)'
+            'transfer attachments (SharePoint URLs — exfil evidence)'
         ),
     },
     'onedrive_sync_log': {
@@ -3389,7 +3398,7 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # [2026-04-21] Tier S expansion -- Linux
+    # [2026-04-21] Tier S expansion — Linux
     # =========================================================================
     'linux_systemd_journal': {
         'name': 'Linux systemd Journal',
@@ -3546,12 +3555,12 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # [2026-04-21] Tier S expansion -- macOS
+    # [2026-04-21] Tier S expansion — macOS
     # =========================================================================
     'macos_xprotect_remediator_db': {
         'name': 'macOS XProtect Behavior DB',
         'description': (
-            'Apple XProtect Behavior Service database (XPdb) -- '
+            'Apple XProtect Behavior Service database (XPdb) — '
             'Ventura 13+ detection events from built-in behavior '
             'rules. SIP-protected; requires root + Full Disk Access.'
         ),
@@ -3600,6 +3609,9 @@ ARTIFACT_TYPES = {
     # =========================================================================
     # macOS Extended Artifacts (from MACOS_ARTIFACT_FILTERS -- auto-registered)
     # =========================================================================
+    # Note: ai_* entries inside MACOS_ARTIFACT_FILTERS go to category='ai_activity'
+    # below (so they appear in the dedicated AI Activity tab, not duplicated in
+    # macOS tab). Other macos_* entries keep category='macos'.
     **{k: {'name': v.get('description', k), 'description': v.get('description', ''),
            'category': 'macos', 'paths': [], 'forensic_value': v.get('forensic_value', 'medium'),
            'collector': 'collect_macos'}
@@ -3608,8 +3620,541 @@ ARTIFACT_TYPES = {
            'macos_unified_log', 'macos_launch_agent', 'macos_launch_daemon',
            'macos_zsh_history', 'macos_tcc_db', 'macos_knowledgec',
            'macos_fseventsd', 'macos_safari_history', 'macos_keychain',
-       }},
+       } and not k.startswith('ai_')},
+
+    # =========================================================================
+    # AI Agent Activity (Round 8, 2026-05-06)
+    # =========================================================================
+    # Cross-platform: collect AI tool traces on macOS / Linux / Windows.
+    # Routed to a dedicated tab in the GUI (not mixed with OS-specific tabs).
+    # Path arrays unioned from MACOS_ARTIFACT_FILTERS (Apple), LINUX_ARTIFACT_FILTERS
+    # (XDG / /home), and explicit Windows entries below.
+    **{k: {'name': v.get('description', k), 'description': v.get('description', ''),
+           'category': 'ai_activity',
+           'paths': v.get('paths', []),
+           'forensic_value': v.get('forensic_value', 'medium'),
+           'collector': 'collect_ai_activity'}
+       for k, v in _MACOS_FILTERS.items()
+       if k.startswith('ai_')},
 }
+
+# Merge Linux ai_* paths into the same ai_activity entries (union of paths)
+try:
+    from collectors.linux_artifacts import LINUX_ARTIFACT_FILTERS as _LINUX_FILTERS
+except ImportError:
+    _LINUX_FILTERS = {}
+for _ai_key, _ai_cfg in _LINUX_FILTERS.items():
+    if not _ai_key.startswith('ai_'):
+        continue
+    if _ai_key in ARTIFACT_TYPES:
+        existing_paths = list(ARTIFACT_TYPES[_ai_key].get('paths', []))
+        for p in _ai_cfg.get('paths', []):
+            if p not in existing_paths:
+                existing_paths.append(p)
+        ARTIFACT_TYPES[_ai_key]['paths'] = existing_paths
+    else:
+        ARTIFACT_TYPES[_ai_key] = {
+            'name': _ai_cfg.get('description', _ai_key),
+            'description': _ai_cfg.get('description', ''),
+            'category': 'ai_activity',
+            'paths': _ai_cfg.get('paths', []),
+            'forensic_value': _ai_cfg.get('forensic_value', 'medium'),
+            'collector': 'collect_ai_activity',
+        }
+
+# Add Windows AI artifact paths (no separate windows_artifacts.py for AI)
+_WINDOWS_AI_PATHS = {
+    # Round 8 (existing)
+    'ai_claude_code': [
+        'C:/Users/*/.claude/history.jsonl',
+        'C:/Users/*/.claude/settings.json',
+        'C:/Users/*/.claude/CLAUDE.md',
+        'C:/Users/*/.claude/stats-cache.json',
+        'C:/Users/*/.claude/mcp-needs-auth-cache.json',
+        'C:/Users/*/.claude/projects/*/*.jsonl',
+        'C:/Users/*/.claude/projects/*/*/*.jsonl',
+        'C:/Users/*/.claude/projects/*/*/subagents/*.jsonl',
+        'C:/Users/*/.claude/sessions/*.json',
+        'C:/Users/*/.claude/plans/*',
+        'C:/Users/*/.claude/file-history/*',
+        'C:/Users/*/.claude/shell-snapshots/*.sh',
+    ],
+    'ai_claude_desktop': [
+        'C:/Users/*/AppData/Roaming/Claude/config.json',
+        'C:/Users/*/AppData/Roaming/Claude/claude_desktop_config.json',
+        'C:/Users/*/AppData/Roaming/Claude/logs/*.log',
+        'C:/Users/*/AppData/Local/Programs/Claude/*',
+    ],
+    'ai_chatgpt_desktop': [
+        'C:/Users/*/AppData/Roaming/ChatGPT/*',
+        'C:/Users/*/AppData/Local/Programs/ChatGPT/*',
+        'C:/Users/*/AppData/Local/ChatGPT/*',
+    ],
+    'ai_cursor': [
+        'C:/Users/*/AppData/Roaming/Cursor/User/settings.json',
+        'C:/Users/*/AppData/Roaming/Cursor/User/globalStorage/state.vscdb',
+        'C:/Users/*/AppData/Roaming/Cursor/User/workspaceStorage/*/state.vscdb',
+        'C:/Users/*/AppData/Roaming/Cursor/User/History/*/*',
+        'C:/Users/*/AppData/Roaming/Cursor/logs/*',
+    ],
+    'ai_copilot_vscode': [
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/*',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/github.copilot/*',
+        'C:/Users/*/AppData/Roaming/Code/User/workspaceStorage/*/github.copilot-chat/*',
+        'C:/Users/*/AppData/Roaming/Code/logs/*/exthost*/output_logging_*/*.log',
+        # Sweep #15 V2 (HIGH #9): GitHub Copilot host/token store
+        'C:/Users/*/AppData/Roaming/github-copilot/hosts.json',
+        'C:/Users/*/AppData/Roaming/github-copilot/apps.json',
+        'C:/Users/*/AppData/Roaming/github-copilot/copilot-token.json',
+        'C:/Users/*/AppData/Roaming/github-copilot/internal/*.log',
+        'C:/Users/*/.config/github-copilot/hosts.json',
+        'C:/Users/*/.config/github-copilot/apps.json',
+        'C:/Users/*/.config/github-copilot/copilot-token.json',
+        'C:/Users/*/.config/github-copilot/internal/*.log',
+        # Sweep #15 V4 (MEDIUM #2): macOS / Linux variants
+        '/Users/*/Library/Application Support/Code/User/globalStorage/github.copilot/*',
+        '/Users/*/Library/Application Support/Code/User/globalStorage/github.copilot-chat/*',
+        '/Users/*/.config/github-copilot/hosts.json',
+        '/Users/*/.config/github-copilot/apps.json',
+        '/Users/*/.config/github-copilot/copilot-token.json',
+        '/Users/*/.config/github-copilot/internal/*.log',
+        '/home/*/.config/Code/User/globalStorage/github.copilot/*',
+        '/home/*/.config/Code/User/globalStorage/github.copilot-chat/*',
+        '/home/*/.config/github-copilot/hosts.json',
+        '/home/*/.config/github-copilot/apps.json',
+        '/home/*/.config/github-copilot/copilot-token.json',
+        '/home/*/.config/github-copilot/internal/*.log',
+    ],
+    'ai_continue_dev': [
+        'C:/Users/*/.continue/config.json',
+        'C:/Users/*/.continue/config.yaml',
+        'C:/Users/*/.continue/dev_data/*',
+        'C:/Users/*/.continue/index/*',
+        'C:/Users/*/.continue/sessions/*',
+    ],
+    'ai_aider': [
+        'C:/Users/*/.aider*',
+        'C:/Users/*/.aider.chat.history.md',
+        'C:/Users/*/.aider.input.history',
+        'C:/Users/*/.aider.tags.cache.v3/*',
+    ],
+    'ai_ollama': [
+        'C:/Users/*/.ollama/id_ed25519',
+        'C:/Users/*/.ollama/id_ed25519.pub',
+        'C:/Users/*/.ollama/history',
+        'C:/Users/*/.ollama/models/manifests/*',
+        'C:/Users/*/.ollama/logs/server.log',
+    ],
+    'ai_lmstudio': [
+        'C:/Users/*/.cache/lm-studio/*',
+        'C:/Users/*/.lmstudio/*',
+        'C:/Users/*/AppData/Roaming/LM Studio/*',
+    ],
+    'ai_huggingface_cache': [
+        'C:/Users/*/.cache/huggingface/hub/models--*/blobs/*',
+        'C:/Users/*/.cache/huggingface/hub/models--*/snapshots/*',
+        'C:/Users/*/.cache/huggingface/token',
+    ],
+    'ai_mcp_servers': [
+        'C:/Users/*/.claude/mcp-needs-auth-cache.json',
+        'C:/Users/*/AppData/Roaming/Claude/claude_desktop_config.json',
+        'C:/Users/*/.continue/config.json',
+        'C:/Users/*/.continue/config.yaml',
+        'C:/Users/*/AppData/Roaming/Cursor/User/globalStorage/cursor.mcp/*',
+    ],
+
+    # Round 10 - Desktop AI Expansion (Windows)
+    'ai_windows_recall': [
+        'C:/Users/*/AppData/Local/CoreAIPlatform.00/UKP/*/ukg.db',
+        'C:/Users/*/AppData/Local/CoreAIPlatform.00/UKP/*/ImageStore/*',
+        'C:/Users/*/AppData/Local/CoreAIPlatform.00/UKP/*/AsrChunks/*',
+        'C:/Users/*/AppData/Local/CoreAIPlatform.00/UKP/*/SemanticSearch/*',
+    ],
+    'ai_cline': [
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/saoudrizwan.claude-dev/state/*',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/api_conversation_history.json',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/ui_messages.json',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/task_metadata.json',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/saoudrizwan.claude-dev/checkpoints/*',
+    ],
+    'ai_roo_code': [
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/rooveterinaryinc.roo-cline/*',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/kilocode.kilo-code/*',
+    ],
+    'ai_windsurf': [
+        'C:/Users/*/.codeium/*',
+        'C:/Users/*/AppData/Roaming/Windsurf/User/globalStorage/*',
+        'C:/Users/*/AppData/Roaming/Windsurf/User/settings.json',
+        'C:/Users/*/AppData/Roaming/Windsurf/logs/*',
+        'C:/Users/*/AppData/Local/Programs/Windsurf/*',
+    ],
+    'ai_jan': [
+        'C:/Users/*/AppData/Roaming/Jan/data/threads/*',
+        'C:/Users/*/AppData/Roaming/Jan/data/models/*',
+        'C:/Users/*/AppData/Roaming/Jan/data/settings/*',
+        'C:/Users/*/AppData/Roaming/Jan/data/assistants/*',
+    ],
+    'ai_gpt4all': [
+        'C:/Users/*/AppData/Local/nomic.ai/GPT4All/*',
+        'C:/Users/*/AppData/Local/nomic.ai/GPT4All/chats/*',
+        'C:/Users/*/AppData/Local/nomic.ai/GPT4All/localdocs_v3.db',
+    ],
+    'ai_anythingllm': [
+        'C:/Users/*/AppData/Roaming/anythingllm-desktop/storage/*',
+        'C:/Users/*/AppData/Roaming/anythingllm-desktop/storage/anythingllm.db',
+        'C:/Users/*/AppData/Roaming/anythingllm-desktop/storage/lancedb/*',
+        'C:/Users/*/AppData/Roaming/anythingllm-desktop/storage/documents/*',
+        'C:/Users/*/AppData/Local/Programs/AnythingLLM/*',
+    ],
+    'ai_sillytavern': [
+        'C:/Users/*/SillyTavern/data/default-user/chats/*',
+        'C:/Users/*/SillyTavern/data/default-user/characters/*',
+        'C:/Users/*/SillyTavern/data/default-user/secrets.json',
+        'C:/Users/*/SillyTavern/data/default-user/settings.json',
+    ],
+    'ai_open_interpreter': [
+        'C:/Users/*/AppData/Local/Open Interpreter/conversations.json',
+        'C:/Users/*/AppData/Local/Open Interpreter/*',
+        'C:/Users/*/.config/open-interpreter/*',
+    ],
+    'ai_jetbrains_assistant': [
+        'C:/Users/*/AppData/Local/JetBrains/*/AIAssistant/*',
+        'C:/Users/*/AppData/Roaming/JetBrains/*/options/ai-*.xml',
+        'C:/Users/*/AppData/Roaming/JetBrains/*/options/chat-history.xml',
+        # Sweep #15 V2 (HIGH #9): aichat sessions, Junie runs, idea.log
+        'C:/Users/*/AppData/Roaming/JetBrains/*/options/ai.assistant.xml',
+        'C:/Users/*/AppData/Roaming/JetBrains/*/options/ai-history.xml',
+        'C:/Users/*/AppData/Roaming/JetBrains/*/options/junie.xml',
+        'C:/Users/*/AppData/Roaming/JetBrains/*/aichat/*.json',
+        'C:/Users/*/AppData/Roaming/JetBrains/*/junie/runs/*/*.json',
+        'C:/Users/*/AppData/Local/JetBrains/*/log/idea.log',
+        'C:/Users/*/AppData/Local/JetBrains/*/log/idea.log.*',
+        # Sweep #15 V4 (MEDIUM #2): macOS / Linux JetBrains variants
+        '/Users/*/Library/Application Support/JetBrains/*/options/ai.assistant.xml',
+        '/Users/*/Library/Application Support/JetBrains/*/options/ai-history.xml',
+        '/Users/*/Library/Application Support/JetBrains/*/options/junie.xml',
+        '/Users/*/Library/Application Support/JetBrains/*/aichat/*.json',
+        '/Users/*/Library/Application Support/JetBrains/*/junie/runs/*/*.json',
+        '/Users/*/Library/Logs/JetBrains/*/idea.log',
+        '/Users/*/Library/Logs/JetBrains/*/idea.log.*',
+        '/home/*/.config/JetBrains/*/options/ai.assistant.xml',
+        '/home/*/.config/JetBrains/*/options/ai-history.xml',
+        '/home/*/.config/JetBrains/*/options/junie.xml',
+        '/home/*/.config/JetBrains/*/aichat/*.json',
+        '/home/*/.config/JetBrains/*/junie/runs/*/*.json',
+        '/home/*/.cache/JetBrains/*/log/idea.log',
+        '/home/*/.cache/JetBrains/*/log/idea.log.*',
+    ],
+    'ai_codeium': [
+        'C:/Users/*/.codeium/*',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/codeium.codeium/*',
+    ],
+    'ai_tabnine': [
+        'C:/Users/*/.tabnine/*',
+        'C:/Users/*/AppData/Local/Tabnine/*',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/TabNine.tabnine-vscode/*',
+    ],
+    'ai_sourcegraph_cody': [
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/sourcegraph.cody-ai/*',
+    ],
+    'ai_amazon_q': [
+        'C:/Users/*/.aws/sso/cache/*',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/AmazonWebServices.aws-toolkit-vscode/*',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/amazonwebservices.amazon-q-vscode/*',
+    ],
+    'ai_pieces': [
+        'C:/Users/*/AppData/Local/Pieces/*',
+        'C:/Users/*/AppData/Roaming/Pieces/*',
+    ],
+    'ai_msty': [
+        'C:/Users/*/AppData/Roaming/Msty/*',
+        'C:/Users/*/AppData/Roaming/Msty/chats/*',
+    ],
+    'ai_open_webui': [
+        'C:/Users/*/.open-webui/*',
+        'C:/Users/*/.open-webui/webui.db',
+    ],
+    'ai_text_gen_webui': [
+        'C:/Users/*/text-generation-webui/logs/chat/*/*.json',
+        'C:/Users/*/text-generation-webui/characters/*',
+        'C:/Users/*/text-generation-webui/loras/*',
+        'C:/Users/*/text-generation-webui/models/*',
+    ],
+    'ai_koboldcpp': [
+        'C:/Users/*/koboldcpp.cfg',
+        'C:/Users/*/KoboldCPP/*',
+    ],
+    'ai_backyard_ai': [
+        'C:/Users/*/AppData/Roaming/faraday/*',
+        'C:/Users/*/AppData/Roaming/Backyard AI/*',
+    ],
+    'ai_pinokio': [
+        'C:/Users/*/pinokio/*',
+    ],
+    'ai_raycast_ai': [
+        'C:/Users/*/AppData/Roaming/com.raycast.macos/LocalDatabase.db',
+        'C:/Users/*/AppData/Roaming/Raycast/*',
+    ],
+    'ai_granola': [
+        'C:/Users/*/AppData/Roaming/Granola/*',
+        'C:/Users/*/AppData/Roaming/Granola/recordings/*',
+        'C:/Users/*/AppData/Roaming/Granola/transcripts/*',
+    ],
+    'ai_notion_ai_desktop': [
+        'C:/Users/*/AppData/Roaming/Notion/IndexedDB/*',
+        'C:/Users/*/AppData/Roaming/Notion/*',
+    ],
+    'ai_glean_desktop': [
+        'C:/Users/*/AppData/Roaming/com.glean.desktop/*',
+    ],
+
+    # Round 11 - Browser AI Universal (Windows)
+    'ai_browser_indexeddb': [
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_claude.ai_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_chatgpt.com_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_chat.openai.com_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_gemini.google.com_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_copilot.microsoft.com_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_www.perplexity.ai_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_chat.deepseek.com_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_chat.mistral.ai_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_character.ai_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_poe.com_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_kimi.com_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_doubao.com_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_you.com_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_huggingface.co_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_wrtn.ai_0.indexeddb.leveldb/*',
+        'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/Default/IndexedDB/*',
+        'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/IndexedDB/*',
+        'C:/Users/*/AppData/Roaming/Mozilla/Firefox/Profiles/*/storage/default/https+++claude.ai/idb/*.sqlite',
+        'C:/Users/*/AppData/Roaming/Mozilla/Firefox/Profiles/*/storage/default/https+++chatgpt.com/idb/*.sqlite',
+    ],
+    'ai_browser_localstorage': [
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/Local Storage/leveldb/*',
+        'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/Default/Local Storage/leveldb/*',
+        'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/Local Storage/leveldb/*',
+    ],
+    'ai_browser_ai_extension': [
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/Local Extension Settings/*',
+        'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/Default/Local Extension Settings/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/Extensions/*',
+    ],
+    'ai_brave_leo': [
+        'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/AIChat',
+        'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/AIChat-journal',
+    ],
+    'ai_edge_copilot_sidebar': [
+        'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/Default/Storage/ext/*',
+    ],
+    'ai_opera_aria': [
+        'C:/Users/*/AppData/Roaming/Opera Software/Opera Stable/IndexedDB/*',
+        'C:/Users/*/AppData/Roaming/Opera Software/Opera Stable/Local Storage/*',
+    ],
+    'ai_arc_max': [
+        'C:/Users/*/AppData/Local/Arc/User Data/Default/IndexedDB/*',
+    ],
+    'ai_perplexity_comet': [
+        'C:/Users/*/AppData/Local/Perplexity/Comet/User Data/Default/IndexedDB/*',
+        'C:/Users/*/AppData/Local/Perplexity/Comet/User Data/Default/Local Storage/*',
+        'C:/Users/*/AppData/Local/Perplexity/Comet/User Data/Default/History',
+    ],
+    'ai_chrome_gemini_nano': [
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/OptimizationGuide/*',
+        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/AIDataService/*',
+    ],
+
+    # Round 12 - Frontier (Windows)
+    # Sweep #14 V2 Codex hot-fix (Issue 4): Slack desktop IndexedDB is
+    # heavily LevelDB-encoded and falls back to ai_browser_indexeddb
+    # generic recovery. The dedicated ai_slack_ai_recap parser targets
+    # workspace EXPORT JSON files (admin panel "Export workspace data")
+    # that are downloaded to user disk.
+    'ai_slack_ai_recap': [
+        'C:/Users/*/AppData/Roaming/Slack/IndexedDB/*',  # legacy fallback bucket
+        'C:/Users/*/AppData/Roaming/Slack/Cache/*',
+        'C:/Users/*/Downloads/slack-export-*/channels/*/*.json',
+        'C:/Users/*/Documents/slack-export-*/channels/*/*.json',
+        'C:/Users/*/Downloads/slack_export/*/channels/*/*.json',
+    ],
+    # Sweep #14 V2 Codex hot-fix (Issue 6): Office 365 Copilot caches
+    # live under specific Olk/CopilotCache subpaths on Windows.
+    'ai_outlook_copilot': [
+        'C:/Users/*/AppData/Local/Microsoft/Outlook/*Copilot*',
+        'C:/Users/*/AppData/Local/Microsoft/Olk/CopilotCache/*.json',
+        'C:/Users/*/AppData/Local/Microsoft/Olk/CopilotCache/*.log',
+        'C:/Users/*/AppData/Roaming/Microsoft/Office/CopilotCache/*.json',
+    ],
+    'ai_agent_framework': [
+        'C:/Users/*/.langchain/*',
+        'C:/Users/*/.llama_index/*',
+        'C:/Users/*/.crewai/*',
+        'C:/Users/*/.anthropic/*',
+        'C:/Users/*/.openai/*',
+        'C:/Users/*/.n8n/*',
+        'C:/Users/*/auto_gpt_workspace/*',
+    ],
+    'ai_api_keys': [
+        'C:/Users/*/.bashrc',
+        'C:/Users/*/.zshrc',
+        'C:/Users/*/.profile',
+        'C:/Users/*/.env',
+        'C:/Users/*/.config/openai/auth.json',
+        'C:/Users/*/.config/anthropic/*',
+        'C:/Users/*/.cursor/config.json',
+    ],
+    'ai_model_files': [
+        'C:/Users/*/Documents/models/*.gguf',
+        'C:/Users/*/Documents/models/*.safetensors',
+        'C:/Users/*/Models/*.gguf',
+        'C:/Users/*/Models/*.safetensors',
+        'C:/Users/*/.cache/huggingface/hub/models--*/blobs/*',
+    ],
+
+    # Sweep #14 (2026-05-09) — Windows path coverage for 4 newly
+    # promoted dedicated parsers (Tabnine, Sourcegraph Cody, Amazon Q,
+    # AnythingLLM). macOS + Linux covered in their respective files.
+    'ai_tabnine': [
+        'C:/Users/*/AppData/Local/Tabnine/tabnine_config.json',
+        'C:/Users/*/AppData/Local/Tabnine/tabnine.log',
+        'C:/Users/*/AppData/Roaming/TabNine/tabnine_config.json',
+        'C:/Users/*/AppData/Roaming/TabNine/semantic_history.json',
+    ],
+    'ai_sourcegraph_cody': [
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/sourcegraph.cody-ai/config.json',
+        'C:/Users/*/AppData/Roaming/Code/User/globalStorage/sourcegraph.cody-ai/history.json',
+        'C:/Users/*/.config/cody/config.json',
+        'C:/Users/*/.config/cody/history.json',
+    ],
+    'ai_amazon_q': [
+        'C:/Users/*/AppData/Local/Amazon Q/profile.json',
+        'C:/Users/*/AppData/Local/Amazon Q/telemetry.log',
+        'C:/Users/*/.aws/amazonq/profile.json',
+        'C:/Users/*/.aws/amazonq/conversation_*.json',
+    ],
+    'ai_anythingllm': [
+        'C:/Users/*/AppData/Roaming/anythingllm-desktop/storage/anythingllm.db',
+        'C:/Users/*/AppData/Roaming/anythingllm-desktop/storage/documents/*',
+    ],
+}
+for _ai_key, _win_paths in _WINDOWS_AI_PATHS.items():
+    if _ai_key in ARTIFACT_TYPES:
+        existing_paths = list(ARTIFACT_TYPES[_ai_key].get('paths', []))
+        for p in _win_paths:
+            if p not in existing_paths:
+                existing_paths.append(p)
+        ARTIFACT_TYPES[_ai_key]['paths'] = existing_paths
+    else:
+        # ai_* type defined in Windows-only block; create entry
+        ARTIFACT_TYPES[_ai_key] = {
+            'name': _ai_key.replace('_', ' ').title(),
+            'description': f'AI Activity: {_ai_key}',
+            'category': 'ai_activity',
+            'paths': _win_paths,
+            'forensic_value': 'high',
+            'collector': 'collect_ai_activity',
+        }
+
+# Round 12 cross-cutting AI types that don't fit macos/linux/windows alone --
+# explicit GUI registration so the AI Activity tab shows them.
+_AI_CROSS_PLATFORM_REGISTRATIONS = {
+    'ai_cicd_ai_logs': {
+        'name': 'CI/CD AI Logs',
+        'description': 'GitHub Actions / GitLab / Jenkins / Vercel pipeline logs that mention AI bots (Copilot, Claude, OpenAI, Cursor, Renovate AI)',
+        # Sweep #14 V2 Codex hot-fix (Issue 3): the parser scans actual
+        # log files (.log/.txt/.out) for AI bot mentions; pre-execution
+        # workflow YAMLs are configs not logs and were a mismatch.
+        # Target real CI log roots across the most common platforms.
+        'paths': [
+            '*/.github/_logs/*.log',                 # self-hosted Actions runner logs
+            '*/_actions/_temp/*.log',                # Actions step transcripts
+            '*/runner/_diag/*.log',                  # Actions diagnostic logs
+            '*/runner/_work/_temp/*/_runner_file_commands/*',
+            '*/jobs/*/builds/*/log',                 # Jenkins
+            '*/.gitlab-ci-traces/*.log',             # GitLab runner trace dumps
+            '*/.circleci/build_logs/*.log',          # CircleCI local
+            '*/.vercel/output/logs/*.log',           # Vercel deploy logs
+            '*/cicd-logs/*.log',                     # project convention
+        ],
+        'forensic_value': 'high',
+    },
+    'ai_git_ai_attribution': {
+        'name': 'Git AI-Authored Commits',
+        'description': 'AI coauthor trailer / AI authorship attribution in git history',
+        'paths': [
+            '*/.git/COMMIT_EDITMSG',
+            '*/.git/logs/HEAD',
+        ],
+        'forensic_value': 'medium',
+    },
+    'ai_notion_ai_history': {
+        'name': 'Notion AI Page History',
+        # Sweep #14 V2 Codex hot-fix (Issue 5): IndexedDB falls back
+        # to ai_browser_indexeddb generic recovery. The dedicated
+        # ai_notion_ai_history parser targets workspace EXPORTS
+        # (Settings → Export workspace as Markdown / HTML).
+        'description': 'Notion workspace export blocks.json + per-page AI markdown (IndexedDB still collected for browser_indexeddb fallback)',
+        'paths': [
+            # Notion desktop IndexedDB (handed to browser_indexeddb)
+            '/Users/*/Library/Application Support/Notion/IndexedDB/*',
+            '/home/*/.config/Notion/IndexedDB/*',
+            'C:/Users/*/AppData/Roaming/Notion/IndexedDB/*',
+            # Workspace export bundles (handed to dedicated parser)
+            '*/notion-export-*/*/blocks.json',
+            '*/notion-export-*/*.md',
+            '*/notion_export/*/blocks.json',
+            '*/Notion/Export*/*/blocks.json',
+        ],
+        'forensic_value': 'medium',
+    },
+}
+for _k, _cfg in _AI_CROSS_PLATFORM_REGISTRATIONS.items():
+    if _k not in ARTIFACT_TYPES:
+        ARTIFACT_TYPES[_k] = {
+            **_cfg,
+            'category': 'ai_activity',
+            'collector': 'collect_ai_activity',
+        }
+
+_AI_MOBILE_DISPLAY_NAMES = {
+    'ai_mobile_chatgpt': 'ChatGPT Mobile',
+    'ai_mobile_claude': 'Claude Mobile',
+    'ai_mobile_copilot': 'Copilot Mobile',
+    'ai_mobile_gemini': 'Gemini Mobile',
+    'ai_mobile_perplexity': 'Perplexity Mobile',
+    'ai_mobile_replika': 'Replika Mobile',
+    'ai_mobile_otter': 'Otter.ai Mobile',
+    'ai_mobile_deepseek': 'DeepSeek Mobile',
+    'ai_mobile_wrtn': 'Wrtn Mobile',
+    'ai_mobile_character_ai': 'Character.AI Mobile',
+    'ai_mobile_poe': 'Poe Mobile',
+    'ai_mobile_grok': 'Grok Mobile',
+    'ai_mobile_le_chat': 'Le Chat Mobile',
+    'ai_mobile_meta_ai': 'Meta AI Mobile',
+    'ai_mobile_pi': 'Pi Mobile',
+    'ai_mobile_clova': 'CLOVA Mobile',
+}
+_ai_mobile_descriptions = {}
+for _spec in (*_ANDROID_FFS_SPECS, *_IOS_FFS_SPECS):
+    _atype = getattr(_spec, 'artifact_type', '')
+    if not _atype.startswith('ai_mobile_'):
+        continue
+    _desc = getattr(_spec, 'description', '') or _atype
+    _ai_mobile_descriptions.setdefault(_atype, _desc)
+
+for _atype, _name in _AI_MOBILE_DISPLAY_NAMES.items():
+    ARTIFACT_TYPES.setdefault(_atype, {
+        'name': _name,
+        'description': _ai_mobile_descriptions.get(
+            _atype,
+            f'Mobile AI app artifacts from Android/iOS FFS bundles: {_name}',
+        ),
+        'category': 'ai_activity',
+        'paths': [],
+        'forensic_value': 'high',
+        'collector': 'collect_ai_activity',
+        'source': 'mobile_ffs',
+    })
 
 # =============================================================================
 # Auto-register platform artifact types from platform-specific collectors
@@ -3618,9 +4163,13 @@ ARTIFACT_TYPES = {
 # Auto-register macOS artifact types from macOSCollector
 # (MACOS_ARTIFACT_FILTERS above covers macos_artifacts.py; this covers
 #  macos_collector.py entries like macos_quarantine_events, macos_wifi_known_networks)
+# Note: ai_* entries already registered with category='ai_activity' above --
+# skip them so they aren't overwritten with category='macos'.
 try:
     _existing_macos = {k for k in ARTIFACT_TYPES if k.startswith('macos_')}
     for _k, _v in MACOS_ARTIFACT_TYPES.items():
+        if _k.startswith('ai_'):
+            continue
         if _k not in _existing_macos:
             ARTIFACT_TYPES[_k] = {
                 'name': _v.get('name', _k.replace('_', ' ').title()),
@@ -3633,10 +4182,12 @@ try:
 except Exception:
     pass
 
-# Auto-register Linux artifact types from LinuxCollector
+# Auto-register Linux artifact types from LinuxCollector (same skip rule).
 try:
     _existing_linux = {k for k in ARTIFACT_TYPES if k.startswith('linux_')}
     for _k, _v in LINUX_ARTIFACT_TYPES.items():
+        if _k.startswith('ai_'):
+            continue
         if _k not in _existing_linux:
             ARTIFACT_TYPES[_k] = {
                 'name': _v.get('name', _k.replace('_', ' ').title()),
@@ -3672,7 +4223,7 @@ def _infer_ios_subcategory(name: str, key: str) -> str:
     if any(t in n for t in ('twitter', 'instagram', 'tiktok',
                              'facebook', 'snapchat', 'band')):
         return 'sns'
-    # Default to 'korean' bucket -- most auto-registered entries
+    # Default to 'korean' bucket — most auto-registered entries
     # come from the Korean app block in ios_collector.IOS_ARTIFACT_TYPES.
     return 'korean'
 
@@ -4441,6 +4992,34 @@ class LocalMFTCollector(_LocalMFTBase):
                             if progress_callback:
                                 progress_callback(result[0])
 
+        elif collector_type == 'collect_ai_activity':
+            seen_paths = set()
+            for path_pattern in paths:
+                expanded = self._expand_path(path_pattern)
+                for match in glob.glob(expanded, recursive=True):
+                    candidates = []
+                    if os.path.isdir(match):
+                        for root, _dirs, files in os.walk(match):
+                            for filename in files:
+                                candidates.append(os.path.join(root, filename))
+                    else:
+                        candidates.append(match)
+
+                    for candidate in candidates:
+                        normalized = os.path.normcase(os.path.abspath(candidate))
+                        if normalized in seen_paths:
+                            continue
+                        seen_paths.add(normalized)
+
+                        result = self._copy_file_with_metadata(candidate, artifact_dir, artifact_type)
+                        if result:
+                            result[1]['collection_method'] = 'ai_activity_directory_fallback'
+                            result[1]['source_pattern'] = path_pattern
+                            collected_count += 1
+                            yield result
+                            if progress_callback:
+                                progress_callback(result[0])
+
         elif collector_type == 'collect_messenger_with_memory':
             # Messenger app collection with process memory dump
             # 1. Collect user data folders (same as collect_user_glob)
@@ -4989,7 +5568,7 @@ class ArtifactCollector:
         # Flag for compatibility
         self.use_mft = self.collection_mode in ('forensic_disk_accessor', 'mft')
 
-        # Cache for scan_all_files() results -- avoids repeated full MFT scans
+        # Cache for scan_all_files() results — avoids repeated full MFT scans
         self._scan_cache = None
         # Pre-built index from scan cache for O(1) extension/filename lookups
         self._scan_index = None
@@ -5529,7 +6108,7 @@ class ArtifactCollector:
         mft_config = artifact_info.get('mft_config', {})
 
         # ==========================================================
-        # No mft_config -> use legacy fallback
+        # No mft_config → use legacy fallback
         # ==========================================================
         if not mft_config:
             logger.info(f"[ForensicDisk] {artifact_type}: no mft_config, using legacy fallback")
@@ -5654,7 +6233,7 @@ class ArtifactCollector:
         """
         try:
             if method_name == 'collect_mft_raw':
-                # $MFT (inode 0) -- streaming to avoid loading entire MFT into memory
+                # $MFT (inode 0) — streaming to avoid loading entire MFT into memory
                 logger.debug("[ForensicDisk] Collecting $MFT (inode 0)...")
                 output_file = artifact_dir / '$MFT'
                 md5_hash = hashlib.md5()
@@ -5749,7 +6328,7 @@ class ArtifactCollector:
                     logger.debug("[WARNING] $UsnJrnl:$J not found or empty (data is None or 0 bytes)")
 
             elif method_name == 'collect_logfile':
-                # $LogFile (inode 2) -- streaming to avoid loading entire LogFile into memory
+                # $LogFile (inode 2) — streaming to avoid loading entire LogFile into memory
                 logger.debug("[ForensicDisk] Collecting $LogFile (inode 2)...")
                 output_file = artifact_dir / '$LogFile'
                 md5_hash = hashlib.md5()
@@ -6080,12 +6659,12 @@ class ArtifactCollector:
                     if not include_deleted:
                         candidate_entries = [e for e in candidate_entries if not e.is_deleted]
                 else:
-                    # Wildcard pattern -- fall back to full list
+                    # Wildcard pattern — fall back to full list
                     candidate_entries = list(scan_result.get('active_files', []))
                     if include_deleted:
                         candidate_entries.extend(scan_result.get('deleted_files', []))
             else:
-                # No extension filter and no simple pattern -- use full list
+                # No extension filter and no simple pattern — use full list
                 candidate_entries = list(scan_result.get('active_files', []))
                 if include_deleted:
                     candidate_entries.extend(scan_result.get('deleted_files', []))
@@ -6259,7 +6838,7 @@ class ArtifactCollector:
         """
         mft_config = artifact_info.get('mft_config', {})
 
-        # No mft_config -> use legacy fallback
+        # No mft_config → use legacy fallback
         if not mft_config:
             logger.info(f"[MFT] {artifact_type}: no mft_config, using legacy fallback")
             yield from self._collect_legacy(
@@ -6509,8 +7088,8 @@ class ArtifactCollector:
 
             for result in results:
                 # Mark as legacy collection
-                result[1]['collection_method'] = 'legacy_file_api'
-                result[1]['warning'] = 'Collected via legacy method - limited forensic value'
+                result[1].setdefault('collection_method', 'legacy_file_api')
+                result[1].setdefault('warning', 'Collected via legacy method - limited forensic value')
                 yield result
                 if progress_callback:
                     progress_callback(result[0])
@@ -6553,6 +7132,69 @@ class ArtifactCollector:
     # =========================================================================
     # Legacy Collection Methods (Fallback)
     # =========================================================================
+
+    def collect_ai_activity(
+        self,
+        pattern: str,
+        output_dir: Path,
+        artifact_type: str
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        expanded_pattern = os.path.expandvars(pattern)
+        if re.match(r'^[A-Za-z]:[\\/]', expanded_pattern):
+            volume = getattr(self, 'volume', expanded_pattern[0])
+            expanded_pattern = f"{volume}:{expanded_pattern[2:]}"
+
+        seen_paths = set()
+        for match in glob.glob(expanded_pattern, recursive=True):
+            candidates = []
+            if os.path.isdir(match):
+                for root, _dirs, files in os.walk(match):
+                    for filename in files:
+                        candidates.append(os.path.join(root, filename))
+            else:
+                candidates.append(match)
+
+            for src_path in candidates:
+                if not os.path.isfile(src_path):
+                    continue
+                normalized = os.path.normcase(os.path.abspath(src_path))
+                if normalized in seen_paths:
+                    continue
+                seen_paths.add(normalized)
+
+                try:
+                    rel_output = self._safe_ai_output_path(src_path)
+                    dst_path = output_dir / rel_output
+                    validate_safe_path(output_dir, dst_path)
+                    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    if dst_path.exists():
+                        base = dst_path.stem
+                        suffix = dst_path.suffix
+                        counter = 1
+                        while dst_path.exists():
+                            dst_path = dst_path.parent / f"{base}_{counter}{suffix}"
+                            counter += 1
+
+                    shutil.copy2(src_path, dst_path)
+                    metadata = self._get_metadata(src_path, dst_path, artifact_type)
+                    metadata['collection_method'] = 'ai_activity_file_api'
+                    metadata['source_pattern'] = pattern
+                    yield str(dst_path), metadata
+                except (PermissionError, OSError, ValueError) as e:
+                    logger.debug(f"[AI Activity] Cannot access {src_path}: {e}")
+
+    def _safe_ai_output_path(self, src_path: str) -> Path:
+        normalized = str(src_path).replace('\\', '/')
+        normalized = re.sub(r'^[A-Za-z]:', lambda m: m.group(0)[0], normalized)
+        parts = [
+            sanitize_path_component(part)
+            for part in normalized.strip('/').split('/')
+            if part and part not in ('.', '..')
+        ]
+        if not parts:
+            parts = ['unnamed_ai_artifact']
+        return Path(*parts)
 
     def collect_glob(
         self,

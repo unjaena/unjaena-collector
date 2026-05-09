@@ -20,12 +20,12 @@ Design intent:
 
 For iOS specs, `package` is the bundle id (e.g. `net.whatsapp.WhatsApp`)
 and the path is *relative to the per-app data container*. The runtime
-adapter resolves bundle id -> UUID -> absolute path inside the FFS dump
+adapter resolves bundle id → UUID → absolute path inside the FFS dump
 by parsing each app's `.com.apple.mobile_container_manager.metadata.plist`.
 
 For Android specs, `package` is the package name (e.g. `com.whatsapp`)
 and the path is relative to `/data/data/<package>/` inside the FFS
-dump. Mapping is direct -- no UUID resolution needed.
+dump. Mapping is direct — no UUID resolution needed.
 
 System-level paths (not tied to an app bundle) use `package=None` and
 the path is relative to the appropriate filesystem root.
@@ -41,16 +41,16 @@ class ContainerKind(Enum):
     """Where in the FFS layout a file lives.
 
     For Android:
-      APP_DATA          -- /data/data/<package>/...
-      SYSTEM            -- /data/system/, /system/, /vendor/, etc.
-      USER_MEDIA        -- /sdcard/, /storage/emulated/0/...
+      APP_DATA          — /data/data/<package>/...
+      SYSTEM            — /data/system/, /system/, /vendor/, etc.
+      USER_MEDIA        — /sdcard/, /storage/emulated/0/...
 
     For iOS:
-      APP_DATA          -- Containers/Data/Application/<UUID>/...
-      APP_GROUP         -- Containers/Shared/AppGroup/<UUID>/...
-      APP_BUNDLE        -- Containers/Bundle/Application/<UUID>/<App>.app/...
-      SYSTEM            -- /private/var/mobile/Library/...
-      ROOT_SYSTEM       -- /System/, /usr/, /Library/ (rarely useful)
+      APP_DATA          — Containers/Data/Application/<UUID>/...
+      APP_GROUP         — Containers/Shared/AppGroup/<UUID>/...
+      APP_BUNDLE        — Containers/Bundle/Application/<UUID>/<App>.app/...
+      SYSTEM            — /private/var/mobile/Library/...
+      ROOT_SYSTEM       — /System/, /usr/, /Library/ (rarely useful)
     """
     APP_DATA = "app_data"
     APP_GROUP = "app_group"
@@ -67,7 +67,7 @@ class AndroidArtifactSpec:
     relative_path: str           # under /data/data/<package>/
     container_kind: ContainerKind = ContainerKind.APP_DATA
     description: str = ""
-    # When True, `relative_path` is treated as a directory PREFIX --
+    # When True, `relative_path` is treated as a directory PREFIX —
     # the resolver fans out to every entry under it.
     is_directory: bool = False
     # When `is_directory=True` and non-empty, restrict children to
@@ -99,7 +99,7 @@ class IOSArtifactSpec:
     relative_path: str           # under per-app container, or absolute for SYSTEM
     container_kind: ContainerKind = ContainerKind.APP_DATA
     description: str = ""
-    # When True, `relative_path` is treated as a directory PREFIX --
+    # When True, `relative_path` is treated as a directory PREFIX —
     # the resolver fans out to every entry under it (one resolved
     # artifact per child file). Used for cases like the lockdown
     # daemon directory where the meaningful unit is the per-record
@@ -109,7 +109,7 @@ class IOSArtifactSpec:
     # When True, the resolver ALSO pulls the SQLite -wal and -shm
     # sidecar files (if present) alongside the primary .db. Without
     # them, transactional state still in WAL is invisible to the
-    # parser pipeline -- this matters for deleted-row recovery and
+    # parser pipeline — this matters for deleted-row recovery and
     # for any DB the OS hasn't checkpointed before acquisition.
     pull_sqlite_sidecars: bool = False
     # When `is_directory=True` and this tuple is non-empty, the
@@ -122,13 +122,13 @@ class IOSArtifactSpec:
 
 
 # =============================================================================
-# Android path specs -- neutral artifact_type names, public package ids only
+# Android path specs — neutral artifact_type names, public package ids only
 # =============================================================================
 ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
     # System-level core artifacts (no app package). artifact_type values
     # mirror the server-side ArtifactType enum so the collector ships
     # uploads with labels that route directly into the existing parser
-    # dispatch table -- no enum churn required.
+    # dispatch table — no enum churn required.
     AndroidArtifactSpec(
         artifact_type="mobile_android_sms",
         package="com.android.providers.telephony",
@@ -172,7 +172,7 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
         relative_path="app_sbrowser/Default/History",
         description="Samsung Internet browser history",
     ),
-    # Third-party messengers -- bundle IDs are public
+    # Third-party messengers — bundle IDs are public
     AndroidArtifactSpec(
         artifact_type="mobile_android_whatsapp",
         package="com.whatsapp",
@@ -266,7 +266,7 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
         relative_path="databases/transit.db",
         description="Samsung Pay transit cards",
     ),
-    # === Round 7 Phase 2 -- DFIR baseline gap closure ===
+    # === Round 7 Phase 2 — DFIR baseline gap closure ===
     AndroidArtifactSpec(
         artifact_type="mobile_android_bluetooth_pairings",
         package="android",
@@ -380,11 +380,197 @@ ANDROID_PATH_SPECS: Tuple[AndroidArtifactSpec, ...] = (
             ".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".zip",
         ),
     ),
+
+    # =========================================================================
+    # Round 9 - Mobile AI Apps (Android, 2026-05-06)
+    # =========================================================================
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_chatgpt",
+        package="com.openai.chatgpt",
+        relative_path="databases",
+        description="ChatGPT Android - plaintext conversations DB, accounts, projects",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_chatgpt",
+        package="com.openai.chatgpt",
+        relative_path="files",
+        description="ChatGPT Android - cached attachments, voice transcripts",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_chatgpt",
+        package="com.openai.chatgpt",
+        relative_path="cache",
+        description="ChatGPT Android cache",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_claude",
+        package="com.anthropic.claude",
+        relative_path="databases",
+        description="Claude Android - conversation cache databases",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_claude",
+        package="com.anthropic.claude",
+        relative_path="files",
+        description="Claude Android - Artifacts (locally stored generated content)",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_claude",
+        package="com.anthropic.claude",
+        relative_path="shared_prefs",
+        description="Claude Android - shared preferences (account, settings)",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_copilot",
+        package="com.microsoft.copilot",
+        relative_path="files",
+        description="Microsoft Copilot Android - location data (~0.5 mile radius), prompts, browser data",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_copilot",
+        package="com.microsoft.copilot",
+        relative_path="databases",
+        description="Microsoft Copilot Android databases",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_gemini",
+        package="com.google.android.apps.bard",
+        relative_path="databases",
+        description="Google Gemini Android (formerly Bard) - conversation cache (cloud-first; minimal local)",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_gemini",
+        package="com.google.android.apps.bard",
+        relative_path="shared_prefs",
+        description="Gemini Android preferences",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_perplexity",
+        package="ai.perplexity.app.android",
+        relative_path="databases",
+        description="Perplexity Android - search and conversation cache",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_perplexity",
+        package="ai.perplexity.app.android",
+        relative_path="files",
+        description="Perplexity Android files",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_replika",
+        package="ai.replika.app",
+        relative_path="files",
+        description="Replika Android - **Realm DB**, conversation files",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_replika",
+        package="ai.replika.app",
+        relative_path="databases",
+        description="Replika Android databases",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_otter",
+        package="com.aisense.otter",
+        relative_path="files",
+        description="Otter.ai Android - **audio recordings + transcripts**",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_otter",
+        package="com.aisense.otter",
+        relative_path="databases",
+        description="Otter.ai Android databases",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_deepseek",
+        package="com.deepseek.chat",
+        relative_path="databases",
+        description="DeepSeek Android - 2025 viral Chinese AI",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_deepseek",
+        package="com.deepseek.chat",
+        relative_path="files",
+        description="DeepSeek Android files",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_wrtn",
+        package="com.wrtn.app",
+        relative_path="databases",
+        description="Wrtn Android - GenAI portal",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_wrtn",
+        package="com.wrtn.app",
+        relative_path="shared_prefs",
+        description="Wrtn Android - Kakao/Naver/Google login state",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_character_ai",
+        package="ai.character.app",
+        relative_path="databases",
+        description="Character.AI Android",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_poe",
+        package="com.quora.poe",
+        relative_path="databases",
+        description="Poe (Quora) Android - aggregator app",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_grok",
+        package="ai.x.grok",
+        relative_path="databases",
+        description="Grok (xAI) Android",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_le_chat",
+        package="ai.mistral.chat",
+        relative_path="databases",
+        description="Mistral Le Chat Android",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_meta_ai",
+        package="com.facebook.stella",
+        relative_path="databases",
+        description="Meta AI Android (com.facebook.stella, April 2025)",
+        is_directory=True,
+    ),
+    AndroidArtifactSpec(
+        artifact_type="ai_mobile_pi",
+        package="ai.inflection.pi",
+        relative_path="databases",
+        description="Pi by Inflection Android",
+        is_directory=True,
+    ),
 )
 
 
 # =============================================================================
-# iOS path specs -- system DBs by absolute path, app DBs by bundle id
+# iOS path specs — system DBs by absolute path, app DBs by bundle id
 # =============================================================================
 IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
     # System databases at well-known absolute paths.
@@ -484,7 +670,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="Wallet passes + transactions",
     ),
-    # New artifact_types -- server enum extension required (added in
+    # New artifact_types — server enum extension required (added in
     # the server-side companion commit). Daubert: explicit, neutral,
     # bundle-name-free.
     IOSArtifactSpec(
@@ -526,7 +712,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
             "(per-protection-class .store.db files)"
         ),
     ),
-    # Accounts3 -- every signed-in account (iCloud / Google / Exchange / etc.)
+    # Accounts3 — every signed-in account (iCloud / Google / Exchange / etc.)
     IOSArtifactSpec(
         artifact_type="mobile_ios_accounts",
         package=None,
@@ -534,7 +720,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="iOS account inventory (iCloud, Google, Exchange, etc.)",
     ),
-    # FrontBoard application state -- install / launch / crash timeline
+    # FrontBoard application state — install / launch / crash timeline
     IOSArtifactSpec(
         artifact_type="mobile_ios_app_state",
         package=None,
@@ -542,7 +728,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="iOS application state (FrontBoard install/launch timeline)",
     ),
-    # Voicemail -- voicemail audio + transcripts + caller log
+    # Voicemail — voicemail audio + transcripts + caller log
     IOSArtifactSpec(
         artifact_type="mobile_ios_voicemail",
         package=None,
@@ -550,7 +736,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="iOS voicemail database (calls + transcripts)",
     ),
-    # Apple Mail -- Envelope Index (headers, threads) + sidecars
+    # Apple Mail — Envelope Index (headers, threads) + sidecars
     IOSArtifactSpec(
         artifact_type="mobile_ios_mail_envelope",
         package=None,
@@ -566,15 +752,15 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="Safari root cookie jar (binarycookies binary format)",
     ),
-    # CoreDuet -- interactionC (contact-of-interest scoring; communication frequency)
+    # CoreDuet — interactionC (contact-of-interest scoring; communication frequency)
     IOSArtifactSpec(
         artifact_type="mobile_ios_interaction_c",
         package=None,
         relative_path="private/var/mobile/Library/CoreDuet/People/interactionC.db",
         container_kind=ContainerKind.SYSTEM,
-        description="CoreDuet interactionC -- contact-of-interest scoring",
+        description="CoreDuet interactionC — contact-of-interest scoring",
     ),
-    # routined -- Significant Locations + visit history (location pivot)
+    # routined — Significant Locations + visit history (location pivot)
     IOSArtifactSpec(
         artifact_type="mobile_ios_routined",
         package=None,
@@ -584,7 +770,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         child_suffix_filter=("Local.sqlite", "Cache.sqlite"),
         description="routined Significant Locations + visit cache",
     ),
-    # Biome -- iOS 16+ SEGB streams (app launches, Bluetooth, lock, focus)
+    # Biome — iOS 16+ SEGB streams (app launches, Bluetooth, lock, focus)
     IOSArtifactSpec(
         artifact_type="mobile_ios_biome",
         package=None,
@@ -602,7 +788,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         description="WiFi known networks (SSIDs, BSSIDs, last-join timestamps)",
     ),
 
-    # App-specific (bundle id -> resolved per-app container at runtime
+    # App-specific (bundle id → resolved per-app container at runtime
     # by ios_uuid_resolver). artifact_type values match the server's
     # existing per-app enum so the dispatcher routes them.
     IOSArtifactSpec(
@@ -641,7 +827,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         description="KakaoTalk iOS message database",
     ),
     # ------------------------------------------------------------------
-    # iOS Find My -- searchpartyd user-data directory. Holds the
+    # iOS Find My — searchpartyd user-data directory. Holds the
     # OwnedBeacons / BeaconStore plists, encrypted offline-finding
     # location archives, and the per-AirTag and per-device record
     # files that Find My v3 (iOS 14+) uses. Distinct from the
@@ -660,7 +846,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         child_suffix_filter=(".archive", ".plist", ".sqlite", ".db", ".record"),
     ),
     # ------------------------------------------------------------------
-    # iOS TCC -- Transparency, Consent, and Control. Records every
+    # iOS TCC — Transparency, Consent, and Control. Records every
     # permission grant for microphone, camera, location, contacts,
     # photos, etc., with first-grant timestamp and granting agent.
     # Critical for understanding which apps had access to sensitive
@@ -673,6 +859,157 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="TCC permission grant history (mic / camera / location / etc.)",
         pull_sqlite_sidecars=True,
+    ),
+
+    # =========================================================================
+    # Round 9 - Mobile AI Apps (iOS, 2026-05-06)
+    # =========================================================================
+    # Per ScienceDirect 2024/2025 published research on iOS AI app forensics.
+    # Each app's container holds conversation cache, attachments, account info.
+
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_chatgpt",
+        package="com.openai.chat",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="ChatGPT iOS - conversations (plaintext JSON), drafts, projects, voice transcripts, account",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_claude",
+        package="com.anthropic.claudeforios",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Claude iOS - Artifacts (locally stored generated content), conversation cache",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_claude",
+        package="com.anthropic.claude",
+        relative_path="Library",
+        container_kind=ContainerKind.APP_DATA,
+        description="Claude iOS Library - cache, preferences, attachment thumbnails",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_copilot",
+        package="com.microsoft.copilot",
+        relative_path="Library/Caches/com.microsoft.copilot/fsCachedData",
+        container_kind=ContainerKind.APP_DATA,
+        description="Microsoft Copilot iOS - cached user data (email/birthdate/address/phone), prompts",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_copilot",
+        package="com.microsoft.copilot",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Microsoft Copilot iOS Documents",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_gemini",
+        package="com.google.GoogleMobile",
+        relative_path="Library/Application Support/Google/Measurement",
+        container_kind=ContainerKind.APP_DATA,
+        description="Google Gemini iOS (bundled into Google app) - measurement plist, minimal local artifacts",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_perplexity",
+        package="ai.perplexity.app",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Perplexity iOS - search history, conversation cache",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_replika",
+        package="io.luka.app",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Replika iOS - **Realm DB** (not SQLite), conversation history",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_otter",
+        package="com.aisense.otter",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Otter.ai iOS - **audio recordings + transcripts** (high evidentiary value)",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_deepseek",
+        package="com.deepseek.chat",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="DeepSeek iOS - 2025 viral Chinese AI app, no published DFIR coverage",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_wrtn",
+        package="com.wrtn.app",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Wrtn iOS - GenAI portal, Kakao/Naver/Google login",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_character_ai",
+        package="ai.character.app",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Character.AI iOS - cloud-sync companion chat",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_poe",
+        package="com.quora.poe",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Poe (Quora) iOS - aggregator for GPT-4.5 / Claude / DeepSeek / Runway / ElevenLabs",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_grok",
+        package="ai.x.grok",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Grok (xAI) iOS - standalone app artifacts",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_le_chat",
+        package="ai.mistral.chat",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Mistral Le Chat iOS (Feb 2025 launch) - French sovereign AI",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_meta_ai",
+        package="com.facebook.stella",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Meta AI iOS standalone app (April 2025)",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_pi",
+        package="ai.inflection.pi",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Pi by Inflection iOS - emotional companion (acquired by Microsoft 2024)",
+        is_directory=True,
+    ),
+    IOSArtifactSpec(
+        artifact_type="ai_mobile_clova",
+        package="com.naver.nozzle",
+        relative_path="Documents",
+        container_kind=ContainerKind.APP_DATA,
+        description="Naver CLOVA app iOS - Korean voice/AI assistant",
+        is_directory=True,
     ),
 )
 

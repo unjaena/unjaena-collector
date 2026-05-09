@@ -522,6 +522,8 @@ class CollectorWindow(QMainWindow):
         self.server_url = None
         self.ws_url = None
         self.allowed_artifacts = []
+        self._allow_all_artifacts = False
+        self._mapped_allowed_artifacts = set()
         self.request_signer = None
 
         # Unified device manager
@@ -715,6 +717,10 @@ class CollectorWindow(QMainWindow):
         # Tab 5: macOS
         macos_tab = self._create_macos_tab()
         self.artifacts_tab.addTab(macos_tab, "macOS")
+
+        # Tab 6: AI Agent Activity (Round 8, 2026-05-06) -- cross-platform
+        ai_tab = self._create_ai_activity_tab()
+        self.artifacts_tab.addTab(ai_tab, "AI Activity")
 
         artifacts_outer_layout.addWidget(self.artifacts_tab)
 
@@ -1100,6 +1106,23 @@ class CollectorWindow(QMainWindow):
 
         return tab
 
+    def _is_artifact_allowed(self, artifact_type: str) -> bool:
+        return self._allow_all_artifacts or artifact_type in self._mapped_allowed_artifacts
+
+    def _disable_disallowed_artifact(
+        self,
+        artifact_type: str,
+        cb: QCheckBox,
+        base_tooltip: str = ""
+    ) -> bool:
+        if self._is_artifact_allowed(artifact_type):
+            return False
+        cb.setEnabled(False)
+        cb.setChecked(False)
+        tooltip = base_tooltip or ARTIFACT_TYPES.get(artifact_type, {}).get('description', '')
+        cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
+        return True
+
     def _update_android_root_status(self, is_rooted: bool, connected: bool):
         """Update Android tab: root status banner, auto-select artifacts, show limitations"""
         if not hasattr(self, 'android_root_banner'):
@@ -1154,6 +1177,8 @@ class CollectorWindow(QMainWindow):
         for artifact_type, cb in self.artifact_checks.items():
             info = ARTIFACT_TYPES.get(artifact_type, {})
             if info.get('category') != 'android':
+                continue
+            if self._disable_disallowed_artifact(artifact_type, cb):
                 continue
 
             # Screen scraping works on both Root and Non-Root — always enable when connected
@@ -1289,6 +1314,61 @@ class CollectorWindow(QMainWindow):
             cb.setProperty("artifact_type", artifact_type)
             cb.setToolTip(info.get('description', ''))
 
+            self.artifact_checks[artifact_type] = cb
+            content_layout.addWidget(cb)
+
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+        return tab
+
+    def _create_ai_activity_tab(self) -> QWidget:
+        """Create AI Agent Activity tab (cross-platform).
+
+        Lists artifact types that capture forensic evidence from AI tools
+        (Claude Code / Claude Desktop / ChatGPT Desktop / Cursor / Copilot
+        / Continue.dev / Aider / Ollama / LM Studio / HuggingFace cache /
+        MCP server grants). Paths span macOS / Linux / Windows so a single
+        checkbox collects from whichever platform applies.
+        """
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        info_label = QLabel(
+            "AI tool forensic traces -- conversation logs, tool-call records,"
+            " MCP server grants, model fingerprints. Cross-platform paths."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet(
+            f"color: {COLORS['text_tertiary']}; font-size: 9px;"
+        )
+        layout.addWidget(info_label)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+        )
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(2)
+
+        for artifact_type, info in ARTIFACT_TYPES.items():
+            if info.get('category') != 'ai_activity':
+                continue
+            cb = QCheckBox(f"{info['name']}")
+            cb.setEnabled(False)  # Enable after token validation
+            cb.setProperty("artifact_type", artifact_type)
+            cb.setToolTip(info.get('description', ''))
             self.artifact_checks[artifact_type] = cb
             content_layout.addWidget(cb)
 
@@ -1543,6 +1623,8 @@ class CollectorWindow(QMainWindow):
             info = ARTIFACT_TYPES.get(artifact_type, {})
             if info.get('category') != 'android':
                 continue
+            if self._disable_disallowed_artifact(artifact_type, cb):
+                continue
             cb.setEnabled(True)
             cb.setChecked(True)
             cb.setToolTip(
@@ -1569,6 +1651,8 @@ class CollectorWindow(QMainWindow):
             for artifact_type, cb in self.artifact_checks.items():
                 info = ARTIFACT_TYPES.get(artifact_type, {})
                 if info.get('category') != 'ios':
+                    continue
+                if self._disable_disallowed_artifact(artifact_type, cb):
                     continue
                 cb.setEnabled(True)
                 cb.setChecked(True)
@@ -1636,7 +1720,7 @@ class CollectorWindow(QMainWindow):
 
         # Determine category based on current tab index
         current_tab = self.artifacts_tab.currentIndex()
-        category_map = {0: 'windows', 1: 'android', 2: 'ios', 3: 'linux', 4: 'macos'}
+        category_map = {0: 'windows', 1: 'android', 2: 'ios', 3: 'linux', 4: 'macos', 5: 'ai_activity'}
         current_category = category_map.get(current_tab, 'windows')
 
         for artifact_type, cb in self.artifact_checks.items():
@@ -1750,20 +1834,32 @@ class CollectorWindow(QMainWindow):
                 # If already a Collector name
                 if server_name in ARTIFACT_TYPES:
                     mapped_allowed.add(server_name)
+                for artifact_type, info in ARTIFACT_TYPES.items():
+                    if info.get('category') == server_name:
+                        mapped_allowed.add(artifact_type)
 
             # Allow all artifacts if 'all' is included or allowed_artifacts is empty
             allow_all = 'all' in self.allowed_artifacts or not result.allowed_artifacts
+            self._allow_all_artifacts = allow_all
+            self._mapped_allowed_artifacts = mapped_allowed
 
             self._log(f"Mapped artifacts for GUI: {', '.join(sorted(mapped_allowed))}")
             if allow_all:
                 self._log("All artifacts are allowed - selecting all by default")
 
-            # Enable and check all checkboxes by default
+            enabled_count = 0
             for artifact_type, cb in self.artifact_checks.items():
-                cb.setEnabled(True)
-                cb.setChecked(True)
+                allowed = self._is_artifact_allowed(artifact_type)
+                cb.setEnabled(allowed)
+                cb.setChecked(allowed)
+                if allowed:
+                    enabled_count += 1
+                else:
+                    info = ARTIFACT_TYPES.get(artifact_type, {})
+                    tooltip = info.get('description', '')
+                    cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
 
-            self._log(f"[DEBUG] Enabled and checked all {len(self.artifact_checks)} checkboxes")
+            self._log(f"[DEBUG] Enabled and checked {enabled_count}/{len(self.artifact_checks)} checkboxes")
 
             # Update collect button state including device selection status
             self._update_collect_button_state()
@@ -2888,6 +2984,8 @@ class CollectorWindow(QMainWindow):
         self.server_url = None
         self.ws_url = None
         self.allowed_artifacts = []
+        self._allow_all_artifacts = False
+        self._mapped_allowed_artifacts = set()
 
         # Clear token input field
         if hasattr(self, 'token_input') and self.token_input:

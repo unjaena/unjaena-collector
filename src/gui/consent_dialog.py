@@ -33,7 +33,7 @@ class ConsentDialog(QDialog):
     # Supported languages list
     LANGUAGES = {
         "en": "English",
-        "ko": "한국어",
+        "ko": "Korean",
         "ja": "日本語",
         "zh": "中文"
     }
@@ -296,7 +296,7 @@ class ConsentDialog(QDialog):
 
         # Button text (by language)
         btn_texts = {
-            "ko": ("취소", "동의 후 수집 시작"),
+            "ko": ("Cancel", "Agree and Start Collection"),
             "ja": ("キャンセル", "同意して収集を開始"),
             "zh": ("取消", "同意并开始收集"),
             "en": ("Cancel", "Agree and Start Collection")
@@ -307,7 +307,7 @@ class ConsentDialog(QDialog):
 
         # Warning text (by language)
         warning_texts = {
-            "ko": "경고: 이 도구는 시스템에서 분석 데이터를 수집합니다.\n아래 내용을 읽고 동의한 후 진행하세요.",
+            "ko": "Warning: This tool collects analysis data from your system.\nPlease read and agree to the terms below before proceeding.",
             "ja": "警告：このツールはシステムから分析データを収集します。\n以下の内容をお読みになり、同意の上お進みください。",
             "zh": "警告：此工具将从您的系统中收集分析数据。\n请阅读以下内容并同意后再继续。",
             "en": "Warning: This tool collects analysis data from your system.\nPlease read and agree to the terms below before proceeding."
@@ -323,7 +323,7 @@ class ConsentDialog(QDialog):
         self.template_content = None
 
         fallback_msgs = {
-            'ko': '동의서를 불러올 수 없습니다. 인터넷 연결이 필요합니다.',
+            'ko': 'Consent information could not be loaded. Internet connection is required.',
             'en': 'Consent information could not be loaded. Internet connection is required.',
             'ja': '同意書を読み込めませんでした。インターネット接続が必要です。',
             'zh': '无法加载同意书。需要互联网连接。',
@@ -425,7 +425,7 @@ class ConsentDialog(QDialog):
 
         # Version information style
         html = re.sub(
-            r'\*\*버전\*\*: (v[\d.]+) \| \*\*시행일\*\*: ([\d-]+)',
+            r'\*\*\uBC84\uC804\*\*: (v[\d.]+) \| \*\*\uC2DC\uD589\uC77C\*\*: ([\d-]+)',
             rf'<div style="margin-top:12px; padding:8px; background:{COLORS["bg_secondary"]}; border-radius:4px; font-size:11px; color:{COLORS["text_secondary"]};">Version: \1 | Effective: \2</div>',
             html
         )
@@ -538,27 +538,27 @@ class ConsentDialog(QDialog):
     _OPERATOR_LABELS = {
         "section_title": {
             "en": "Operator Authorization",
-            "ko": "수행자 권한 고지",
+            "ko": "Operator Authorization",
             "ja": "実施者の権限",
             "zh": "操作员授权",
         },
         "role_label": {
             "en": "Your role in this collection:",
-            "ko": "본 수집에서 귀하의 역할:",
+            "ko": "Your role in this collection:",
             "ja": "本収集におけるあなたの役割:",
             "zh": "您在本次采集中的角色:",
         },
         "basis_label": {
             "en": "Legal basis for processing:",
-            "ko": "처리의 법적 근거:",
+            "ko": "Legal basis for processing:",
             "ja": "処理の法的根拠:",
             "zh": "处理的法律依据:",
         },
         "transfer_label": {
-            "en": "I acknowledge that the collected data will be transmitted to and processed on servers located in the United States (RunPod, Cloudflare) and the United Kingdom (Paddle). Standard Contractual Clauses apply.",
-            "ko": "수집된 데이터가 미국(RunPod, Cloudflare) 및 영국(Paddle)에 위치한 서버로 전송·처리되며, 표준계약조항(SCC)이 적용됨을 확인합니다.",
-            "ja": "収集されたデータは米国(RunPod, Cloudflare)および英国(Paddle)所在のサーバーに送信・処理され、標準契約条項(SCC)が適用されることを確認します。",
-            "zh": "本人确认所采集数据将传输至位于美国(RunPod、Cloudflare)和英国(Paddle)的服务器进行处理,并适用标准合同条款(SCC)。",
+            "en": "I acknowledge that the collected data may be transmitted to and processed by the configured analysis service and its approved service providers. Standard Contractual Clauses may apply.",
+            "ko": "I acknowledge that the collected data may be transmitted to and processed by the configured analysis service and its approved service providers. Standard Contractual Clauses may apply.",
+            "ja": "収集されたデータは、設定済みの分析サービスおよび承認済みサービスプロバイダーに送信・処理される場合があります。標準契約条項が適用される場合があります。",
+            "zh": "本人确认所采集数据可能会传输至已配置的分析服务及其授权服务提供商进行处理,并可能适用标准合同条款。",
         },
     }
 
@@ -572,11 +572,11 @@ class ConsentDialog(QDialog):
             "role_law_enforcement":  "Law-enforcement officer under lawful authority",
         },
         "ko": {
-            "role_device_owner":     "본인 소유 기기입니다",
-            "role_authorized_agent": "기기 소유자로부터 서면 위임을 받았습니다",
-            "role_employer":         "회사 소유 기기이며 제가 관리 책임자입니다",
-            "role_court_order":      "법원 영장 또는 명령을 소지하고 있습니다",
-            "role_law_enforcement":  "수사기관 공무원으로 적법 권한을 행사합니다",
+            "role_device_owner":     "I am the owner of this device",
+            "role_authorized_agent": "I am authorized in writing by the device owner",
+            "role_employer":         "Company-owned device under my supervision",
+            "role_court_order":      "I have a court order / warrant",
+            "role_law_enforcement":  "Law-enforcement officer under lawful authority",
         },
         "ja": {
             "role_device_owner":     "私はこの端末の所有者です",
@@ -603,11 +603,11 @@ class ConsentDialog(QDialog):
             "basis_vital_interest":       "Vital interest / life safety",
         },
         "ko": {
-            "basis_consent":              "정보주체의 명시적 동의",
-            "basis_legitimate_interest":  "정당한 이익 (balancing test 문서화됨)",
-            "basis_legal_obligation":     "법적 의무 / 규제 요건",
-            "basis_public_task":          "공공 직무 / 공적 권한",
-            "basis_vital_interest":       "중대한 이익 / 생명 안전",
+            "basis_consent":              "Explicit consent of the data subject",
+            "basis_legitimate_interest":  "Legitimate interest (balancing test documented)",
+            "basis_legal_obligation":     "Legal obligation / regulatory requirement",
+            "basis_public_task":          "Public task / official authority",
+            "basis_vital_interest":       "Vital interest / life safety",
         },
         "ja": {
             "basis_consent":              "データ主体の明示的同意",
@@ -837,7 +837,7 @@ class ConsentDialog(QDialog):
         if not submitted:
             title_by_lang = {
                 "en": "Consent submission failed",
-                "ko": "동의 기록 전송 실패",
+                "ko": "Consent submission failed",
                 "ja": "同意記録の送信に失敗",
                 "zh": "同意记录提交失败",
             }
@@ -848,9 +848,9 @@ class ConsentDialog(QDialog):
                     "If the problem persists, contact your administrator."
                 ),
                 "ko": (
-                    "동의 기록을 분석 서버에 저장하지 못했습니다. "
-                    "네트워크 연결을 확인한 후 다시 시도해 주세요. "
-                    "문제가 지속되면 관리자에게 문의하세요."
+                    "Could not record your consent on the analysis server. "
+                    "Please check your network connection and try again. "
+                    "If the problem persists, contact your administrator."
                 ),
                 "ja": (
                     "同意記録を解析サーバーに保存できませんでした。"
@@ -880,7 +880,7 @@ class ConsentDialog(QDialog):
             logger.error(f"Consent record generation failed: {rec_err}")
             key_title = {
                 "en": "Consent signing unavailable",
-                "ko": "동의서 서명 불가",
+                "ko": "Consent signing unavailable",
                 "ja": "同意書の署名が利用できません",
                 "zh": "无法对同意书进行签名",
             }.get(self.language, "Consent signing unavailable")
@@ -891,9 +891,9 @@ class ConsentDialog(QDialog):
                     "continues, contact your administrator."
                 ),
                 "ko": (
-                    "안전한 서명 키가 없어서 동의 기록을 생성할 수 없습니다. "
-                    "서버에서 키가 전달되지 않았습니다. 다시 시도해 주시고, "
-                    "문제가 지속되면 관리자에게 문의하세요."
+                    "A secure signing key is required to record consent. "
+                    "The server did not provide one. Please retry; if the problem "
+                    "continues, contact your administrator."
                 ),
                 "ja": (
                     "安全な署名キーが取得できず、同意記録を生成できません。"

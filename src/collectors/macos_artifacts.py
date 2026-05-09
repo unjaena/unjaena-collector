@@ -358,6 +358,32 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'os_type': 'macos',
     },
 
+    'macos_xprotect_remediator_db': {
+        'paths': [
+            '/var/protected/xprotect/XPdb',
+            '/private/var/protected/xprotect/XPdb',
+        ],
+        'description': 'XProtect Behavior Service database',
+        'forensic_value': 'high',
+        'category': 'security',
+        'os_type': 'macos',
+    },
+
+    'macos_biome_stream': {
+        'paths': [
+            '/Users/*/Library/Biome/streams/*/*/local/*',
+            '/Users/*/Library/Biome/streams/*/*/remote/*',
+            '/Users/*/Library/Biome/streams/*/*/metadata.plist',
+            '/var/db/Biome/streams/*/*/local/*',
+            '/var/db/Biome/streams/*/*/remote/*',
+            '/private/var/db/Biome/streams/*/*/local/*',
+        ],
+        'description': 'macOS Biome streams',
+        'forensic_value': 'high',
+        'category': 'user_activity',
+        'os_type': 'macos',
+    },
+
     # ==========================================================================
     # Network
     # ==========================================================================
@@ -913,6 +939,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     'macos_kakaotalk_uid': {
         'paths': [
             '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/KakaoTalk/*',
+            '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Preferences/com.kakao.KakaoTalkMac.plist',
             '/Users/*/Library/Preferences/com.kakao.KakaoTalkMac.plist',
         ],
         'description': 'KakaoTalk user identifier',
@@ -925,6 +952,9 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     'macos_kakaotalk_credentials': {
         'paths': [
             '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/com.kakao.KakaoTalkMac/*',
+            '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/KakaoTalk/*',
+            '/Users/*/Library/Application Support/com.kakao.KakaoTalkMac/*',
+            '/Users/*/Library/Application Support/KakaoTalk/*',
             '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Cookies/*',
             '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Preferences/*.plist',
             '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Caches/Cache.db',
@@ -932,6 +962,22 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Caches/Cache.db-shm',
         ],
         'description': 'KakaoTalk message database and application data',
+        'forensic_value': 'critical',
+        'category': 'applications',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
+
+    'macos_kakaotalk_cache': {
+        'paths': [
+            '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Caches/Cache.db',
+            '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Caches/Cache.db-wal',
+            '/Users/*/Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Caches/Cache.db-shm',
+            '/Users/*/Library/Caches/com.kakao.KakaoTalkMac/Cache.db',
+            '/Users/*/Library/Caches/com.kakao.KakaoTalkMac/Cache.db-wal',
+            '/Users/*/Library/Caches/com.kakao.KakaoTalkMac/Cache.db-shm',
+        ],
+        'description': 'KakaoTalk NSURLCache login and device metadata',
         'forensic_value': 'critical',
         'category': 'applications',
         'os_type': 'macos',
@@ -1053,6 +1099,633 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'description': 'Device UUID (IOPlatformUUID)',
         'forensic_value': 'critical',
         'category': 'system_info',
+        'os_type': 'macos',
+    },
+
+    # ==========================================================================
+    # AI Agent Activity (P0 - 2026 emerging forensic surface)
+    # ==========================================================================
+    # AI tools leave rich forensic traces: full conversation logs, tool-call
+    # records (which files the agent read/wrote), MCP server grants, model
+    # identifiers, token counts. For insider-threat / IP-theft / compliance
+    # investigations, AI artifacts are increasingly the primary evidence.
+
+    'ai_claude_code': {
+        'paths': [
+            '/Users/*/.claude/history.jsonl',
+            '/Users/*/.claude/settings.json',
+            '/Users/*/.claude/settings.local.json',
+            '/Users/*/.claude/CLAUDE.md',
+            '/Users/*/.claude/stats-cache.json',
+            '/Users/*/.claude/mcp-needs-auth-cache.json',
+            '/Users/*/.claude/projects/*/*.jsonl',
+            '/Users/*/.claude/projects/*/*/*.jsonl',
+            '/Users/*/.claude/projects/*/*/subagents/*.jsonl',
+            '/Users/*/.claude/sessions/*.json',
+            '/Users/*/.claude/plans/*',
+            '/Users/*/.claude/file-history/*',
+            '/Users/*/.claude/shell-snapshots/*.sh',
+        ],
+        'description': 'Claude Code agent session logs, tool-call records, project memory, shell snapshots',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'JSONL format. Each line is a message, tool call, or tool result with timestamps and full content.',
+    },
+
+    'ai_claude_desktop': {
+        'paths': [
+            '/Users/*/Library/Application Support/Claude/config.json',
+            '/Users/*/Library/Application Support/Claude/claude_desktop_config.json',
+            '/Users/*/Library/Logs/Claude/*.log',
+            '/Users/*/Library/Preferences/com.anthropic.claudefordesktop.plist',
+        ],
+        'description': 'Claude Desktop config, MCP server grants, recent attachments, logs',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+
+    'ai_chatgpt_desktop': {
+        'paths': [
+            '/Users/*/Library/Application Support/com.openai.chat/*',
+            '/Users/*/Library/Caches/com.openai.chat/*',
+            '/Users/*/Library/Logs/com.openai.chat/*',
+            '/Users/*/Library/Preferences/com.openai.chat.plist',
+        ],
+        'description': 'ChatGPT Desktop config, cache, custom GPTs, recent uploads',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+
+    'ai_cursor': {
+        'paths': [
+            '/Users/*/Library/Application Support/Cursor/User/settings.json',
+            '/Users/*/Library/Application Support/Cursor/User/globalStorage/state.vscdb',
+            '/Users/*/Library/Application Support/Cursor/User/workspaceStorage/*/state.vscdb',
+            '/Users/*/Library/Application Support/Cursor/User/History/*/*',
+            '/Users/*/Library/Logs/Cursor/*',
+        ],
+        'description': 'Cursor IDE chat history, code context, workspace state (SQLite); contains full AI conversation per workspace',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'state.vscdb is SQLite - parse with chat-history schema.',
+    },
+
+    'ai_copilot_vscode': {
+        'paths': [
+            '/Users/*/Library/Application Support/Code/User/globalStorage/github.copilot-chat/*',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/github.copilot/*',
+            '/Users/*/Library/Application Support/Code/User/workspaceStorage/*/github.copilot-chat/*',
+            '/Users/*/Library/Application Support/Code/logs/*/exthost*/output_logging_*/*.log',
+        ],
+        'description': 'GitHub Copilot Chat extension - conversation logs, prompts, completions, telemetry',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+
+    'ai_continue_dev': {
+        'paths': [
+            '/Users/*/.continue/config.json',
+            '/Users/*/.continue/config.yaml',
+            '/Users/*/.continue/dev_data/*',
+            '/Users/*/.continue/index/*',
+            '/Users/*/.continue/sessions/*',
+        ],
+        'description': 'Continue.dev VS Code/JetBrains extension - chat sessions, model configs, indexed code context',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+
+    'ai_aider': {
+        'paths': [
+            '/Users/*/.aider*',
+            '/Users/*/.aider.chat.history.md',
+            '/Users/*/.aider.input.history',
+            '/Users/*/.aider.tags.cache.v3/*',
+        ],
+        'description': 'Aider AI coding CLI - chat history (markdown), input history, project tags cache',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+
+    'ai_ollama': {
+        'paths': [
+            '/Users/*/.ollama/id_ed25519',
+            '/Users/*/.ollama/id_ed25519.pub',
+            '/Users/*/.ollama/history',
+            '/Users/*/.ollama/models/manifests/*',
+            '/Users/*/.ollama/logs/server.log',
+            '/Users/*/Library/Application Support/Ollama/*',
+            '/Users/*/Library/Logs/Ollama/*',
+        ],
+        'description': 'Ollama local LLM runtime - identity key, model manifests, server log (often contains user prompts)',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'server.log records all prompt/response by default unless OLLAMA_DEBUG=0. Identity key is unique per install.',
+    },
+
+    'ai_lmstudio': {
+        'paths': [
+            '/Users/*/.cache/lm-studio/*',
+            '/Users/*/.lmstudio/*',
+            '/Users/*/Library/Application Support/LM Studio/*',
+            '/Users/*/Library/Application Support/LM Studio/user-data/conversations/*',
+        ],
+        'description': 'LM Studio local LLM GUI - conversation history (JSON), model preferences',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+
+    'ai_huggingface_cache': {
+        'paths': [
+            '/Users/*/.cache/huggingface/hub/models--*/blobs/*',
+            '/Users/*/.cache/huggingface/hub/models--*/snapshots/*',
+            '/Users/*/.cache/huggingface/token',
+            '/Users/*/.cache/huggingface/hub/version.txt',
+        ],
+        'description': 'HuggingFace models cache - downloaded model weights, API token, version metadata',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'Used by transformers, vllm, diffusers, and most local LLM Python ecosystems.',
+    },
+
+    'ai_mcp_servers': {
+        'paths': [
+            '/Users/*/.claude/mcp-needs-auth-cache.json',
+            '/Users/*/Library/Application Support/Claude/claude_desktop_config.json',
+            '/Users/*/.continue/config.json',
+            '/Users/*/.continue/config.yaml',
+            '/Users/*/.config/claude/mcp.json',
+            '/Users/*/Library/Application Support/Cursor/User/globalStorage/cursor.mcp/*',
+        ],
+        'description': 'Model Context Protocol server configurations - lists external services AI agents were granted access to (filesystem, GitHub, Slack, Gmail, etc.)',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'Single highest-value AI artifact: shows full attack surface granted to agents in one file.',
+    },
+
+    # ==========================================================================
+    # Round 10 - Desktop AI Expansion (macOS, 2026-05-06)
+    # ==========================================================================
+
+    'ai_cline': {
+        'paths': [
+            '/Users/*/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/state/*',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/api_conversation_history.json',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/ui_messages.json',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/task_metadata.json',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/checkpoints/*',
+        ],
+        'description': 'Cline (Claude Dev) VS Code extension - full task history, AI conversation, tool calls, checkpoints',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': '2025 explosive growth (>2M installs). Each task has api_conversation_history.json with raw Claude API exchanges.',
+    },
+    'ai_roo_code': {
+        'paths': [
+            '/Users/*/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/state/*',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/api_conversation_history.json',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/*',
+        ],
+        'description': 'Roo Code / Kilo Code (Cline forks) - same forensic schema as Cline',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_windsurf': {
+        'paths': [
+            '/Users/*/.codeium/*',
+            '/Users/*/Library/Application Support/Windsurf/User/globalStorage/*',
+            '/Users/*/Library/Application Support/Windsurf/User/settings.json',
+            '/Users/*/Library/Application Support/Windsurf/logs/*',
+        ],
+        'description': 'Windsurf (Codeium IDE) - Cascade agent IDE chat history, settings, logs',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_jan': {
+        'paths': [
+            '/Users/*/Library/Application Support/Jan/data/threads/*',
+            '/Users/*/Library/Application Support/Jan/data/models/*',
+            '/Users/*/Library/Application Support/Jan/data/settings/*',
+            '/Users/*/Library/Application Support/Jan/data/assistants/*',
+        ],
+        'description': 'Jan local LLM app - threads (chat history JSON), downloaded models, settings, custom assistants',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_gpt4all': {
+        'paths': [
+            '/Users/*/Library/Application Support/nomic.ai/GPT4All/*',
+            '/Users/*/Library/Application Support/nomic.ai/GPT4All/chats/*',
+            '/Users/*/Library/Application Support/nomic.ai/GPT4All/localdocs_v3.db',
+        ],
+        'description': 'GPT4All local LLM - chat history (SQLite), downloaded GGUF models, LocalDocs RAG database',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_anythingllm': {
+        'paths': [
+            '/Users/*/Library/Application Support/anythingllm-desktop/storage/*',
+            '/Users/*/Library/Application Support/anythingllm-desktop/storage/anythingllm.db',
+            '/Users/*/Library/Application Support/anythingllm-desktop/storage/lancedb/*',
+            '/Users/*/Library/Application Support/anythingllm-desktop/storage/documents/*',
+        ],
+        'description': 'AnythingLLM desktop - chat DB (SQLite), LanceDB vector store, ingested documents (RAG corpus)',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'documents/ folder often contains exfil-relevant files ingested as RAG context.',
+    },
+    'ai_sillytavern': {
+        'paths': [
+            '/Users/*/SillyTavern/data/default-user/chats/*',
+            '/Users/*/SillyTavern/data/default-user/characters/*',
+            '/Users/*/SillyTavern/data/default-user/worlds/*',
+            '/Users/*/SillyTavern/data/default-user/secrets.json',
+            '/Users/*/SillyTavern/data/default-user/settings.json',
+        ],
+        'description': 'SillyTavern frontend - JSONL chat logs per character, character cards, secrets.json (API keys)',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'Common in jailbreak/abuse cases. Character PNG cards have embedded JSON metadata.',
+    },
+    'ai_open_interpreter': {
+        'paths': [
+            '/Users/*/Library/Application Support/Open Interpreter/conversations.json',
+            '/Users/*/Library/Application Support/Open Interpreter/*',
+            '/Users/*/.config/open-interpreter/*',
+        ],
+        'description': 'Open Interpreter autonomous code-execution agent - conversations.json shows commands the agent ran on the host',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_jetbrains_assistant': {
+        'paths': [
+            '/Users/*/Library/Caches/JetBrains/*/AIAssistant/*',
+            '/Users/*/Library/Application Support/JetBrains/*/options/ai-*.xml',
+            '/Users/*/Library/Application Support/JetBrains/*/options/chat-history.xml',
+        ],
+        'description': 'JetBrains AI Assistant (IntelliJ family) - chat history XML, AI configuration',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_codeium': {
+        'paths': [
+            '/Users/*/.codeium/*',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/codeium.codeium/*',
+        ],
+        'description': 'Codeium VS Code extension - completion history, telemetry',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_tabnine': {
+        'paths': [
+            '/Users/*/.tabnine/*',
+            '/Users/*/Library/Application Support/Tabnine/*',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/TabNine.tabnine-vscode/*',
+        ],
+        'description': 'Tabnine VS Code/JetBrains extension - binary cache, telemetry, local config',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_sourcegraph_cody': {
+        'paths': [
+            '/Users/*/Library/Application Support/Code/User/globalStorage/sourcegraph.cody-ai/*',
+            '/Users/*/.config/sourcegraph/*',
+        ],
+        'description': 'Sourcegraph Cody - chat history, code context cache',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_amazon_q': {
+        'paths': [
+            '/Users/*/.aws/sso/cache/*',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/AmazonWebServices.aws-toolkit-vscode/*',
+            '/Users/*/Library/Application Support/Code/User/globalStorage/amazonwebservices.amazon-q-vscode/*',
+        ],
+        'description': 'Amazon Q Developer (formerly CodeWhisperer) - SSO cache, AI completion history',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_pieces': {
+        'paths': [
+            '/Users/*/Library/Application Support/Pieces/*',
+            '/Users/*/Library/Application Support/com.pieces.os/*',
+        ],
+        'description': 'Pieces for Developers - PiecesOS SQLite snippet store; captures clipboard-like dev IP across machines',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_msty': {
+        'paths': [
+            '/Users/*/Library/Application Support/Msty/*',
+            '/Users/*/Library/Application Support/Msty/chats/*',
+        ],
+        'description': 'Msty local LLM GUI - SQLite chat database',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_open_webui': {
+        'paths': [
+            '/Users/*/.open-webui/*',
+            '/Users/*/.open-webui/webui.db',
+        ],
+        'description': 'Open WebUI (formerly Ollama WebUI) - SQLite chat database with full conversation history',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_text_gen_webui': {
+        'paths': [
+            '/Users/*/text-generation-webui/logs/chat/*/*.json',
+            '/Users/*/text-generation-webui/characters/*',
+            '/Users/*/text-generation-webui/loras/*',
+            '/Users/*/text-generation-webui/models/*',
+        ],
+        'description': 'text-generation-webui (Oobabooga) - chat JSON per character, LoRA fine-tunes, model files',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_koboldcpp': {
+        'paths': [
+            '/Users/*/koboldcpp.cfg',
+            '/Users/*/KoboldCPP/*',
+        ],
+        'description': 'KoboldCPP single-exe local inference - config + user-saved chat JSON',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_backyard_ai': {
+        'paths': [
+            '/Users/*/Library/Application Support/faraday/*',
+            '/Users/*/Library/Application Support/Backyard AI/*',
+        ],
+        'description': 'Backyard AI / Faraday - SQLite chats DB, downloaded GGUFs, character cards',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'Common in uncensored RP/jailbreak abuse cases.',
+    },
+    'ai_pinokio': {
+        'paths': [
+            '/Users/*/pinokio/*',
+            '/Users/*/pinokio/api/*',
+        ],
+        'description': 'Pinokio meta-installer - hides 1-click installs of Stable Diffusion / SD video / voice cloning tools',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_raycast_ai': {
+        'paths': [
+            '/Users/*/Library/Application Support/com.raycast.macos/LocalDatabase.db',
+            '/Users/*/Library/Application Support/com.raycast.macos/*',
+        ],
+        'description': 'Raycast AI - SQLite database with AI chat history and quicklinks',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_granola': {
+        'paths': [
+            '/Users/*/Library/Application Support/Granola/*',
+            '/Users/*/Library/Application Support/Granola/recordings/*',
+            '/Users/*/Library/Application Support/Granola/transcripts/*',
+        ],
+        'description': 'Granola meeting notetaker - audio recordings + AI transcripts + meeting summaries',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_notion_ai_desktop': {
+        'paths': [
+            '/Users/*/Library/Application Support/Notion/IndexedDB/*',
+            '/Users/*/Library/Application Support/Notion/*',
+        ],
+        'description': 'Notion desktop AI cache - IndexedDB caches recent AI block responses',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_glean_desktop': {
+        'paths': [
+            '/Users/*/Library/Preferences/com.glean.desktop.plist',
+            '/Users/*/Library/Application Support/com.glean.desktop/*',
+        ],
+        'description': 'Glean enterprise AI search - desktop cache + plist preferences',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+
+    # ==========================================================================
+    # Round 11 - Browser AI Universal (LevelDB + extensions)
+    # ==========================================================================
+
+    'ai_browser_indexeddb': {
+        'paths': [
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_claude.ai_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_chatgpt.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_chat.openai.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_gemini.google.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_copilot.microsoft.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_www.perplexity.ai_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_perplexity.ai_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_chat.deepseek.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_chat.mistral.ai_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_character.ai_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_poe.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_kimi.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_doubao.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_you.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_phind.com_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_huggingface.co_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_pi.ai_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_wrtn.ai_0.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/Microsoft Edge/Default/IndexedDB/https_*.indexeddb.leveldb/*',
+            '/Users/*/Library/Application Support/BraveSoftware/Brave-Browser/Default/IndexedDB/https_*.indexeddb.leveldb/*',
+            '/Users/*/Library/Safari/Databases/__IndexedDB/*',
+            '/Users/*/Library/Containers/com.apple.Safari/Data/Library/WebKit/WebsiteData/Default/IndexedDB/v1/https_claude.ai_0/*',
+            '/Users/*/Library/Containers/com.apple.Safari/Data/Library/WebKit/WebsiteData/Default/IndexedDB/v1/https_chatgpt.com_0/*',
+        ],
+        'description': 'Cloud AI conversation cache in browser IndexedDB (LevelDB / WebKit). Recovers conversations + drafts + WAL log entries (deleted recovery)',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'WAL recovery technique (Hassan/Patsakis 2025): deleted conversations recoverable from .log files.',
+    },
+    'ai_browser_localstorage': {
+        'paths': [
+            '/Users/*/Library/Application Support/Google/Chrome/Default/Local Storage/leveldb/*',
+            '/Users/*/Library/Application Support/Microsoft Edge/Default/Local Storage/leveldb/*',
+            '/Users/*/Library/Application Support/BraveSoftware/Brave-Browser/Default/Local Storage/leveldb/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/Session Storage/*',
+        ],
+        'description': 'Browser LocalStorage / SessionStorage - cloud AI service drafts, UI state',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_browser_ai_extension': {
+        'paths': [
+            '/Users/*/Library/Application Support/Google/Chrome/Default/Local Extension Settings/*',
+            '/Users/*/Library/Application Support/Microsoft Edge/Default/Local Extension Settings/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/Extensions/*',
+        ],
+        'description': 'Browser AI extensions - Monica, Merlin, AITOPIA, Sider, Compose AI etc. Conversation history + (in malicious cases) exfil queue',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'Dec 2025 incident: 900K users compromised by malicious AI Chrome extensions.',
+    },
+    'ai_brave_leo': {
+        'paths': [
+            '/Users/*/Library/Application Support/BraveSoftware/Brave-Browser/Default/AIChat',
+            '/Users/*/Library/Application Support/BraveSoftware/Brave-Browser/Default/AIChat-journal',
+        ],
+        'description': 'Brave Leo built-in AI - **UNENCRYPTED** SQLite database with full chat history',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'Documented in Brave GitHub issue 54544 - stores plaintext.',
+    },
+    'ai_arc_max': {
+        'paths': [
+            '/Users/*/Library/Application Support/Arc/User Data/Default/IndexedDB/*',
+            '/Users/*/Library/Application Support/Arc/*',
+        ],
+        'description': 'Arc Max AI features (Browser Company) - IndexedDB conversation cache',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_perplexity_comet': {
+        'paths': [
+            '/Users/*/Library/Application Support/Perplexity/Comet/User Data/Default/IndexedDB/*',
+            '/Users/*/Library/Application Support/Perplexity/Comet/User Data/Default/Local Storage/*',
+            '/Users/*/Library/Application Support/Perplexity/Comet/User Data/Default/History',
+        ],
+        'description': 'Perplexity Comet browser (Chromium fork) - history + AI sidebar conversation cache',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_chrome_gemini_nano': {
+        'paths': [
+            '/Users/*/Library/Application Support/Google/Chrome/OptimizationGuide/*',
+            '/Users/*/Library/Application Support/Google/Chrome/Default/AIDataService/*',
+        ],
+        'description': 'Chrome built-in Gemini Nano - on-device model files + on-device prompt history',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+
+    # ==========================================================================
+    # Round 12 - Frontier
+    # ==========================================================================
+
+    'ai_apple_intelligence': {
+        'paths': [
+            '/Users/*/Library/Caches/com.apple.intelligenceplatform/*',
+            '/Users/*/Library/Application Support/com.apple.intelligenceplatform/*',
+            '/Users/*/Library/Caches/com.apple.WritingTools/*',
+            '/Users/*/Library/Caches/Genmoji/*',
+        ],
+        'description': 'Apple Intelligence on-device traces (macOS 15.1+) - Writing Tools history, Genmoji prompt logs',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_slack_ai_recap': {
+        'paths': [
+            '/Users/*/Library/Application Support/Slack/IndexedDB/*',
+            '/Users/*/Library/Application Support/Slack/Cache/*',
+        ],
+        'description': 'Slack AI Recap and Summaries - LevelDB caches summary text and conversation context',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_outlook_copilot': {
+        'paths': [
+            '/Users/*/Library/Group Containers/UBF8T346G9.Office/Outlook/*Copilot*',
+            '/Users/*/Library/Containers/com.microsoft.Outlook/Data/Library/Application Support/com.microsoft.Outlook/*Copilot*',
+        ],
+        'description': 'Microsoft Copilot in Outlook Mac - cache, instant reply suggestions',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_agent_framework': {
+        'paths': [
+            '/Users/*/.langchain/*',
+            '/Users/*/.llama_index/*',
+            '/Users/*/.crewai/*',
+            '/Users/*/.anthropic/*',
+            '/Users/*/.openai/*',
+            '/Users/*/.n8n/*',
+            '/Users/*/auto_gpt_workspace/*',
+        ],
+        'description': 'AI agent frameworks (LangChain, LlamaIndex, AutoGen, CrewAI, AutoGPT, n8n, etc.) - workspace artifacts, vector stores, credentials',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+    },
+    'ai_api_keys': {
+        'paths': [
+            '/Users/*/.bashrc',
+            '/Users/*/.zshrc',
+            '/Users/*/.profile',
+            '/Users/*/.env',
+            '/Users/*/.config/openai/auth.json',
+            '/Users/*/.config/anthropic/*',
+            '/Users/*/.cursor/config.json',
+        ],
+        'description': 'Credential / API key locations - shell rc files, .env files, AI tool auth configs',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'macos',
+        'note': 'Auto-redacted in embedding (Anthropic / OpenAI / GitHub / AWS / Google patterns).',
+    },
+    'ai_model_files': {
+        'paths': [
+            '/Users/*/Documents/models/*.gguf',
+            '/Users/*/Documents/models/*.safetensors',
+            '/Users/*/Models/*.gguf',
+            '/Users/*/Models/*.safetensors',
+            '/Users/*/.cache/huggingface/hub/models--*/blobs/*',
+        ],
+        'description': 'AI model weight files (GGUF, safetensors) on disk - identifies which models user has run',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
         'os_type': 'macos',
     },
 }

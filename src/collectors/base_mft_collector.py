@@ -156,6 +156,45 @@ def get_all_artifact_filters() -> Dict[str, Dict[str, Any]]:
     return all_filters
 
 
+def _normalize_paths_for_mft(paths: List[str]) -> List[str]:
+    normalized = []
+    seen = set()
+    for path in paths:
+        if not path:
+            continue
+        p = str(path).replace('\\', '/')
+        drive_match = re.match(r'^[A-Za-z]:/(.*)$', p)
+        if drive_match:
+            p = '/' + drive_match.group(1)
+        if p not in seen:
+            seen.add(p)
+            normalized.append(p)
+    return normalized
+
+
+def _get_ai_artifact_filter(artifact_type: str) -> Optional[Dict[str, Any]]:
+    if not artifact_type.startswith('ai_'):
+        return None
+    try:
+        from collectors.artifact_collector import ARTIFACT_TYPES
+    except Exception:
+        return None
+
+    config = ARTIFACT_TYPES.get(artifact_type)
+    if not config:
+        return None
+    paths = _normalize_paths_for_mft(config.get('paths', []))
+    if not paths:
+        return None
+    return {
+        'paths': paths,
+        'include_deleted': True,
+        'description': config.get('description', artifact_type),
+        'forensic_value': config.get('forensic_value', 'medium'),
+        'category': config.get('category', 'ai_activity'),
+    }
+
+
 # =============================================================================
 # MFT Filter Definitions (E01 + Local combined) - Windows
 # =============================================================================
@@ -837,13 +876,15 @@ class BaseMFTCollector(ABC):
             logger.error("Accessor not initialized")
             return
 
+        ai_filter = _get_ai_artifact_filter(artifact_type)
+
         # Check all filter sets: Windows + Linux + macOS
         all_filters = {**ARTIFACT_MFT_FILTERS, **LINUX_ARTIFACT_FILTERS, **MACOS_ARTIFACT_FILTERS}
-        if artifact_type not in all_filters:
+        if artifact_type not in all_filters and not ai_filter:
             logger.debug(f"Skipping unsupported artifact type: {artifact_type}")
             return
 
-        mft_filter = dict(all_filters[artifact_type])  # shallow copy to allow override
+        mft_filter = dict(ai_filter or all_filters[artifact_type])  # shallow copy to allow override
         # UI include_deleted override
         if 'include_deleted' in kwargs:
             mft_filter['include_deleted'] = kwargs['include_deleted']
@@ -854,7 +895,7 @@ class BaseMFTCollector(ABC):
         artifact_dir = self.output_dir / artifact_type
         artifact_dir.mkdir(exist_ok=True)
 
-        # Handle special artifacts ($MFT, $LogFile, $UsnJrnl) -- NTFS only
+        # Handle special artifacts ($MFT, $LogFile, $UsnJrnl) — NTFS only
         if 'special' in mft_filter:
             os_type = mft_filter.get('os_type', 'windows')
             if os_type != 'windows':
@@ -976,7 +1017,7 @@ class BaseMFTCollector(ABC):
                         full_path = f"{parent_path}/{remaining}".replace('//', '/')
 
                         if '*' in full_path:
-                            # Still has wildcards (nested glob) -- list and match
+                            # Still has wildcards (nested glob) — list and match
                             dir_path = '/'.join(full_path.split('/')[:-1])
                             file_pattern = full_path.split('/')[-1]
                             try:
@@ -1009,7 +1050,7 @@ class BaseMFTCollector(ABC):
                     logger.debug(f"[direct_paths] Glob expansion failed for {path_pattern}: {e}")
                     continue
             else:
-                # Exact path -- direct access
+                # Exact path — direct access
                 try:
                     if accessor.path_exists(path_pattern):
                         yield from self._extract_direct_path(
@@ -1096,7 +1137,7 @@ class BaseMFTCollector(ABC):
         full_disk_scan = mft_filter.get('full_disk_scan', False)
         max_file_size = mft_filter.get('max_file_size', 0)  # 0 = unlimited
 
-        # Files to collect -- iterate cache directly, no copy
+        # Files to collect — iterate cache directly, no copy
         files_to_check = self._mft_cache['active_files']
         if include_deleted:
             files_to_check = itertools.chain(files_to_check, self._mft_cache['deleted_files'])
@@ -1277,7 +1318,7 @@ class BaseMFTCollector(ABC):
         if inode is None:
             return
 
-        # Large file diagnostic -- useful when a single MFT entry expands
+        # Large file diagnostic — useful when a single MFT entry expands
         # to a multi-GB resident file via $DATA streams.
         if file_size > 100 * 1024 * 1024:  # 100MB or larger
             logger.debug("Large file detected: %s (%.1fMB)", filename, file_size / 1024 / 1024)
@@ -1400,7 +1441,7 @@ class BaseMFTCollector(ABC):
 
         try:
             if special_method == 'collect_mft_raw':
-                # $MFT (inode 0) -- streaming to avoid loading entire MFT into memory
+                # $MFT (inode 0) — streaming to avoid loading entire MFT into memory
                 logger.info(f"[{source}] Collecting $MFT (inode 0)...")
                 output_file = artifact_dir / '$MFT'
                 md5_hash = hashlib.md5()
@@ -1446,7 +1487,7 @@ class BaseMFTCollector(ABC):
                         output_file.unlink()
 
             elif special_method == 'collect_logfile':
-                # $LogFile (inode 2) -- streaming to avoid loading entire LogFile into memory
+                # $LogFile (inode 2) — streaming to avoid loading entire LogFile into memory
                 logger.info(f"[{source}] Collecting $LogFile (inode 2)...")
                 output_file = artifact_dir / '$LogFile'
                 md5_hash = hashlib.md5()

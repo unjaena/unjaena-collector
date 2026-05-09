@@ -161,6 +161,17 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'os_type': 'linux',
     },
 
+    'linux_auditd_log': {
+        'paths': [
+            '/var/log/audit/audit.log',
+            '/var/log/audit/audit.log.*',
+        ],
+        'description': 'Kernel audit subsystem records',
+        'forensic_value': 'critical',
+        'category': 'security',
+        'os_type': 'linux',
+    },
+
     'linux_faillog': {
         'paths': [
             '/var/log/faillog',
@@ -923,6 +934,18 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'os_type': 'linux',
     },
 
+    'linux_systemd_journal': {
+        'paths': [
+            '/var/log/journal/*/*.journal',
+            '/var/log/journal/*/*.journal~',
+            '/run/log/journal/*/*.journal',
+        ],
+        'description': 'Systemd journal records from persistent or live store',
+        'forensic_value': 'critical',
+        'category': 'system_logs',
+        'os_type': 'linux',
+    },
+
     'linux_ufw_log': {
         'paths': [
             '/var/log/ufw.log',
@@ -1071,6 +1094,21 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
             '/var/lib/docker/containers/*/*-json.log',
         ],
         'description': 'Docker container stdout/stderr logs',
+        'forensic_value': 'high',
+        'category': 'applications',
+        'os_type': 'linux',
+    },
+
+    'linux_container_state': {
+        'paths': [
+            '/var/lib/docker/containers/*/config.v2.json',
+            '/var/lib/docker/containers/*/hostconfig.json',
+            '/var/lib/docker/containers/*/*-json.log',
+            '/var/lib/docker/image/overlay2/repositories.json',
+            '/var/lib/containers/storage/overlay-containers/containers.json',
+            '/home/*/.local/share/containers/storage/overlay-containers/containers.json',
+        ],
+        'description': 'Docker and Podman runtime state',
         'forensic_value': 'high',
         'category': 'applications',
         'os_type': 'linux',
@@ -1284,6 +1322,552 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'description': 'Kernel ring buffer dump (USB insertions, hardware changes)',
         'forensic_value': 'high',
         'category': 'system_logs',
+        'os_type': 'linux',
+    },
+
+    # ==========================================================================
+    # AI Agent Activity (P0 - 2026 emerging forensic surface)
+    # ==========================================================================
+    # See macos_artifacts.py 'ai_*' entries for the full rationale. Linux paths
+    # follow XDG Base Directory ($HOME, $HOME/.config, $HOME/.cache, $HOME/.local).
+
+    'ai_claude_code': {
+        'paths': [
+            '/home/*/.claude/history.jsonl',
+            '/home/*/.claude/settings.json',
+            '/home/*/.claude/settings.local.json',
+            '/home/*/.claude/CLAUDE.md',
+            '/home/*/.claude/stats-cache.json',
+            '/home/*/.claude/mcp-needs-auth-cache.json',
+            '/home/*/.claude/projects/*/*.jsonl',
+            '/home/*/.claude/projects/*/*/*.jsonl',
+            '/home/*/.claude/projects/*/*/subagents/*.jsonl',
+            '/home/*/.claude/sessions/*.json',
+            '/home/*/.claude/plans/*',
+            '/home/*/.claude/file-history/*',
+            '/home/*/.claude/shell-snapshots/*.sh',
+            '/root/.claude/*',
+        ],
+        'description': 'Claude Code agent session logs, tool-call records, project memory, shell snapshots',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+        'note': 'JSONL format. Each line is a message, tool call, or tool result with timestamps and full content.',
+    },
+
+    'ai_claude_desktop': {
+        'paths': [
+            '/home/*/.config/Claude/config.json',
+            '/home/*/.config/Claude/claude_desktop_config.json',
+            '/home/*/.config/Claude/logs/*.log',
+        ],
+        'description': 'Claude Desktop config, MCP server grants, logs',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    'ai_chatgpt_desktop': {
+        'paths': [
+            '/home/*/.config/ChatGPT/*',
+            '/home/*/.cache/ChatGPT/*',
+        ],
+        'description': 'ChatGPT Desktop config and cache',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    'ai_cursor': {
+        'paths': [
+            '/home/*/.config/Cursor/User/settings.json',
+            '/home/*/.config/Cursor/User/globalStorage/state.vscdb',
+            '/home/*/.config/Cursor/User/workspaceStorage/*/state.vscdb',
+            '/home/*/.config/Cursor/User/History/*/*',
+            '/home/*/.config/Cursor/logs/*',
+        ],
+        'description': 'Cursor IDE chat history, code context, workspace state (SQLite); contains full AI conversation per workspace',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    'ai_copilot_vscode': {
+        'paths': [
+            '/home/*/.config/Code/User/globalStorage/github.copilot-chat/*',
+            '/home/*/.config/Code/User/globalStorage/github.copilot/*',
+            '/home/*/.config/Code/User/workspaceStorage/*/github.copilot-chat/*',
+            '/home/*/.config/Code/logs/*/exthost*/output_logging_*/*.log',
+        ],
+        'description': 'GitHub Copilot Chat extension logs, prompts, completions, telemetry',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    'ai_continue_dev': {
+        'paths': [
+            '/home/*/.continue/config.json',
+            '/home/*/.continue/config.yaml',
+            '/home/*/.continue/dev_data/*',
+            '/home/*/.continue/index/*',
+            '/home/*/.continue/sessions/*',
+        ],
+        'description': 'Continue.dev VS Code/JetBrains extension chat sessions, model configs, indexed code context',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    'ai_aider': {
+        'paths': [
+            '/home/*/.aider*',
+            '/home/*/.aider.chat.history.md',
+            '/home/*/.aider.input.history',
+            '/home/*/.aider.tags.cache.v3/*',
+        ],
+        'description': 'Aider AI coding CLI - chat history (markdown), input history, project tags cache',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    'ai_ollama': {
+        'paths': [
+            '/home/*/.ollama/id_ed25519',
+            '/home/*/.ollama/id_ed25519.pub',
+            '/home/*/.ollama/history',
+            '/home/*/.ollama/models/manifests/*',
+            '/home/*/.ollama/logs/server.log',
+            '/usr/share/ollama/.ollama/models/manifests/*',
+            '/usr/share/ollama/.ollama/id_ed25519',
+            '/var/log/ollama.log',
+        ],
+        'description': 'Ollama local LLM runtime - identity key, model manifests, server log (often contains user prompts)',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+        'note': 'On Linux, ollama often runs as systemd service under /usr/share/ollama.',
+    },
+
+    'ai_lmstudio': {
+        'paths': [
+            '/home/*/.cache/lm-studio/*',
+            '/home/*/.lmstudio/*',
+            '/home/*/.config/LMStudio/*',
+        ],
+        'description': 'LM Studio local LLM GUI - conversation history, model preferences',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    'ai_huggingface_cache': {
+        'paths': [
+            '/home/*/.cache/huggingface/hub/models--*/blobs/*',
+            '/home/*/.cache/huggingface/hub/models--*/snapshots/*',
+            '/home/*/.cache/huggingface/token',
+            '/home/*/.cache/huggingface/hub/version.txt',
+            '/root/.cache/huggingface/*',
+        ],
+        'description': 'HuggingFace models cache - downloaded model weights, API token',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    'ai_mcp_servers': {
+        'paths': [
+            '/home/*/.claude/mcp-needs-auth-cache.json',
+            '/home/*/.config/Claude/claude_desktop_config.json',
+            '/home/*/.continue/config.json',
+            '/home/*/.continue/config.yaml',
+            '/home/*/.config/claude/mcp.json',
+            '/home/*/.config/Cursor/User/globalStorage/cursor.mcp/*',
+        ],
+        'description': 'Model Context Protocol server configurations - lists external services AI agents were granted access to',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+        'note': 'Single highest-value AI artifact: shows full attack surface granted to agents in one file.',
+    },
+
+    # ==========================================================================
+    # Round 10 - Desktop AI Expansion (Linux, 2026-05-06)
+    # ==========================================================================
+
+    'ai_cline': {
+        'paths': [
+            '/home/*/.config/Code/User/globalStorage/saoudrizwan.claude-dev/state/*',
+            '/home/*/.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/api_conversation_history.json',
+            '/home/*/.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/ui_messages.json',
+            '/home/*/.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/task_metadata.json',
+            '/home/*/.config/Code/User/globalStorage/saoudrizwan.claude-dev/checkpoints/*',
+        ],
+        'description': 'Cline (Claude Dev) VS Code extension - full task history with raw Claude API exchanges',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_roo_code': {
+        'paths': [
+            '/home/*/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/*',
+            '/home/*/.config/Code/User/globalStorage/kilocode.kilo-code/*',
+        ],
+        'description': 'Roo Code / Kilo Code (Cline forks)',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_windsurf': {
+        'paths': [
+            '/home/*/.codeium/*',
+            '/home/*/.config/Windsurf/User/globalStorage/*',
+            '/home/*/.config/Windsurf/User/settings.json',
+            '/home/*/.config/Windsurf/logs/*',
+        ],
+        'description': 'Windsurf (Codeium IDE) - Cascade agent IDE',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_jan': {
+        'paths': [
+            '/home/*/jan/threads/*',
+            '/home/*/jan/models/*',
+            '/home/*/jan/settings/*',
+            '/home/*/jan/assistants/*',
+            '/home/*/.config/jan/*',
+        ],
+        'description': 'Jan local LLM app - threads, models, settings, custom assistants',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_gpt4all': {
+        'paths': [
+            '/home/*/.local/share/nomic.ai/GPT4All/*',
+            '/home/*/.local/share/nomic.ai/GPT4All/chats/*',
+            '/home/*/.local/share/nomic.ai/GPT4All/localdocs_v3.db',
+        ],
+        'description': 'GPT4All - chat history (SQLite), GGUFs, LocalDocs RAG database',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_anythingllm': {
+        'paths': [
+            '/home/*/.config/anythingllm-desktop/storage/*',
+            '/home/*/.config/anythingllm-desktop/storage/anythingllm.db',
+            '/home/*/.config/anythingllm-desktop/storage/lancedb/*',
+            '/home/*/.config/anythingllm-desktop/storage/documents/*',
+        ],
+        'description': 'AnythingLLM desktop - chat DB, LanceDB vector store, RAG documents',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_sillytavern': {
+        'paths': [
+            '/home/*/SillyTavern/data/default-user/chats/*',
+            '/home/*/SillyTavern/data/default-user/characters/*',
+            '/home/*/SillyTavern/data/default-user/secrets.json',
+        ],
+        'description': 'SillyTavern frontend - JSONL chat logs, character cards, secrets.json',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_open_interpreter': {
+        'paths': [
+            '/home/*/.config/open-interpreter/conversations.json',
+            '/home/*/.config/open-interpreter/*',
+        ],
+        'description': 'Open Interpreter agent - commands the agent ran on the host',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_jetbrains_assistant': {
+        'paths': [
+            '/home/*/.cache/JetBrains/*/AIAssistant/*',
+            '/home/*/.config/JetBrains/*/options/ai-*.xml',
+            '/home/*/.config/JetBrains/*/options/chat-history.xml',
+        ],
+        'description': 'JetBrains AI Assistant - chat history XML',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_codeium': {
+        'paths': [
+            '/home/*/.codeium/*',
+            '/home/*/.config/Code/User/globalStorage/codeium.codeium/*',
+        ],
+        'description': 'Codeium VS Code extension',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_tabnine': {
+        'paths': [
+            '/home/*/.tabnine/*',
+            '/home/*/.config/Code/User/globalStorage/TabNine.tabnine-vscode/*',
+        ],
+        'description': 'Tabnine extension',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_sourcegraph_cody': {
+        'paths': [
+            '/home/*/.config/Code/User/globalStorage/sourcegraph.cody-ai/*',
+            '/home/*/.config/sourcegraph/*',
+        ],
+        'description': 'Sourcegraph Cody',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_amazon_q': {
+        'paths': [
+            '/home/*/.aws/sso/cache/*',
+            '/home/*/.config/Code/User/globalStorage/AmazonWebServices.aws-toolkit-vscode/*',
+            '/home/*/.config/Code/User/globalStorage/amazonwebservices.amazon-q-vscode/*',
+        ],
+        'description': 'Amazon Q Developer / CodeWhisperer',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_pieces': {
+        'paths': [
+            '/home/*/.local/share/Pieces/*',
+            '/home/*/.config/Pieces/*',
+        ],
+        'description': 'Pieces for Developers - PiecesOS SQLite snippet store',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_msty': {
+        'paths': [
+            '/home/*/.config/Msty/*',
+            '/home/*/.config/Msty/chats/*',
+        ],
+        'description': 'Msty local LLM GUI',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_open_webui': {
+        'paths': [
+            '/home/*/.open-webui/*',
+            '/home/*/.open-webui/webui.db',
+            '/var/lib/open-webui/*',
+        ],
+        'description': 'Open WebUI - SQLite chat database',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_text_gen_webui': {
+        'paths': [
+            '/home/*/text-generation-webui/logs/chat/*/*.json',
+            '/home/*/text-generation-webui/characters/*',
+            '/home/*/text-generation-webui/loras/*',
+            '/home/*/text-generation-webui/models/*',
+        ],
+        'description': 'text-generation-webui (Oobabooga)',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_koboldcpp': {
+        'paths': [
+            '/home/*/koboldcpp.cfg',
+            '/home/*/KoboldCPP/*',
+        ],
+        'description': 'KoboldCPP single-binary local inference',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_backyard_ai': {
+        'paths': [
+            '/home/*/.config/faraday/*',
+            '/home/*/.config/Backyard AI/*',
+        ],
+        'description': 'Backyard AI / Faraday - SQLite chats DB',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_pinokio': {
+        'paths': [
+            '/home/*/pinokio/*',
+        ],
+        'description': 'Pinokio meta-installer',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    # ==========================================================================
+    # Round 11 - Browser AI Universal (Linux)
+    # ==========================================================================
+
+    'ai_browser_indexeddb': {
+        'paths': [
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_claude.ai_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_chatgpt.com_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_gemini.google.com_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_copilot.microsoft.com_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_www.perplexity.ai_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_chat.deepseek.com_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_chat.mistral.ai_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_character.ai_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_poe.com_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_kimi.com_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_doubao.com_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_you.com_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_huggingface.co_0.indexeddb.leveldb/*',
+            '/home/*/.config/google-chrome/Default/IndexedDB/https_wrtn.ai_0.indexeddb.leveldb/*',
+            '/home/*/.config/microsoft-edge/Default/IndexedDB/*',
+            '/home/*/.config/BraveSoftware/Brave-Browser/Default/IndexedDB/*',
+            '/home/*/.mozilla/firefox/*.default*/storage/default/https+++claude.ai/idb/*.sqlite',
+            '/home/*/.mozilla/firefox/*.default*/storage/default/https+++chatgpt.com/idb/*.sqlite',
+        ],
+        'description': 'Cloud AI conversation cache in browser IndexedDB',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_browser_localstorage': {
+        'paths': [
+            '/home/*/.config/google-chrome/Default/Local Storage/leveldb/*',
+            '/home/*/.config/microsoft-edge/Default/Local Storage/leveldb/*',
+            '/home/*/.config/BraveSoftware/Brave-Browser/Default/Local Storage/leveldb/*',
+        ],
+        'description': 'Browser LocalStorage (Linux)',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_browser_ai_extension': {
+        'paths': [
+            '/home/*/.config/google-chrome/Default/Local Extension Settings/*',
+            '/home/*/.config/microsoft-edge/Default/Local Extension Settings/*',
+        ],
+        'description': 'Browser AI extensions on Linux',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_brave_leo': {
+        'paths': [
+            '/home/*/.config/BraveSoftware/Brave-Browser/Default/AIChat',
+            '/home/*/.config/BraveSoftware/Brave-Browser/Default/AIChat-journal',
+        ],
+        'description': 'Brave Leo built-in AI - unencrypted SQLite',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    # [2026-05-07 Sweep #10 V2/V3/V4] ai_chrome_gemini_nano Linux glob.
+    # V4 hot-fix (Codex review-gate Q_D): cover all major Linux package
+    # formats. Chrome/Chromium ships via 4 install systems on Linux:
+    #   1. Native APT/RPM    → ~/.config/google-chrome[-channel]/
+    #   2. Native Chromium   → ~/.config/chromium/
+    #   3. Snap Chromium     → ~/snap/chromium/current/.config/chromium/
+    #   4. Flatpak Chrome    → ~/.var/app/com.google.Chrome/config/google-chrome/
+    #   5. Flatpak Chromium  → ~/.var/app/org.chromium.Chromium/config/chromium/
+    # Each isolates user data per-package; missing any of these means
+    # the on-device AI artifact is invisible on that machine.
+    'ai_chrome_gemini_nano': {
+        'paths': [
+            # Native APT/RPM Chrome — 4 channel variants
+            '/home/*/.config/google-chrome/*/OptimizationGuide*',
+            '/home/*/.config/google-chrome/*/optimization_guide_*',
+            '/home/*/.config/google-chrome-beta/*/OptimizationGuide*',
+            '/home/*/.config/google-chrome-beta/*/optimization_guide_*',
+            '/home/*/.config/google-chrome-unstable/*/OptimizationGuide*',
+            '/home/*/.config/google-chrome-unstable/*/optimization_guide_*',
+            '/home/*/.config/google-chrome-canary/*/OptimizationGuide*',
+            '/home/*/.config/google-chrome-canary/*/optimization_guide_*',
+            # Native Chromium
+            '/home/*/.config/chromium/*/OptimizationGuide*',
+            '/home/*/.config/chromium/*/optimization_guide_*',
+            # Snap Chromium (Ubuntu default since 19.10)
+            '/home/*/snap/chromium/current/.config/chromium/*/OptimizationGuide*',
+            '/home/*/snap/chromium/current/.config/chromium/*/optimization_guide_*',
+            # Flatpak Chrome
+            '/home/*/.var/app/com.google.Chrome/config/google-chrome/*/OptimizationGuide*',
+            '/home/*/.var/app/com.google.Chrome/config/google-chrome/*/optimization_guide_*',
+            # Flatpak Chromium
+            '/home/*/.var/app/org.chromium.Chromium/config/chromium/*/OptimizationGuide*',
+            '/home/*/.var/app/org.chromium.Chromium/config/chromium/*/optimization_guide_*',
+        ],
+        'description': 'Chrome 127+ on-device Gemini Nano model store (stable/beta/dev/canary/chromium/snap/flatpak)',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+
+    # ==========================================================================
+    # Round 12 - Frontier (Linux)
+    # ==========================================================================
+
+    'ai_slack_ai_recap': {
+        'paths': [
+            '/home/*/.config/Slack/IndexedDB/*',
+            '/home/*/.config/Slack/Cache/*',
+        ],
+        'description': 'Slack AI Recap and Summaries',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_agent_framework': {
+        'paths': [
+            '/home/*/.langchain/*',
+            '/home/*/.llama_index/*',
+            '/home/*/.crewai/*',
+            '/home/*/.anthropic/*',
+            '/home/*/.openai/*',
+            '/home/*/.n8n/*',
+            '/home/*/auto_gpt_workspace/*',
+        ],
+        'description': 'AI agent frameworks workspace artifacts',
+        'forensic_value': 'high',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_api_keys': {
+        'paths': [
+            '/home/*/.bashrc',
+            '/home/*/.zshrc',
+            '/home/*/.profile',
+            '/home/*/.env',
+            '/home/*/.config/openai/auth.json',
+            '/home/*/.config/anthropic/*',
+            '/home/*/.cursor/config.json',
+        ],
+        'description': 'AI tool credential / API key locations',
+        'forensic_value': 'critical',
+        'category': 'ai_activity',
+        'os_type': 'linux',
+    },
+    'ai_model_files': {
+        'paths': [
+            '/home/*/Documents/models/*.gguf',
+            '/home/*/Documents/models/*.safetensors',
+            '/home/*/models/*.gguf',
+            '/home/*/.cache/huggingface/hub/models--*/blobs/*',
+        ],
+        'description': 'AI model weight files on disk',
+        'forensic_value': 'medium',
+        'category': 'ai_activity',
         'os_type': 'linux',
     },
 }
