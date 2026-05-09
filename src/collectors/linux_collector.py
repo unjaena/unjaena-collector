@@ -28,10 +28,13 @@ import os
 import glob
 import hashlib
 import logging
+import sys
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Generator, Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
+
+from collectors.live_command import iter_live_command_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -650,6 +653,18 @@ LINUX_ARTIFACT_TYPES = {
         'mitre_attack': 'T1070.002',
         'kill_chain_phase': 'defense_evasion',
     },
+    'linux_systemd_journal': {
+        'name': 'Linux systemd Journal',
+        'description': 'Systemd journal records from persistent or live store',
+        'paths': [
+            '/var/log/journal/*/*.journal',
+            '/var/log/journal/*/*.journal~',
+            '/run/log/journal/*/*.journal',
+        ],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1078',
+        'kill_chain_phase': 'initial_access',
+    },
     'linux_ufw_log': {
         'name': 'UFW Firewall Log',
         'description': 'Uncomplicated Firewall log (Ubuntu)',
@@ -820,6 +835,21 @@ LINUX_ARTIFACT_TYPES = {
         'description': 'Docker container stdout/stderr log files',
         'paths': [
             '/var/lib/docker/containers/*/*-json.log',
+        ],
+        'forensic_value': 'high',
+        'mitre_attack': 'T1610',
+        'kill_chain_phase': 'execution',
+    },
+    'linux_container_state': {
+        'name': 'Linux Container State',
+        'description': 'Docker and Podman runtime state',
+        'paths': [
+            '/var/lib/docker/containers/*/config.v2.json',
+            '/var/lib/docker/containers/*/hostconfig.json',
+            '/var/lib/docker/containers/*/*-json.log',
+            '/var/lib/docker/image/overlay2/repositories.json',
+            '/var/lib/containers/storage/overlay-containers/containers.json',
+            '/home/*/.local/share/containers/storage/overlay-containers/containers.json',
         ],
         'forensic_value': 'high',
         'mitre_attack': 'T1610',
@@ -1072,6 +1102,17 @@ LINUX_ARTIFACT_TYPES = {
         'forensic_value': 'critical',
         'mitre_attack': 'T1070.002',
         'kill_chain_phase': 'defense_evasion',
+    },
+    'linux_auditd_log': {
+        'name': 'Linux Audit Log (auditd)',
+        'description': 'Kernel audit subsystem records',
+        'paths': [
+            '/var/log/audit/audit.log',
+            '/var/log/audit/audit.log.*',
+        ],
+        'forensic_value': 'critical',
+        'mitre_attack': 'T1059.004',
+        'kill_chain_phase': 'execution',
     },
     'linux_faillog': {
         'name': 'Login Failure Records',
@@ -1332,6 +1373,314 @@ LINUX_ARTIFACT_TYPES = {
 }
 
 
+_LINUX_LIVE_COMMANDS: Dict[str, List[Dict[str, Any]]] = {
+    'linux_systemd_journal': [
+        {
+            'name': 'journalctl_today_json',
+            'argv': ['journalctl', '--output=json', '--since=today', '--lines=5000', '--no-pager'],
+            'output': 'live/journalctl_today.json',
+            'timeout': 25,
+        },
+    ],
+    'linux_journald': [
+        {
+            'name': 'journalctl_today_text',
+            'argv': ['journalctl', '--since=today', '--lines=5000', '--no-pager'],
+            'output': 'live/journalctl_today.log',
+            'timeout': 25,
+        },
+        {
+            'name': 'journalctl_boots',
+            'argv': ['journalctl', '--list-boots', '--no-pager'],
+            'output': 'live/journalctl_boots.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_syslog': [
+        {
+            'name': 'journalctl_today_text',
+            'argv': ['journalctl', '--since=today', '--lines=5000', '--no-pager'],
+            'output': 'live/journalctl_today.log',
+            'timeout': 25,
+        },
+    ],
+    'linux_auth_log': [
+        {
+            'name': 'journalctl_sshd_today',
+            'argv': ['journalctl', '--since=today', '--lines=2000', '--no-pager', '_SYSTEMD_UNIT=sshd.service'],
+            'output': 'live/journalctl_sshd_today.log',
+            'timeout': 15,
+        },
+        {
+            'name': 'journalctl_sudo_today',
+            'argv': ['journalctl', '--since=today', '--lines=2000', '--no-pager', '_COMM=sudo'],
+            'output': 'live/journalctl_sudo_today.log',
+            'timeout': 15,
+        },
+        {
+            'name': 'last_logins',
+            'argv': ['last', '-F', '-w', '-n', '200'],
+            'output': 'live/last_logins.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_audit_log': [
+        {
+            'name': 'ausearch_today_raw',
+            'argv': ['ausearch', '--start', 'today', '--raw'],
+            'output': 'live/ausearch_today_raw.log',
+            'timeout': 25,
+        },
+        {
+            'name': 'auditctl_status',
+            'argv': ['auditctl', '-s'],
+            'output': 'live/auditctl_status.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_auditd_log': [
+        {
+            'name': 'ausearch_today_raw',
+            'argv': ['ausearch', '--start', 'today', '--raw'],
+            'output': 'live/ausearch_today_raw.log',
+            'timeout': 25,
+        },
+    ],
+    'linux_kern_log': [
+        {
+            'name': 'journalctl_kernel_today',
+            'argv': ['journalctl', '-k', '--since=today', '--lines=5000', '--no-pager'],
+            'output': 'live/journalctl_kernel_today.log',
+            'timeout': 20,
+        },
+        {
+            'name': 'dmesg_ctime',
+            'argv': ['dmesg', '--ctime', '--color=never'],
+            'output': 'live/dmesg_ctime.log',
+            'timeout': 15,
+        },
+    ],
+    'linux_dmesg': [
+        {
+            'name': 'dmesg_ctime',
+            'argv': ['dmesg', '--ctime', '--color=never'],
+            'output': 'live/dmesg_ctime.log',
+            'timeout': 15,
+        },
+    ],
+    'linux_utmp': [
+        {
+            'name': 'who_all',
+            'argv': ['who', '-a'],
+            'output': 'live/who_all.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'w_sessions',
+            'argv': ['w', '-h'],
+            'output': 'live/w_sessions.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_wtmp': [
+        {
+            'name': 'last_logins',
+            'argv': ['last', '-F', '-w', '-n', '500'],
+            'output': 'live/last_logins.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_btmp': [
+        {
+            'name': 'lastb_failed_logins',
+            'argv': ['lastb', '-F', '-w', '-n', '500'],
+            'output': 'live/lastb_failed_logins.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_lastlog': [
+        {
+            'name': 'lastlog_all',
+            'argv': ['lastlog'],
+            'output': 'live/lastlog_all.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_faillog': [
+        {
+            'name': 'faillog_all',
+            'argv': ['faillog', '-a'],
+            'output': 'live/faillog_all.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_network_interfaces': [
+        {
+            'name': 'ip_addr',
+            'argv': ['ip', 'addr', 'show'],
+            'output': 'live/ip_addr.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'ip_route_all',
+            'argv': ['ip', 'route', 'show', 'table', 'all'],
+            'output': 'live/ip_route_all.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'ss_connections',
+            'argv': ['ss', '-tunap'],
+            'output': 'live/ss_connections.txt',
+            'timeout': 15,
+        },
+    ],
+    'linux_resolv': [
+        {
+            'name': 'resolvectl_status',
+            'argv': ['resolvectl', 'status'],
+            'output': 'live/resolvectl_status.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_iptables': [
+        {
+            'name': 'iptables_save',
+            'argv': ['iptables-save'],
+            'output': 'live/iptables_save.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_nftables': [
+        {
+            'name': 'nft_ruleset',
+            'argv': ['nft', 'list', 'ruleset'],
+            'output': 'live/nft_ruleset.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_networkmanager': [
+        {
+            'name': 'nmcli_devices',
+            'argv': ['nmcli', 'device', 'status'],
+            'output': 'live/nmcli_devices.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'nmcli_connections',
+            'argv': ['nmcli', 'connection', 'show'],
+            'output': 'live/nmcli_connections.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_crontab': [
+        {
+            'name': 'crontab_current_user',
+            'argv': ['crontab', '-l'],
+            'output': 'live/crontab_current_user.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_systemd_service': [
+        {
+            'name': 'systemctl_services',
+            'argv': ['systemctl', 'list-units', '--type=service', '--all', '--no-pager', '--plain'],
+            'output': 'live/systemctl_services.txt',
+            'timeout': 20,
+        },
+        {
+            'name': 'systemctl_service_files',
+            'argv': ['systemctl', 'list-unit-files', '--type=service', '--no-pager', '--plain'],
+            'output': 'live/systemctl_service_files.txt',
+            'timeout': 20,
+        },
+    ],
+    'linux_systemd_timers': [
+        {
+            'name': 'systemctl_timers',
+            'argv': ['systemctl', 'list-timers', '--all', '--no-pager', '--plain'],
+            'output': 'live/systemctl_timers.txt',
+            'timeout': 20,
+        },
+        {
+            'name': 'systemctl_timer_files',
+            'argv': ['systemctl', 'list-unit-files', '--type=timer', '--no-pager', '--plain'],
+            'output': 'live/systemctl_timer_files.txt',
+            'timeout': 20,
+        },
+    ],
+    'linux_container_state': [
+        {
+            'name': 'docker_ps_jsonl',
+            'argv': ['docker', 'ps', '-a', '--no-trunc', '--format', '{{json .}}'],
+            'output': 'live/docker_ps.jsonl',
+            'timeout': 20,
+        },
+        {
+            'name': 'docker_images',
+            'argv': ['docker', 'images', '--digests', '--no-trunc'],
+            'output': 'live/docker_images.txt',
+            'timeout': 20,
+        },
+        {
+            'name': 'podman_ps_json',
+            'argv': ['podman', 'ps', '-a', '--no-trunc', '--format=json'],
+            'output': 'live/podman_ps.json',
+            'timeout': 20,
+        },
+    ],
+    'linux_docker': [
+        {
+            'name': 'docker_info',
+            'argv': ['docker', 'info'],
+            'output': 'live/docker_info.txt',
+            'timeout': 20,
+        },
+    ],
+    'linux_podman': [
+        {
+            'name': 'podman_info',
+            'argv': ['podman', 'info'],
+            'output': 'live/podman_info.txt',
+            'timeout': 20,
+        },
+    ],
+    'linux_os_release': [
+        {
+            'name': 'uname_all',
+            'argv': ['uname', '-a'],
+            'output': 'live/uname_all.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'hostnamectl',
+            'argv': ['hostnamectl'],
+            'output': 'live/hostnamectl.txt',
+            'timeout': 10,
+        },
+    ],
+    'linux_sysctl': [
+        {
+            'name': 'sysctl_all',
+            'argv': ['sysctl', '-a'],
+            'output': 'live/sysctl_all.txt',
+            'timeout': 20,
+        },
+    ],
+    'linux_modules': [
+        {
+            'name': 'lsmod',
+            'argv': ['lsmod'],
+            'output': 'live/lsmod.txt',
+            'timeout': 10,
+        },
+    ],
+}
+
+for _artifact_type, _commands in _LINUX_LIVE_COMMANDS.items():
+    if _artifact_type in LINUX_ARTIFACT_TYPES:
+        LINUX_ARTIFACT_TYPES[_artifact_type].setdefault('live_commands', []).extend(_commands)
+
+
 class LinuxCollector:
     """
     Linux Forensic Artifact Collector
@@ -1392,6 +1741,9 @@ class LinuxCollector:
         """Return supported artifact types"""
         return LINUX_ARTIFACT_TYPES
 
+    def _is_live_local_target(self) -> bool:
+        return sys.platform.startswith('linux') and str(self.target_root) == '/'
+
     def collect(
         self,
         artifact_type: str,
@@ -1425,6 +1777,13 @@ class LinuxCollector:
                     yield from self._collect_file(file_path, artifact_type, config)
                 except Exception as e:
                     logger.warning(f"[LinuxCollector] Failed to collect {file_path}: {e}")
+
+        if self._is_live_local_target():
+            yield from iter_live_command_outputs(
+                config.get('live_commands', []),
+                artifact_type=artifact_type,
+                platform_tag='linux',
+            )
 
     def _collect_file(
         self,

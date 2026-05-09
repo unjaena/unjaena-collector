@@ -37,6 +37,7 @@ from typing import Generator, Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 
 from collectors.macos_artifacts import MACOS_ARTIFACT_FILTERS
+from collectors.live_command import iter_live_command_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -540,6 +541,248 @@ MACOS_ARTIFACT_TYPES.update({
     if k not in _EXISTING_MACOS_KEYS
 })
 
+_MACOS_LIVE_COMMANDS: Dict[str, List[Dict[str, Any]]] = {
+    'macos_unified_log': [
+        {
+            'name': 'log_show_last_24h_ndjson',
+            'argv': ['log', 'show', '--style', 'ndjson', '--last', '24h', '--info', '--no-debug', '--no-pager'],
+            'output': 'live/log_show_last_24h.ndjson',
+            'timeout': 60,
+        },
+        {
+            'name': 'log_show_security_last_24h_ndjson',
+            'argv': [
+                'log', 'show', '--style', 'ndjson', '--last', '24h',
+                '--predicate',
+                'messageType == error OR messageType == fault OR eventMessage CONTAINS[c] "denied" OR eventMessage CONTAINS[c] "auth"',
+                '--info', '--no-debug', '--no-pager',
+            ],
+            'output': 'live/log_show_security_last_24h.ndjson',
+            'timeout': 60,
+        },
+    ],
+    'macos_system_log': [
+        {
+            'name': 'log_show_today_syslog',
+            'argv': ['log', 'show', '--style', 'syslog', '--last', '24h', '--info', '--no-debug', '--no-pager'],
+            'output': 'live/log_show_last_24h_syslog.log',
+            'timeout': 60,
+        },
+    ],
+    'macos_audit_logs': [
+        {
+            'name': 'praudit_current',
+            'argv': ['praudit', '/var/audit/current'],
+            'output': 'live/praudit_current.txt',
+            'timeout': 30,
+        },
+    ],
+    'macos_fseventsd': [
+        {
+            'name': 'fs_usage_filesys_sample',
+            'argv': ['fs_usage', '-w', '-f', 'filesys'],
+            'output': 'live/fs_usage_filesys_sample.txt',
+            'timeout': 8,
+        },
+    ],
+    'macos_launch_agent': [
+        {
+            'name': 'launchctl_list',
+            'argv': ['launchctl', 'list'],
+            'output': 'live/launchctl_list.txt',
+            'timeout': 20,
+        },
+    ],
+    'macos_launch_daemon': [
+        {
+            'name': 'launchctl_print_system',
+            'argv': ['launchctl', 'print', 'system'],
+            'output': 'live/launchctl_print_system.txt',
+            'timeout': 30,
+        },
+        {
+            'name': 'launchctl_print_disabled_system',
+            'argv': ['launchctl', 'print-disabled', 'system'],
+            'output': 'live/launchctl_print_disabled_system.txt',
+            'timeout': 20,
+        },
+    ],
+    'macos_launch_agents_system': [
+        {
+            'name': 'launchctl_print_system',
+            'argv': ['launchctl', 'print', 'system'],
+            'output': 'live/launchctl_print_system.txt',
+            'timeout': 30,
+        },
+    ],
+    'macos_launch_agents_user': [
+        {
+            'name': 'launchctl_list',
+            'argv': ['launchctl', 'list'],
+            'output': 'live/launchctl_list.txt',
+            'timeout': 20,
+        },
+    ],
+    'macos_launch_daemons': [
+        {
+            'name': 'launchctl_print_system',
+            'argv': ['launchctl', 'print', 'system'],
+            'output': 'live/launchctl_print_system.txt',
+            'timeout': 30,
+        },
+    ],
+    'macos_login_items': [
+        {
+            'name': 'sfltool_dumpbtm',
+            'argv': ['sfltool', 'dumpbtm'],
+            'output': 'live/sfltool_dumpbtm.txt',
+            'timeout': 20,
+        },
+    ],
+    'macos_cron': [
+        {
+            'name': 'crontab_current_user',
+            'argv': ['crontab', '-l'],
+            'output': 'live/crontab_current_user.txt',
+            'timeout': 10,
+        },
+    ],
+    'macos_network_interfaces': [
+        {
+            'name': 'ifconfig_all',
+            'argv': ['ifconfig', '-a'],
+            'output': 'live/ifconfig_all.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'netstat_all',
+            'argv': ['netstat', '-anv'],
+            'output': 'live/netstat_all.txt',
+            'timeout': 15,
+        },
+        {
+            'name': 'lsof_network',
+            'argv': ['lsof', '-nP', '-i'],
+            'output': 'live/lsof_network.txt',
+            'timeout': 20,
+        },
+    ],
+    'macos_network_preferences': [
+        {
+            'name': 'scutil_dns',
+            'argv': ['scutil', '--dns'],
+            'output': 'live/scutil_dns.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'networksetup_hardware_ports',
+            'argv': ['networksetup', '-listallhardwareports'],
+            'output': 'live/networksetup_hardware_ports.txt',
+            'timeout': 10,
+        },
+    ],
+    'macos_wifi': [
+        {
+            'name': 'networksetup_wifi_en0',
+            'argv': ['networksetup', '-listpreferredwirelessnetworks', 'en0'],
+            'output': 'live/networksetup_wifi_en0.txt',
+            'timeout': 10,
+        },
+    ],
+    'macos_wifi_known_networks': [
+        {
+            'name': 'networksetup_wifi_en0',
+            'argv': ['networksetup', '-listpreferredwirelessnetworks', 'en0'],
+            'output': 'live/networksetup_wifi_en0.txt',
+            'timeout': 10,
+        },
+    ],
+    'macos_user_accounts': [
+        {
+            'name': 'dscl_users',
+            'argv': ['dscl', '.', '-readall', '/Users', 'UniqueID', 'PrimaryGroupID', 'NFSHomeDirectory', 'UserShell'],
+            'output': 'live/dscl_users.txt',
+            'timeout': 20,
+        },
+        {
+            'name': 'who_sessions',
+            'argv': ['who'],
+            'output': 'live/who_sessions.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'last_logins',
+            'argv': ['last', '-20'],
+            'output': 'live/last_logins.txt',
+            'timeout': 10,
+        },
+    ],
+    'macos_system_version': [
+        {
+            'name': 'sw_vers',
+            'argv': ['sw_vers'],
+            'output': 'live/sw_vers.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'system_profiler_hardware_software',
+            'argv': ['system_profiler', 'SPHardwareDataType', 'SPSoftwareDataType', '-json'],
+            'output': 'live/system_profiler_hardware_software.json',
+            'timeout': 60,
+        },
+    ],
+    'macos_gatekeeper': [
+        {
+            'name': 'spctl_status',
+            'argv': ['spctl', '--status'],
+            'output': 'live/spctl_status.txt',
+            'timeout': 10,
+        },
+        {
+            'name': 'csrutil_status',
+            'argv': ['csrutil', 'status'],
+            'output': 'live/csrutil_status.txt',
+            'timeout': 10,
+        },
+    ],
+    'macos_xprotect': [
+        {
+            'name': 'systemextensionsctl_list',
+            'argv': ['systemextensionsctl', 'list'],
+            'output': 'live/systemextensionsctl_list.txt',
+            'timeout': 20,
+        },
+    ],
+    'macos_xprotect_remediator_db': [
+        {
+            'name': 'systemextensionsctl_list',
+            'argv': ['systemextensionsctl', 'list'],
+            'output': 'live/systemextensionsctl_list.txt',
+            'timeout': 20,
+        },
+    ],
+    'macos_tcc_db': [
+        {
+            'name': 'profiles_list',
+            'argv': ['profiles', 'list'],
+            'output': 'live/profiles_list.txt',
+            'timeout': 20,
+        },
+    ],
+    'macos_process_memory': [
+        {
+            'name': 'ps_auxww',
+            'argv': ['ps', 'auxww'],
+            'output': 'live/ps_auxww.txt',
+            'timeout': 15,
+        },
+    ],
+}
+
+for _artifact_type, _commands in _MACOS_LIVE_COMMANDS.items():
+    if _artifact_type in MACOS_ARTIFACT_TYPES:
+        MACOS_ARTIFACT_TYPES[_artifact_type].setdefault('live_commands', []).extend(_commands)
+
 
 class macOSCollector:
     """
@@ -601,6 +844,9 @@ class macOSCollector:
         """Return supported artifact types"""
         return MACOS_ARTIFACT_TYPES
 
+    def _is_live_local_target(self) -> bool:
+        return platform.system() == 'Darwin' and str(self.target_root) == '/'
+
     def collect(
         self,
         artifact_type: str,
@@ -634,6 +880,13 @@ class macOSCollector:
                     yield from self._collect_file(file_path, artifact_type, config)
                 except Exception as e:
                     logger.warning(f"[macOSCollector] Failed to collect {file_path}: {e}")
+
+        if self._is_live_local_target():
+            yield from iter_live_command_outputs(
+                config.get('live_commands', []),
+                artifact_type=artifact_type,
+                platform_tag='macos',
+            )
 
     def _collect_file(
         self,

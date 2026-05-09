@@ -2,34 +2,6 @@
 
 All notable changes to the Intelligence Collector are documented in this file. The project follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.5.2] - 2026-05-04
-
-### Fixed
-- **macOS collection silently failed every file (CRITICAL).** In `_collect_file`, `tz=timezone.utc` was passed as a keyword argument to `getattr()` instead of `datetime.fromtimestamp()`. Because `getattr()` does not accept keyword arguments, every file collected on macOS raised `TypeError: getattr() takes no keyword arguments` and was logged as an error -- the collector returned zero files for every artifact type. Users running v2.5.1 on macOS were affected for every artifact type (Unified Log, Launch Agents/Daemons, TCC.db, Keychain, Safari, iMessage, Notes, etc.). The fix re-orders parens so `getattr(stat_info, 'st_birthtime', stat_info.st_ctime)` is the inner expression and `tz=timezone.utc` applies to `fromtimestamp`.
-
-### Added
-- **CI live-collection workflow.** New `.github/workflows/live-collection-test.yml` runs the actual collector against the GitHub Actions runner's own filesystem on macos-14 (Apple Silicon) and ubuntu-latest. Validates path resolution, file copy, SHA-256 hashing, manifest schema, and permission-denied graceful handling end-to-end. Uploads `manifest.json` plus sample collected files as workflow artifacts (14-day retention) so each run produces an inspectable baseline. The workflow caught the v2.5.1 macOS bug above on its first real run.
-
-### Verified
-- macOS arm64 (14.8.5): 517 files / 626 MB collected across 13 of 16 system-level artifact types (3 user-data types correctly empty on a fresh runner). Real `/var/db/diagnostics/*.tracev3`, `/Library/LaunchAgents/`, `/Library/LaunchDaemons/`, `/var/log/system.log`, `/var/log/install.log`, TCC.db, Keychain, chat.db, NoteStore.sqlite all collected with valid SHA-256.
-- Linux x86_64 (Ubuntu 24.04): 611 files / 835 KB collected across 11 of 16 system-level artifact types. `/etc/passwd`, `/etc/group`, `/etc/hosts`, `/var/log/syslog`, `/var/log/auth.log`, `/var/log/kern.log`, dmesg, all systemd unit files, and crontabs all collected. `/etc/shadow` correctly returned permission-denied (root-only).
-
-## [2.5.1] - 2026-05-03
-
-### Fixed
-- **FFS path-spec gap-fix.** Five mobile artifact types had `ArtifactType` registrations and server-side parsers but no corresponding path-spec, so the collector returned zero files for them when iterating a Cellebrite UFED FFS bundle. Discovered while ingesting Hickman public-corpus iOS 17 (35 GB) and Android 14 (32 GB) bundles. Added path-specs:
-  - `mobile_ios_findmy` -- `private/var/mobile/Library/com.apple.icloud.searchpartyd/` (FindMy / searchpartyd archives, plists, sqlite, records -- 187 entries on the public iOS 17 image)
-  - `mobile_ios_tcc` -- `private/var/mobile/Library/TCC/TCC.db` (Transparency / Consent / Control permission grants)
-  - `mobile_android_wifi` -- `data/misc/wifi/WifiConfigStore.xml` (saved networks, security mode, BSSID history)
-  - `mobile_android_media` -- `data/media/0/` directory tree, suffix-filtered to common photo / video / document extensions
-  - `mobile_android_facebook_messenger` -- rewritten as a directory spec to handle filename schema-drift (see "Added" below)
-
-### Added
-- **Filename-glob support in `AndroidArtifactSpec`.** New `filename_globs` field lets a single directory-mode spec match files with multiple naming conventions across app versions, applied after the existing `child_suffix_filter`. Used to pull both legacy and modern Facebook Messenger DBs (`threads_db2*` plus `msys_database_*`) plus their SQLite `-wal` / `-shm` sidecars from one spec without forking into two artifact types.
-
-### Verified
-- Adapter test suite: 17/17 pass against real FFS bundles (35 GB iOS 17 + 32 GB Android 14 public corpus). Match counts: FindMy 187, TCC 1, Android WiFi 1, Android media (DCIM/Pictures/Download), Facebook Messenger 4 files including modern `msys_database_*` and SQLite sidecars.
-
 ## [2.5.0] - 2026-04-29
 
 ### Added
@@ -61,7 +33,7 @@ All notable changes to the Intelligence Collector are documented in this file. T
 
 ### Added
 - **Real-time bidirectional WebSocket sync** between collector and server. The collector now subscribes to a control channel for the duration of a session.
-- 15-second heartbeat with 3->60 s exponential backoff, 30-second dead-peer detection.
+- 15-second heartbeat with 3→60 s exponential backoff, 30-second dead-peer detection.
 - Server-side abort / take-over signaling surfaced in the GUI ("server canceled this collection" / "another session has taken over").
 - `intent.shutdown` graceful-stop semantics so the operator-initiated cancel is distinguishable from connectivity loss.
 
@@ -72,13 +44,13 @@ All notable changes to the Intelligence Collector are documented in this file. T
 ## [2.4.6] - 2026-04-27
 
 ### Fixed
-- **Android Tier 3 "Screen Scraping" checkbox removed** from the GUI. The Tier 3 collector requires `ForensicAgent.apk`, which is not shipped with the public release bundle -- selecting the checkbox previously produced "Failed to install Agent APK" with zero records. The collector code path is preserved for future reactivation once the Agent APK ships.
+- **Android Tier 3 "Screen Scraping" checkbox removed** from the GUI. The Tier 3 collector requires `ForensicAgent.apk`, which is not shipped with the public release bundle — selecting the checkbox previously produced "Failed to install Agent APK" with zero records. The collector code path is preserved for future reactivation once the Agent APK ships.
 - **Consent dialog word-wrap**: long PIPA / GDPR / cross-border-transfer consent statements are no longer truncated to a single line. The checkbox panel is scrollable, the dialog is taller, and clicking a consent label toggles its checkbox.
 
 ## [2.4.5] - 2026-04-27
 
 ### Added
-- **Samsung Pay / Wallet (Android)** collection support -- three new artifact_types: `mobile_android_samsung_pay`, `mobile_android_samsung_pay_cards`, `mobile_android_samsung_pay_transit` (transactions, enrolled cards, transit-card tap events).
+- **Samsung Pay / Wallet (Android)** collection support — three new artifact_types: `mobile_android_samsung_pay`, `mobile_android_samsung_pay_cards`, `mobile_android_samsung_pay_transit` (transactions, enrolled cards, transit-card tap events).
 - **iOS Toss app** added under the Korean Apps section.
 
 ### Fixed
@@ -100,7 +72,7 @@ All notable changes to the Intelligence Collector are documented in this file. T
 ## [2.4.3] - 2026-04-26
 
 ### Fixed
-- **Hotfix -- consent signing key wire-through**: the `/authenticate` server response carries a `consent_signing_key` field but the GUI controller did not store it on `self` nor pass it through to `show_consent_dialog()`. The dialog fell back to looking for the `CONSENT_SIGNING_KEY` environment variable on the operator's PC (typically unset) and refused to record consent with the message "A secure signing key is required to record consent. The server did not provide one." The dialog is fail-closed by design -- random fallback keys produce signatures the server cannot verify and were therefore worse than a clear failure. The bug was that the wire-through from `/authenticate` to the dialog was missing.
+- **Hotfix — consent signing key wire-through**: the `/authenticate` server response carries a `consent_signing_key` field but the GUI controller did not store it on `self` nor pass it through to `show_consent_dialog()`. The dialog fell back to looking for the `CONSENT_SIGNING_KEY` environment variable on the operator's PC (typically unset) and refused to record consent with the message "A secure signing key is required to record consent. The server did not provide one." The dialog is fail-closed by design — random fallback keys produce signatures the server cannot verify and were therefore worse than a clear failure. The bug was that the wire-through from `/authenticate` to the dialog was missing.
 
 This release contains only that wire-through fix; no other changes since v2.4.2.
 
