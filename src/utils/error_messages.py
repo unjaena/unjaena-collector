@@ -90,6 +90,14 @@ ERROR_PATTERNS: List[Dict] = [
 
     # Authentication related
     {
+        "pattern": r"(CSRF token missing|CSRF_FAILED|csrf)",
+        "title": "Collector Authentication Blocked",
+        "message": "The server rejected the collector authentication request.",
+        "solution": "Please update/restart the server and try again. If the issue persists, contact the administrator.",
+        "error_code": "AUTH_CSRF_BLOCKED",
+        "is_recoverable": True,
+    },
+    {
         "pattern": r"(401|Unauthorized|unauthorized)",
         "title": "Authentication Failed",
         "message": "Server authentication failed.",
@@ -104,6 +112,14 @@ ERROR_PATTERNS: List[Dict] = [
         "solution": "1. Contact administrator about permission settings.\n2. Verify you are logged in with the correct account.",
         "error_code": "AUTH_PERM",
         "is_recoverable": False,
+    },
+    {
+        "pattern": r"(Access denied\. Please contact the administrator|Access denied by server)",
+        "title": "Access Denied",
+        "message": "The server denied this authentication request.",
+        "solution": "Please generate a new session token and verify the case/account permissions.",
+        "error_code": "AUTH_ACCESS_DENIED",
+        "is_recoverable": True,
     },
     {
         "pattern": r"(expired|Expired)",

@@ -221,9 +221,13 @@ class TokenValidator:
 
                 # User-friendly messages by status code
                 if status_code == 401:
-                    user_message = "Authentication failed. Token has expired or is invalid."
+                    user_message = "401 Unauthorized: Authentication failed. Token has expired or is invalid."
                 elif status_code == 403:
-                    user_message = "Access denied. Please contact the administrator."
+                    user_message = (
+                        f"403 Forbidden: {error_detail}"
+                        if error_detail
+                        else "403 Forbidden: Access denied. Please contact the administrator."
+                    )
                 elif status_code == 404:
                     user_message = "Requested resource not found."
                 elif status_code == 409:

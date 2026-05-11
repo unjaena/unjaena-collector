@@ -613,11 +613,13 @@ ARTIFACT_TYPES = {
         'description': 'LINE PC messages, user data, and process memory',
         'paths': [
             r'%LOCALAPPDATA%\LINE\Data\**\*.edb',
+            r'%LOCALAPPDATA%\LINE\Data\**\*.edb-wal',
+            r'%LOCALAPPDATA%\LINE\Data\**\*.edb-shm',
         ],
         'mft_config': {
             'user_path': 'AppData/Local/LINE/Data',
             'pattern': '*',
-            'extensions': ['.edb'],
+            'extensions': ['.edb', '.edb-wal', '.edb-shm'],
         },
         'category': 'windows',
         'subcategory': 'pc_messenger',
@@ -687,9 +689,15 @@ ARTIFACT_TYPES = {
             r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\**\*.db-shm',
             r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\*.dat',
             r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\IndexedDB\**\*',
+            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalCache\EBWebView\Default\IndexedDB\**\*',
+            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalCache\EBWebView\Default\Local Storage\leveldb\**\*',
+            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalCache\EBWebView\Default\Session Storage\**\*',
         ],
         'mft_config': {
-            'user_path': 'AppData/Local/Packages/5319275A.WhatsAppDesktop_cv1g1gvanyjgm/LocalState',
+            'user_path': [
+                'AppData/Local/Packages/5319275A.WhatsAppDesktop_cv1g1gvanyjgm/LocalState',
+                'AppData/Local/Packages/5319275A.WhatsAppDesktop_cv1g1gvanyjgm/LocalCache/EBWebView/Default',
+            ],
             'pattern': '*',
             'extensions': ['.db', '.db-wal', '.db-shm', '.dat', '.ldb', '.log', '.sst'],
         },
@@ -724,6 +732,80 @@ ARTIFACT_TYPES = {
         'collector': 'collect_user_glob',
         'artifact_key': 'discord_pc',
         'forensic_value': 'user data, server/channel activity, draft messages',
+    },
+    'windows_facebook_web': {
+        'name': 'Facebook/Messenger Web Artifacts',
+        'description': 'Facebook and Messenger browser/PWA local storage, IndexedDB, and cookies',
+        'paths': [
+            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\IndexedDB\https_www.messenger.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\IndexedDB\https_web.facebook.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\Local Storage\leveldb\*',
+            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\Network\Cookies',
+            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\IndexedDB\https_www.messenger.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\IndexedDB\https_web.facebook.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Local Storage\leveldb\*',
+            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Network\Cookies',
+            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\IndexedDB\https_www.messenger.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\Local Storage\leveldb\*',
+            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\Network\Cookies',
+            r'%APPDATA%\Opera Software\Opera Stable\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb\*',
+            r'%APPDATA%\Opera Software\Opera Stable\IndexedDB\https_www.messenger.com_0.indexeddb.leveldb\*',
+            r'%APPDATA%\Opera Software\Opera Stable\Local Storage\leveldb\*',
+            r'%APPDATA%\Opera Software\Opera Stable\Network\Cookies',
+        ],
+        'mft_config': {
+            'user_paths': [
+                'AppData/Local/Google/Chrome/User Data',
+                'AppData/Local/Microsoft/Edge/User Data',
+                'AppData/Local/BraveSoftware/Brave-Browser/User Data',
+                'AppData/Roaming/Opera Software/Opera Stable',
+            ],
+            'recursive': True,
+            'extensions': ['.ldb', '.log', '.sst', '.json', '.sqlite', '.db'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_apps',
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'artifact_key': 'facebook_web_pc',
+        'forensic_value': 'browser/PWA session indicators, message cache, profile and timeline traces',
+    },
+    'windows_instagram_web': {
+        'name': 'Instagram Web Artifacts',
+        'description': 'Instagram browser/PWA local storage, IndexedDB, and cookies',
+        'paths': [
+            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\Local Storage\leveldb\*',
+            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\Network\Cookies',
+            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Local Storage\leveldb\*',
+            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Network\Cookies',
+            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb\*',
+            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\Local Storage\leveldb\*',
+            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\Network\Cookies',
+            r'%APPDATA%\Opera Software\Opera Stable\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb\*',
+            r'%APPDATA%\Opera Software\Opera Stable\Local Storage\leveldb\*',
+            r'%APPDATA%\Opera Software\Opera Stable\Network\Cookies',
+        ],
+        'mft_config': {
+            'user_paths': [
+                'AppData/Local/Google/Chrome/User Data',
+                'AppData/Local/Microsoft/Edge/User Data',
+                'AppData/Local/BraveSoftware/Brave-Browser/User Data',
+                'AppData/Roaming/Opera Software/Opera Stable',
+            ],
+            'recursive': True,
+            'extensions': ['.ldb', '.log', '.sst', '.json', '.sqlite', '.db'],
+        },
+        'category': 'windows',
+        'subcategory': 'pc_apps',
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'artifact_key': 'instagram_web_pc',
+        'forensic_value': 'browser/PWA session indicators, direct message cache, profile and media traces',
     },
     'windows_teamviewer': {
         'name': 'TeamViewer',
@@ -4080,7 +4162,7 @@ _AI_CROSS_PLATFORM_REGISTRATIONS = {
     },
     'ai_git_ai_attribution': {
         'name': 'Git AI-Authored Commits',
-        'description': 'AI coauthor trailer / AI authorship attribution in git history',
+        'description': 'Co-Authored-By AI coding assistant trailer / AI authorship attribution in git history',
         'paths': [
             '*/.git/COMMIT_EDITMSG',
             '*/.git/logs/HEAD',
@@ -4820,7 +4902,15 @@ class LocalMFTCollector(_LocalMFTBase):
                                         'collection_method': 'process_memory_dump',
                                     }
                                 else:
-                                    logger.warning(f"[MFT+Memory] Dump FAILED for {process_name}: {dump_result.get('error')}")
+                                    logger.warning(
+                                        f"[MFT+Memory] Dump FAILED for {process_name}: "
+                                        f"{dump_result.get('error')}"
+                                    )
+                                    if dump_result.get('requires_admin'):
+                                        logger.warning(
+                                            "[MFT+Memory] Re-run the collector as Administrator "
+                                            "to collect messenger process memory."
+                                        )
                             except ImportError:
                                 logger.warning("[MFT+Memory] ProcessMemoryDumper not available (ImportError)")
                             except Exception as e:
@@ -5068,7 +5158,15 @@ class LocalMFTCollector(_LocalMFTBase):
                         }
                         collected_count += 1
                     else:
-                        logger.warning(f"[DirFallback+Memory] Dump FAILED for {process_name}: {dump_result.get('error')}")
+                        logger.warning(
+                            f"[DirFallback+Memory] Dump FAILED for {process_name}: "
+                            f"{dump_result.get('error')}"
+                        )
+                        if dump_result.get('requires_admin'):
+                            logger.warning(
+                                "[DirFallback+Memory] Re-run the collector as Administrator "
+                                "to collect messenger process memory."
+                            )
                 except ImportError:
                     logger.warning("[DirFallback+Memory] ProcessMemoryDumper not available (ImportError)")
                 except Exception as e:
@@ -7426,6 +7524,11 @@ class ArtifactCollector:
                     }
                 else:
                     logger.debug(f"[MEMORY] Dump failed: {dump_result.get('error')}")
+                    if dump_result.get('requires_admin'):
+                        logger.warning(
+                            "[MEMORY] Re-run the collector as Administrator to collect "
+                            "messenger process memory."
+                        )
             except ImportError:
                 logger.debug("[MEMORY] ProcessMemoryDumper not available")
             except Exception as e:

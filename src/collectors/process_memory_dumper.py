@@ -62,6 +62,28 @@ class ProcessMemoryDumper:
     def __init__(self):
         self.kernel32 = ctypes.windll.kernel32
         self.dbghelp = ctypes.windll.dbghelp
+        self.shell32 = ctypes.windll.shell32
+
+    @staticmethod
+    def _is_access_denied(error_code: int) -> bool:
+        """Return True for Win32/HRESULT access-denied values."""
+        return error_code == 5 or (error_code & 0xFFFFFFFF) == 0x80070005
+
+    def is_elevated(self) -> bool:
+        """Return whether the current process is running with admin rights."""
+        try:
+            return bool(self.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
+
+    def _format_windows_error(self, operation: str, error_code: int) -> str:
+        message = f"{operation} failed with error code: {error_code}"
+        if self._is_access_denied(error_code):
+            message += (
+                " (access denied; run the collector as Administrator so "
+                "MiniDumpWriteDump can read messenger process memory)"
+            )
+        return message
 
     def find_process_by_name(self, process_name: str) -> List[Tuple[int, str]]:
         """
@@ -134,7 +156,9 @@ class ProcessMemoryDumper:
             'pid': None,
             'path': None,
             'size': 0,
-            'error': None
+            'error': None,
+            'requires_admin': False,
+            'elevated': self.is_elevated(),
         }
 
         if dump_type is None:
@@ -161,7 +185,8 @@ class ProcessMemoryDumper:
 
         if not process_handle:
             error_code = self.kernel32.GetLastError()
-            result['error'] = f"OpenProcess failed with error code: {error_code}"
+            result['requires_admin'] = self._is_access_denied(error_code)
+            result['error'] = self._format_windows_error("OpenProcess", error_code)
             logger.error(result['error'])
             return result
 
@@ -182,7 +207,7 @@ class ProcessMemoryDumper:
 
             if file_handle == -1:
                 error_code = self.kernel32.GetLastError()
-                result['error'] = f"CreateFile failed with error code: {error_code}"
+                result['error'] = self._format_windows_error("CreateFile", error_code)
                 logger.error(result['error'])
                 return result
 
@@ -205,7 +230,8 @@ class ProcessMemoryDumper:
                     logger.info(f"Memory dump created: {output_path} ({result['size']:,} bytes)")
                 else:
                     error_code = self.kernel32.GetLastError()
-                    result['error'] = f"MiniDumpWriteDump failed with error code: {error_code}"
+                    result['requires_admin'] = self._is_access_denied(error_code)
+                    result['error'] = self._format_windows_error("MiniDumpWriteDump", error_code)
                     logger.error(result['error'])
 
             finally:
