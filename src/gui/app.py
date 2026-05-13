@@ -509,6 +509,31 @@ SERVER_TO_COLLECTOR_MAPPING = {
 }
 
 
+PRIVACY_INCIDENT_PRESET = {
+    # Windows scope and exfiltration evidence
+    'eventlog', 'registry', 'amcache', 'prefetch', 'userassist',
+    'browser', 'recent', 'jumplist', 'scheduled_task', 'usb',
+    'srum', 'mft', 'usn_journal', 'email', 'document', 'recycle_bin',
+    # PC messenger / remote access / cloud apps
+    'windows_kakaotalk', 'windows_telegram', 'windows_whatsapp',
+    'windows_wechat', 'windows_line', 'windows_discord',
+    'windows_teamviewer', 'windows_anydesk', 'windows_google_drive',
+    'windows_thunderbird',
+    # Mobile identity, communication, browser, download, location context
+    'mobile_android_sms', 'mobile_android_call', 'mobile_android_contacts',
+    'mobile_android_downloads', 'mobile_android_chrome', 'mobile_android_gmail',
+    'mobile_android_wifi', 'mobile_android_google_maps',
+    'mobile_ios_sms', 'mobile_ios_call', 'mobile_ios_contacts',
+    'mobile_ios_safari', 'mobile_ios_chrome', 'mobile_ios_gmail',
+    'mobile_ios_mail_envelope', 'mobile_ios_wifi', 'mobile_ios_maps',
+    # Linux/macOS equivalents
+    'linux_auth_log', 'linux_journald', 'linux_audit_log', 'linux_recent_files',
+    'linux_trash', 'linux_firefox', 'linux_chrome', 'linux_thunderbird',
+    'linux_networkmanager', 'macos_unified_log', 'macos_fseventsd',
+    'macos_knowledgec', 'macos_tcc_db', 'macos_keychain',
+}
+
+
 class CollectorWindow(QMainWindow):
     """Main application window with unified device management"""
 
@@ -735,6 +760,22 @@ class CollectorWindow(QMainWindow):
         self.include_deleted_cb.setToolTip("Recover and collect deleted files from MFT (slower but more thorough)")
         select_all_layout.addWidget(self.include_deleted_cb)
         artifacts_outer_layout.addLayout(select_all_layout)
+
+        preset_layout = QHBoxLayout()
+        self.privacy_preset_btn = QPushButton("Privacy Incident Preset")
+        self.privacy_preset_btn.setEnabled(False)
+        self.privacy_preset_btn.setFixedHeight(28)
+        self.privacy_preset_btn.setToolTip(
+            "Select artifacts useful for personal-data breach triage: identity, "
+            "communications, browser/downloads, USB/cloud transfer, and timeline evidence."
+        )
+        self.privacy_preset_btn.clicked.connect(self._apply_privacy_incident_preset)
+        preset_layout.addWidget(self.privacy_preset_btn)
+        preset_hint = QLabel("Use this for CPO / 72-hour breach triage instead of collecting everything.")
+        preset_hint.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
+        preset_hint.setWordWrap(True)
+        preset_layout.addWidget(preset_hint, 1)
+        artifacts_outer_layout.addLayout(preset_layout)
 
         layout.addWidget(artifacts_group)
 
@@ -1744,6 +1785,31 @@ class CollectorWindow(QMainWindow):
 
             cb.setChecked(checked)
 
+    def _apply_privacy_incident_preset(self):
+        """Select a focused set of artifacts for personal-data breach triage."""
+        selected_count = 0
+        skipped_count = 0
+
+        for artifact_type, cb in self.artifact_checks.items():
+            if not cb.isEnabled():
+                continue
+            should_select = artifact_type in PRIVACY_INCIDENT_PRESET
+            cb.setChecked(should_select)
+            if should_select:
+                selected_count += 1
+
+        for artifact_type in PRIVACY_INCIDENT_PRESET:
+            cb = self.artifact_checks.get(artifact_type)
+            if not cb or not cb.isEnabled():
+                skipped_count += 1
+
+        self.include_deleted_cb.setChecked(True)
+        self._update_collect_button_state()
+        self._log(
+            f"Privacy incident preset applied: {selected_count} artifacts selected"
+            + (f", {skipped_count} unavailable/not allowed" if skipped_count else "")
+        )
+
     def _validate_token(self):
         """Validate the session token"""
         token = self.token_input.text().strip()
@@ -1860,6 +1926,8 @@ class CollectorWindow(QMainWindow):
                     cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
 
             self._log(f"[DEBUG] Enabled and checked {enabled_count}/{len(self.artifact_checks)} checkboxes")
+            if hasattr(self, 'privacy_preset_btn'):
+                self.privacy_preset_btn.setEnabled(enabled_count > 0)
 
             # Update collect button state including device selection status
             self._update_collect_button_state()
@@ -1876,6 +1944,8 @@ class CollectorWindow(QMainWindow):
                 f"⚠️ {friendly_error.title}",
                 f"{friendly_error.message}\n\nSolution:\n{friendly_error.solution}"
             )
+            if hasattr(self, 'privacy_preset_btn'):
+                self.privacy_preset_btn.setEnabled(False)
 
         self.validate_btn.setEnabled(True)
 

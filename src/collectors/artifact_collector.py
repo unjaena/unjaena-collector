@@ -4162,7 +4162,7 @@ _AI_CROSS_PLATFORM_REGISTRATIONS = {
     },
     'ai_git_ai_attribution': {
         'name': 'Git AI-Authored Commits',
-        'description': 'Co-Authored-By AI coding assistant trailer / AI authorship attribution in git history',
+        'description': 'AI coding assistant attribution in git history',
         'paths': [
             '*/.git/COMMIT_EDITMSG',
             '*/.git/logs/HEAD',
