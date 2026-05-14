@@ -2,6 +2,48 @@
 
 All notable changes to the Intelligence Collector are documented in this file. The project follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.2] - 2026-05-14
+
+### Added
+- **Privacy Incident Preset** in the GUI. The preset selects a focused set of
+  endpoint, browser, messenger/social, cloud/app, and AI/coding-assistant
+  artifacts for privacy incident triage and 72-hour notification workflows.
+
+### Changed
+- Reworded public AI attribution artifact descriptions to avoid assistant
+  metadata while preserving user-facing meaning.
+
+### Verified
+- Release workflow published Windows x64, Linux x64, macOS arm64, macOS x86_64,
+  and SHA256 checksum assets.
+
+## [2.6.1] - 2026-05-11
+
+### Added
+- PC social and messenger artifact coverage, including Discord local storage,
+  browser-backed Facebook/Messenger data, and browser-backed Instagram data.
+- Messenger-aware process memory collection path for authorized live Windows
+  collections when the selected artifact type requires it.
+
+### Changed
+- Improved administrator elevation guidance for collection paths that require
+  elevated privileges.
+
+## [2.6.0] - 2026-05-09
+
+### Added
+- Expanded modern desktop and mobile artifact registration across Windows,
+  macOS, Linux, Android, iOS, offline mobile filesystem bundles, and AI-related
+  application traces.
+- Added more Linux and macOS artifact categories for cloud, browser, developer,
+  container, and local AI runtime usage.
+- Added additional mobile FFS path specifications for modern application data
+  and sidecar-aware SQLite collection.
+
+### Changed
+- Refined consent dialog text and GUI artifact grouping for public release
+  readiness.
+
 ## [2.5.0] - 2026-04-29
 
 ### Added
@@ -18,7 +60,7 @@ All notable changes to the Intelligence Collector are documented in this file. T
 - **UFED FFS zip bundle ingest** (Cellebrite CLBX iOS / Android). Forensic agencies that already use Cellebrite UFED for mobile acquisition can now hand a CLBX zip bundle directly to the collector GUI instead of plugging the live phone in over USB.
 - A new **"+ Add Image / Bundle"** entry in the device list accepts `EXTRACTION_FFS.zip` alongside the existing E01 / RAW / VHD / VMDK paths.
 - Bundle detection (publisher / format / signals), surfaced as a first-class device on the iOS or Android tab, and dispatched to every per-artifact-type checkbox the operator already knows how to use.
-- SHA-256 + CRC-32 + source-zip path recorded per file for chain of custody. `-wal` / `-shm` sidecars travel with their primary SQLite file so WAL state merges transparently on the parser side.
+- SHA-256 + CRC-32 + source-zip path recorded per file for chain of custody. `-wal` / `-shm` sidecars travel with their primary SQLite file so WAL state is preserved for later analysis.
 - Detection of a 30-50 GB zip's central directory + msgpack metadata runs on a worker `QThread` behind a modal progress dialog so the GUI window does not freeze during the ~10 s parse.
 
 ### Verified

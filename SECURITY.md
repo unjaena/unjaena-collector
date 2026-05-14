@@ -50,9 +50,9 @@ If you discover a security vulnerability in this project, please report it respo
 
 | Version | Supported          |
 |---------|--------------------|
-| 2.5.x   | Yes (active)       |
-| 2.4.x   | Yes (security fixes only) |
-| < 2.4   | No                 |
+| 2.6.x   | Yes (active)       |
+| 2.5.x   | Yes (security fixes only) |
+| < 2.5   | No                 |
 
 ## Scope
 

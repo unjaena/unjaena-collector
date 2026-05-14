@@ -1,152 +1,138 @@
 # USB Dependencies for Mobile Device Collection
 
-This folder contains USB-related dependencies required for Android and iOS device collection.
+This document describes the USB components needed when collecting from Android
+and iOS devices.
 
----
+Pre-built Windows release binaries include ADB platform-tools as a fallback.
+Source builds still need the Python packages and native USB libraries described
+below.
 
-## Platform Comparison
+## Platform Summary
 
-| Platform | External Software | USB Driver | Collection |
-|----------|------------------|------------|------------|
-| **Android** | None (included in EXE) | libusb-1.0.dll (bundled) | USB direct ✅ |
-| **iOS** | iTunes or Apple Driver | Apple Mobile Device | USB via usbmux |
+| Platform | External software | Driver or native library | Collection path |
+|----------|-------------------|--------------------------|-----------------|
+| Android | None for release binaries; ADB or libusb for source builds | libusb / WinUSB as needed | USB direct or bundled ADB fallback |
+| iOS | Apple Mobile Device Support on Windows | Apple Mobile Device USB driver | USB backup and device services |
+| Linux source builds | System libusb packages | `libusb-1.0-0` and development headers | USB direct |
+| macOS source builds | Homebrew libusb for Android | Native Apple services for iOS | USB direct |
 
----
+## Android Setup
 
-## Required Files
+### Python Packages
 
-### libusb-1.0.dll (Windows)
-
-The `libusb-1.0.dll` file is required for USB communication with Android devices.
-
-**Automatic Download:**
-```bash
-python build.py --download-libusb
-```
-
-**Manual Installation:**
-1. Download from: https://github.com/libusb/libusb/releases
-2. Extract the archive
-3. Copy `VS2022/MS64/dll/libusb-1.0.dll` to this folder
-
-## Python Packages
-
-Install required Python packages:
 ```bash
 pip install adb-shell[usb] libusb1 rsa
 ```
 
-## Build Verification
+### Windows Native USB Library
 
-Check all USB dependencies before building:
+Check whether the DLL can be found:
+
 ```bash
 python build.py --check-deps
 ```
 
-Expected output:
-```
-[USB] Checking USB dependencies for Android collection...
-  [OK] adb-shell: installed
-  [OK] libusb1: installed
-  [OK] rsa: installed
-  [OK] libusb-1.0.dll: collector/resources/libusb-1.0.dll
+If `libusb-1.0.dll` is missing:
 
-[USB] All USB dependencies are ready!
+```bash
+python build.py --download-libusb
 ```
 
-## Platform-Specific Notes
+If the helper cannot locate a DLL automatically, download libusb manually from
+https://github.com/libusb/libusb/releases and copy the 64-bit DLL to:
 
-### Windows
-- Requires `libusb-1.0.dll` in this folder or in PATH
-- May need Zadig (https://zadig.akeo.ie/) to install USB drivers for Android devices
+```text
+resources/libusb-1.0.dll
+```
+
+### Windows Driver Notes
+
+Some Android devices require a WinUSB-compatible driver before direct USB access
+works. Zadig can bind WinUSB to the selected Android interface, but it changes
+the driver at the system level. Use it only when needed and only on the intended
+device interface.
 
 ### Linux
+
 ```bash
 sudo apt-get install libusb-1.0-0 libusb-1.0-0-dev
 ```
 
 ### macOS
+
 ```bash
 brew install libusb
 ```
 
-## Troubleshooting
+## iOS Setup
 
-### "USB libraries not available"
-- Install: `pip install adb-shell[usb] libusb1`
-- Ensure libusb-1.0.dll is in this folder (Windows)
+iOS collection on Windows requires Apple Mobile Device Support.
 
-### "Device not found"
-1. Enable USB debugging on Android device
-2. Connect via USB cable
-3. Accept "Allow USB debugging" prompt on device
-4. On Windows: Install USB driver via Zadig if needed
+### Option 1: Install iTunes
 
-### "Auth failed"
-- Accept USB debugging authorization on the Android device
-- Delete `~/.android/adbkey*` and retry (will regenerate keys)
+Install iTunes from Microsoft Store or from Apple. This installs the required
+Apple Mobile Device USB driver and service.
 
----
+### Option 2: Install Driver Components Only
 
-# iOS Device Collection
+Advanced users can extract the iTunes installer and install:
 
-## Requirements
+- `AppleMobileDeviceSupport64.msi`
+- `AppleApplicationSupport64.msi` if required by the installer version
 
-iOS collection requires Apple Mobile Device Support, which is provided by iTunes.
+Restart Windows after installation.
 
-### Option 1: Install iTunes (Recommended)
-Download and install iTunes from:
-- Microsoft Store: https://apps.microsoft.com/detail/9PB2MZ1ZMB1S
-- Apple Website: https://www.apple.com/itunes/download/
+### macOS
 
-### Option 2: Minimal Driver Only (Advanced)
-If you don't want the full iTunes application:
+macOS includes the native services required for iOS device communication.
 
-1. Download iTunes installer (Windows 64-bit) from Apple
-2. Extract using 7-Zip or WinRAR:
-   - Right-click on `iTunes64Setup.exe` → Extract
-3. Inside extracted folder, find and install:
-   - `AppleMobileDeviceSupport64.msi` (Required)
-   - `AppleApplicationSupport64.msi` (May be required)
-4. Restart computer after installation
+## Build Verification
 
-### Option 3: Network Tunnel (iOS 17.4+)
-For iOS 17.4 and later, you can use WiFi connection instead of USB:
-1. Connect device to same WiFi network as computer
-2. Enable WiFi sync in device settings
-3. Collection tool will detect device over network
-
-## Troubleshooting
-
-### "No iOS devices found"
-1. Ensure iTunes or Apple Mobile Device Support is installed
-2. Connect iOS device via USB cable
-3. Unlock device and tap "Trust This Computer" when prompted
-4. Check Device Manager for "Apple Mobile Device USB Driver"
-
-### "Trust dialog not appearing"
-1. Disconnect and reconnect USB cable
-2. Restart Apple Mobile Device Service:
-   ```
-   net stop "Apple Mobile Device Service"
-   net start "Apple Mobile Device Service"
-   ```
-3. Restart computer if needed
-
-### "Pairing failed"
-1. Go to iOS Settings > General > Transfer or Reset iPhone > Reset
-2. Select "Reset Location & Privacy"
-3. Reconnect and trust again
-
----
-
-# macOS Notes
-
-### Android on macOS
 ```bash
-brew install libusb
-pip install adb-shell[usb] libusb1
+python build.py --check-deps
 ```
 
-### iOS on macOS
-No additional installation required - macOS includes native iOS device support.
+Expected Android dependency output includes:
+
+```text
+[USB] Checking USB dependencies for Android collection...
+  [OK] adb-shell: installed
+  [OK] libusb1: installed
+  [OK] rsa: installed
+  [OK] libusb-1.0.dll: <path>
+```
+
+## Troubleshooting
+
+### Android device not found
+
+1. Enable Developer Options and USB debugging on the Android device.
+2. Reconnect the USB cable.
+3. Accept the "Allow USB debugging" prompt on the device.
+4. On Windows, check whether a device driver change is required.
+
+### Android authorization failed
+
+1. Revoke USB debugging authorizations on the device.
+2. Remove stale local ADB keys if appropriate.
+3. Reconnect the device and accept the authorization prompt again.
+
+### iOS device not found
+
+1. Confirm Apple Mobile Device Support is installed.
+2. Unlock the iOS device.
+3. Reconnect over USB.
+4. Tap "Trust This Computer" on the device.
+5. Confirm the Apple Mobile Device USB driver is visible in Device Manager.
+
+### iOS trust dialog does not appear
+
+Restart the Apple Mobile Device service:
+
+```text
+net stop "Apple Mobile Device Service"
+net start "Apple Mobile Device Service"
+```
+
+If the prompt still does not appear, reset trust settings on the iOS device and
+try again.

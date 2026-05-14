@@ -1,321 +1,263 @@
-# unJaena AI — Digital Intelligence Collector
+# unJaena AI Digital Intelligence Collector
 
-> The official evidence collection tool for the **unJaena AI** forensic analysis platform.
-> Collected artifacts are automatically uploaded for AI-powered analysis including MITRE ATT&CK mapping, timeline reconstruction, and multilingual investigation reports.
+The official evidence collection client for the unJaena AI analysis platform.
+
+It collects authorized forensic artifacts from live endpoints, mobile devices,
+offline mobile bundles, and disk images; preserves per-file integrity metadata;
+and uploads the selected evidence to a configured analysis service.
 
 <p align="center">
   <img src="docs/readme-demo-windows.gif" alt="unjaena-collector GUI on Windows - device selection, session token, and artifact picker" width="720" />
   <br>
-  <sub><em>Windows - GUI</em></sub>
+  <sub><em>Windows GUI workflow</em></sub>
 </p>
 
 <p align="center">
-  <img src="docs/readme-demo.gif" alt="unjaena-collector demo on macOS - end-to-end evidence collection in under 30 seconds" width="720" />
+  <img src="docs/readme-demo.gif" alt="unjaena-collector demo on macOS - evidence collection workflow" width="720" />
   <br>
-  <sub><em>macOS - terminal workflow</em></sub>
+  <sub><em>macOS terminal workflow</em></sub>
 </p>
-
-Cross-platform digital forensic artifact collection tool with GUI. Collects evidence from Windows, macOS, Linux, Android, and iOS devices with cryptographic integrity verification and secure upload.
 
 ![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)
 ![Platforms: Win/macOS/Linux/Android/iOS](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-lightgrey)
-![Languages: KR/EN/JA/ZH](https://img.shields.io/badge/reports-KR%20%7C%20EN%20%7C%20JA%20%7C%20ZH-green)
 ![Release](https://img.shields.io/github/v/release/unjaena/unjaena-collector?label=release)
 ![Stars](https://img.shields.io/github/stars/unjaena/unjaena-collector?style=social)
 
-## ⚡ Quick Start
+## Current Release
 
-```bash
-# Clone and run from source
-git clone https://github.com/unjaena/unjaena-collector.git
-cd unjaena-collector
-pip install -r requirements.txt
-python src/main.py        # or:  ./run.sh   (Linux/macOS)   |   run.bat  (Windows)
-```
+The latest release is
+[`collector-v2.6.2`](https://github.com/unjaena/unjaena-collector/releases/latest).
 
-Or download a pre-built binary for your platform from [Releases](https://github.com/unjaena/unjaena-collector/releases/latest) (Windows `.exe`, macOS `.dmg`, Linux AppImage).
-
-Configure your upload endpoint in `config.json` (see [Configuration](#configuration)) — defaults to `https://app.unjaena.com` for users of the hosted analysis service.
-
-## 🌟 What's New
-
-The latest release is **[`collector-v2.5.2`](https://github.com/unjaena/unjaena-collector/releases/latest)**. For per-version detail see the [Releases page](https://github.com/unjaena/unjaena-collector/releases) or the [Changelog](CHANGELOG.md).
-
-### Recent highlights
-
-- **v2.5.2** — Critical macOS hotfix (v2.5.1 macOS builds returned zero files for every artifact type due to a kwarg passed to `getattr()` instead of `datetime.fromtimestamp()`). New CI live-collection workflow runs the actual collector against macOS Apple Silicon and Linux GitHub Actions runners and validates path resolution, file copy, SHA-256, and manifest schema end-to-end. Caught the v2.5.1 macOS bug on the first real run.
-- **v2.5.1** — FFS Tier 1+2 path-spec gap-fix: 5 mobile artifact types (iOS Find My, iOS TCC, Android WiFi config, Android user media, Facebook Messenger Android 12+) had `ArtifactType` registrations and server parsers but no path resolution. Adds `filename_globs` to `AndroidArtifactSpec` so a single directory spec covers both legacy and modern DB names (`threads_db2*` plus `msys_database_*`) plus their SQLite -wal / -shm sidecars.
-- **v2.5.0** — 22 new iOS17 / Android14 artifact types: Apple Mail Envelope Index, Safari binarycookies, CoreDuet, routined Significant Locations, Biome SEGB streams, Accounts3, voicemail, WiFi known networks; Bluetooth pairings, system dropbox, Chrome cookies / login data / bookmarks, Google Maps, Google Pay / Wallet card history, Twitter/X, Gmail, locksettings.
-- **v2.4.9** — UFED FFS zip bundle ingest (Cellebrite CLBX iOS / Android, no live phone required).
-- **v2.4.7** — Real-time bidirectional WebSocket sync, 15s heartbeat, 3→60s exponential backoff, server-side abort / take-over UX.
-- **v2.4.5** — Samsung Pay / Wallet (Android) collection support + GUI checkbox visibility for 10 previously-invisible iOS apps + Toss.
-- **v2.4.4** — SQLite -wal / -shm sidecar pull, directory-spec fan-out, CoreSpotlight V2 per-protection-class store paths.
-- **v2.4.1** — Tier S 2026 expansion: 11 new artifact types covering Windows 11 24H2 (Teams v2 cache, Credential Manager Vault structure, OneDrive sync log, Chrome state file, Defender MPLog), macOS Sequoia (Biome SEGB, XProtect Remediator), and modern Linux (auditd, systemd-journal, container state).
-
-## 🆚 Why unjaena-collector?
-
-> *Pricing, license terms, and feature sets reflect publicly available information as of 2026-04-22. See each vendor's official site for the latest details. Comparison is provided for informational purposes only.*
-
-| | **unjaena-collector** | Magnet AXIOM Cyber | Cellebrite Inseyets.PA | Oxygen Detective | Autopsy | Velociraptor |
-|---|---|---|---|---|---|---|
-| **License** | AGPL-3.0 (open) | Commercial (quote-based) | Commercial (quote-based) | Commercial | Apache-2.0 (open) | AGPL-3.0 (open) |
-| **Public pricing** | Free | Not disclosed | Not disclosed | Not disclosed (GSA listed) | Free | Free |
-| **Endpoint OS coverage** | Windows / macOS / Linux / Android / iOS | Windows / macOS / Linux / Android / iOS | Mobile-focused | Windows / macOS / Linux / Mobile | Windows-focused (macOS/Linux limited) | Windows / macOS / Linux |
-| **Report UI languages** | **KO / EN / JA / ZH** (native i18n) | Translation module available (32 lang, extra) | Smart translator add-on (40 lang) | 15+ languages (Korean not listed) | English only (community translations) | English only |
-| **Open source** | ✅ Full source | ❌ | ❌ | ❌ | ✅ Full source | ✅ Full source |
-| **Windows 11 24H2 Tier S artifacts (2026-04)** | ✅ 11 new types shipped | ✅ (per release notes) | Limited (mobile focus) | Partial coverage | Not listed in release notes | VQL-custom (user writes queries) |
-| **Court admissibility certification** | ❌ Not certified (see [Legal Notice](#legal-notice)) | Widely adopted for LE/enterprise | NIST CFTT and other certifications | LE/enterprise adoption | Partial NIST testing | No vendor certification program |
-
-### Honest positioning
-
-**Where unjaena-collector leads**:
-1. **Native 4-language UI and reports** (Korean / English / Japanese / Chinese) — competing tools mostly require paid translation modules or lack Korean entirely.
-2. **Free, AGPL-3.0, cross-platform** with both endpoint and mobile collection — Autopsy is free but macOS/Linux functionality is limited; Velociraptor is endpoint-only with English UI.
-3. **Modern OS coverage shipped early** — Windows 11 24H2 / macOS Sequoia / Linux Tier S 2026 artifacts added in v2.4.1, plus broader iOS 17 / Android 14 mobile coverage (22 new types) added in v2.5.0.
-
-**Where it's comparable**:
-4. **Cross-platform artifact collection** across Windows / macOS / Linux / Android / iOS — Magnet AXIOM Cyber and Oxygen Detective offer similar breadth.
-
-**Where it's honestly behind**:
-5. **No court admissibility certification, no vendor training/certification program, no 24/7 commercial support.** For legal proceedings requiring admissibility, use in parallel with NIST-tested commercial suites. unjaena-collector is appropriate for in-house incident response, authorized investigations, and academic research.
-
-> *Trade names (Magnet AXIOM, Magnet AXIOM Cyber, Cellebrite, UFED, Inseyets, Physical Analyzer, Oxygen Forensic Detective, Autopsy, Velociraptor) are trademarks of their respective owners and are used here solely for factual identification.*
->
-> *Sources: [Magnet Free Tools](https://www.magnetforensics.com/free-tools/) · [Magnet AXIOM Cyber](https://www.magnetforensics.com/products/magnet-axiom-cyber/) · [Cellebrite licensing](https://cellebrite.com/en/changes-to-cellebrite-licensing-model/) · [Oxygen Forensic Detective](https://www.oxygenforensics.com/products/oxygen-forensic-detective/) · [Autopsy GitHub](https://github.com/sleuthkit/autopsy) · [Velociraptor GitHub](https://github.com/Velocidex/velociraptor).*
-
-## 💬 Community
-
-- **GitHub Discussions** — [Ask questions or share artifact requests](https://github.com/unjaena/unjaena-collector/discussions)
-- **GitHub Issues** — [Report bugs or propose new artifact types](https://github.com/unjaena/unjaena-collector/issues)
-- **Follow the project** — [LinkedIn profile](https://www.linkedin.com/in/unjaena) for technical deep-dives and release notes
-
-## How It Works
-
-```
-┌─────────────────────┐        ┌──────────────────────────────┐
-│  Intelligence        │        │  unJaena AI Platform          │
-│  Collector (this)    │───────▶│                                │
-│                      │ AES-256│  ✦ AI-Powered RAG Analysis    │
-│  • Windows/macOS/    │ Upload │  ✦ MITRE ATT&CK Mapping       │
-│    Linux/Android/iOS │        │  ✦ Timeline Reconstruction    │
-│  • Memory Forensics  │        │  ✦ Multilingual Reports       │
-│  • Disk Images       │        │  ✦ Evidence Chain of Custody  │
-└─────────────────────┘        └──────────────────────────────┘
-```
-
-1. **Collect Evidence** — Automatically extract forensic artifacts from target devices
-2. **Encrypted Transfer** — Upload with AES-256-GCM encryption
-3. **AI Analysis** — Automatic parsing, vector indexing, and LLM-powered analysis
-4. **Generate Reports** — Query forensic findings in natural language (Korean / English / Japanese / Chinese)
-
-## Features
-
-- **Windows Forensics**: MFT, registry, prefetch, event logs, browser history, USB artifacts
-- **Memory Acquisition**: Raw read of pagefile and hiberfil (optional physical-memory acquisition via user-supplied WinPmem binary)
-- **Android Forensics**: USB collection via ADB protocol (no external ADB binary required)
-- **iOS Forensics**: USB backup and artifact extraction via pymobiledevice3
-- **macOS / Linux Forensics**: System logs, user artifacts, browser data, shell history
-- **Disk Image Support**: E01 (Expert Witness Format), RAW image analysis
-- **BitLocker Support**: Encrypted volume access with operator-provided recovery credentials
-- **Secure Upload**: AES-256-GCM encrypted transfer
-- **Collection Integrity**: Per-file SHA-256 hashing with integrity verification on upload
-- **Multi-language GUI**: PyQt6 interface with i18n support
-
-## Legal Notice
-
-This software is provided strictly for **authorized forensic activities** — including but not limited to in-house incident response, contracted penetration testing, and authorized digital investigations. You are solely responsible for ensuring that you have the legal authority to run this tool against any target system, and for complying with all applicable laws and regulations in your jurisdiction.
-
-The maintainers disclaim any liability arising from unauthorized or unlawful use.
-
-This tool is **not purpose-built for court-admissible evidence collection**. If you intend to use the collected data in legal proceedings, consult with qualified counsel and apply organizational chain-of-custody procedures external to this tool.
-
-### AGPL-3.0 Network Use
-
-This project is distributed under the GNU Affero General Public License v3.0. Because the AGPL treats network interaction as a form of distribution (§13), if you modify this collector and allow third parties to interact with your modified version — for example by operating an analysis service that receives uploads from the modified client — you must make the corresponding source of the modified client available to those users under the same license.
-
-The AGPL obligation applies to this collector only. The separate server-side analysis platform is independently developed and is not a covered work of this repository.
-
-## Privacy and Data Handling
-
-When you run a collection and choose to upload to the analysis platform, the following is transmitted over the encrypted channel:
-
-- The collected artifact archive (AES-256-GCM encrypted in transit)
-- Host identifier derived from `COMPUTERNAME` / `HOSTNAME` environment variables
-- Collection start/end timestamps and per-file SHA-256 hashes
-- Operator consent record (the user's consent selections, timestamp, and an HMAC-SHA256 integrity tag over the record contents)
-
-The following are **never transmitted**:
-
-- Plaintext session tokens (only SHA-256 hashes are logged)
-- Locally entered BitLocker recovery credentials (used in-memory only)
-- Your API key or server URL beyond the upload handshake
-
-The collector performs no background telemetry; network activity is limited to the explicit upload you initiate. Data retention on the analysis platform is governed by that platform's privacy policy, independent of this repository.
-
-## Download
-
-Pre-built binaries are available on the [Releases](https://github.com/unjaena/unjaena-collector/releases) page:
+Pre-built release assets:
 
 | Platform | File |
 |----------|------|
-| Windows (x64) | `IntelligenceCollector-*-windows-x64.exe` |
-| macOS (Apple Silicon) | `IntelligenceCollector-*-macos-arm64.dmg` |
-| Linux (x64) | `IntelligenceCollector-*-linux-x64.tar.gz` |
+| Windows x64 | `IntelligenceCollector-*-windows-x64.exe` |
+| macOS Apple Silicon | `IntelligenceCollector-*-macos-arm64.dmg` |
+| macOS Intel | `IntelligenceCollector-*-macos-x86_64.dmg` |
+| Linux x64 | `IntelligenceCollector-*-linux-x64.tar.gz` |
+| Checksums | `SHA256SUMS.txt` |
 
-## Requirements
+macOS builds are signed and notarized. Windows and Linux builds are currently
+published without platform-native package signing; verify them with
+`SHA256SUMS.txt`.
 
-- Python 3.10+
-- Windows 10/11 (primary platform; macOS/Linux for respective artifact collection)
-- Administrator privileges (required for raw disk access and memory acquisition)
+## Quick Start
 
-### External Dependencies (not included)
+### Use a Release Binary
 
-| Tool | Purpose | License | How to obtain |
-|------|---------|---------|----------------|
-| WinPmem | Physical memory acquisition (optional) | Apache 2.0 | Download `winpmem_mini_x64.exe` from the [WinPmem releases](https://github.com/Velocidex/WinPmem/releases) page and place it in `resources/` before building. |
-| libimobiledevice | iOS device communication | LGPL 2.1 | Run `python tools/download_libimobiledevice.py` once before the first iOS collection. |
-| libusb | USB device access | LGPL 2.1 | Installed via `pip install libusb1` as part of requirements. |
+1. Download the right asset from the
+   [Releases page](https://github.com/unjaena/unjaena-collector/releases/latest).
+2. Start the application.
+3. Enter your analysis server URL when prompted. Users of the hosted service
+   can use `https://app.unjaena.com`.
+4. Enter a valid session token, select artifact categories, and start
+   collection.
 
-## Installation
+### Run From Source
 
 ```bash
-# Clone the repository
 git clone https://github.com/unjaena/unjaena-collector.git
 cd unjaena-collector
 
-# Create virtual environment
 python -m venv venv
-venv\Scripts\activate  # Windows
-# source venv/bin/activate  # macOS/Linux
 
-# Install dependencies
-pip install -r requirements.txt
+# Windows
+venv\Scripts\activate
+pip install -r requirements/base.txt -r requirements/windows.txt
 
-# Copy and configure
-cp config.example.json config.json
-# Edit config.json with your server URL
-```
+# macOS
+# source venv/bin/activate
+# pip install -r requirements/base.txt -r requirements/macos.txt
 
-### iOS Collection Setup
+# Linux
+# source venv/bin/activate
+# pip install -r requirements/base.txt -r requirements/linux.txt
 
-```bash
-# Download libimobiledevice binaries (Windows only; macOS/Linux use system libimobiledevice)
-python tools/download_libimobiledevice.py
-
-# pymobiledevice3 is installed automatically via requirements
-```
-
-### Android Collection Setup
-
-USB drivers are handled via the `adb-shell[usb]` and `libusb1` packages. On Windows you may additionally need [Zadig](https://zadig.akeo.ie/) to bind the WinUSB driver to the target device — note that Zadig changes the driver at the system level, which can affect other USB devices. See [`resources/USB_DEPENDENCIES.md`](resources/USB_DEPENDENCIES.md) for details.
-
-### Memory Acquisition Setup (optional)
-
-Physical memory acquisition is opt-in and requires a user-supplied WinPmem binary. Download `winpmem_mini_x64.exe` from [WinPmem releases](https://github.com/Velocidex/WinPmem/releases) and place it in `resources/` before building. Without this file, memory acquisition is skipped and only pagefile/hiberfil raw reads are attempted.
-
-## Usage
-
-### GUI Mode (recommended)
-
-```bash
 python src/main.py
 ```
 
-### Build Standalone Executable
+Headless mode is available for controlled automation:
 
 ```bash
-# Development build (uses config.json or defaults)
-python build.py --development
-
-# Production build (expects a populated config.json alongside the script)
-python build.py --production
-
-# Check bundled dependencies
-python build.py --check-deps
+python src/main.py --headless --server https://app.unjaena.com --token SESSION_TOKEN --artifacts prefetch,eventlog
 ```
 
-The production build reads `config.json` for `server_url` / `ws_url` / `dev_mode` / `allow_insecure`. Copy `config.example.json` to `config.json` and edit before building. (The GitHub Actions release workflow generates a `config.production.json` at build time from the `PRODUCTION_SERVER_URL` secret — that file is not required for local builds.)
+## What It Collects
+
+### Live Endpoints
+
+- Windows 10/11: registry hives, event logs, prefetch, MFT-oriented artifacts,
+  browser data, USB history, cloud/app traces, messenger/social application
+  artifacts, AI and coding-assistant traces, pagefile and hibernation files.
+- macOS: unified logs, property lists, Safari/browser data, shell history,
+  TCC, launch items, user artifacts, cloud/app traces, messenger/social
+  artifacts, and AI/coding-assistant traces.
+- Linux: systemd journal, audit/auth logs, shell history, cron/systemd
+  schedules, containers, user artifacts, browser data, app traces, and local
+  AI/coding-assistant traces.
+
+### Mobile Devices and Mobile Bundles
+
+- Android USB collection through the ADB protocol.
+- iOS backup and artifact extraction through `pymobiledevice3`.
+- Offline mobile filesystem bundles, including UFED/CLBX-style zip exports.
+
+### Disk Images
+
+The collector can register and collect from offline evidence images:
+
+- E01 / Ex01, including segmented E01 sets
+- RAW / DD / IMG / BIN
+- VHD / VHDX
+- VMDK
+- QCOW2
+- VDI
+- DMG, including UDIF images and raw fallback
+
+Supported filesystem access depends on the image contents and available
+dependencies, but the disk layer is designed for read-only collection.
+
+### Focused Collection Presets
+
+`Privacy Incident Preset` selects a smaller set of artifacts useful for breach
+triage, privacy incident response, CPO workflows, and 72-hour notification
+review. It is intended to reduce unnecessary data collection compared with
+selecting every artifact category.
+
+## How It Fits With the Analysis Platform
+
+The collector is the endpoint-side evidence acquisition component. The separate
+analysis platform receives uploaded evidence and can provide artifact views,
+search, timeline reconstruction, multilingual reporting, and AI-assisted
+investigation workflows depending on the configured service.
+
+This repository does not include the server-side analysis platform.
+
+## Security and Integrity
+
+- HTTPS/WSS is required for remote servers.
+- AES-256-GCM authenticated encryption is used for upload transfer.
+- Per-file SHA-256 hashes are recorded and verified during upload.
+- Session tokens are not logged in plaintext.
+- Operator consent selections are recorded with an HMAC-SHA256 integrity tag.
+- Locally entered BitLocker or LUKS credentials are used in memory and are not
+  transmitted as plaintext metadata.
+- The collector performs no background telemetry. Network activity is limited
+  to explicit connection tests, authentication, update checks, and uploads
+  initiated by the operator.
+
+See [SECURITY.md](SECURITY.md) for reporting and support policy details.
 
 ## Configuration
 
-### Environment Variables
+The release binary stores first-run server configuration at:
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `FORENSIC_SERVER_URL` | Analysis server HTTPS endpoint | read from `config.json` |
-| `FORENSIC_API_KEY` | API authentication key | read from `config.json` |
-| `FORENSIC_DEV_MODE` | Allow plain HTTP/WS for local testing | `false` |
-| `FORENSIC_VERIFY_SSL` | Verify server TLS certificate | `true` |
-| `COLLECTOR_DEV_MODE` | Enable GUI development hints | `false` |
-
-### Config File (`config.json`)
-
-See `config.example.json` for all available options including:
-- Server connection settings
-- Collection parameters (hashing, file size limits)
-- Upload encryption settings
-- Logging configuration
-
-## Security
-
-- **AES-256-GCM** authenticated encryption for all file transfers, with the per-file SHA-256 hash bound as additional authenticated data
-- **SHA-256** file integrity verification for every collected artifact
-- **HTTPS/WSS enforced** in production (PyInstaller) builds — TLS verification cannot be disabled at runtime; the dev-mode and `FORENSIC_VERIFY_SSL` flags apply only to source builds
-- **One-time session tokens** with replay prevention (used-token set with expiry)
-- **Operator consent record** captured with HMAC-SHA256 integrity tag over the user's selections, timestamp, and hostname hash. Server-side verification of this record against an analysis session is planned for a future release (see CHANGELOG.md, Known Limitations).
-
-For details, see [SECURITY.md](SECURITY.md).
-
-## Project Structure
-
+```text
+~/.forensic-collector/config.json
 ```
-unjaena-collector/
-├── src/
-│   ├── main.py                  # Entry point
-│   ├── collectors/              # Platform-specific collectors
-│   │   ├── artifact_collector.py    # Windows artifacts
-│   │   ├── android_collector.py     # Android USB collection
-│   │   ├── ios_collector.py         # iOS backup & extraction
-│   │   ├── linux_collector.py       # Linux artifacts
-│   │   ├── macos_collector.py       # macOS artifacts
-│   │   ├── memory_collector.py      # Memory acquisition
-│   │   ├── mft_collector.py         # MFT parsing
-│   │   └── forensic_disk/           # Disk image access layer
-│   ├── core/                    # Core infrastructure
-│   ├── gui/                     # PyQt6 UI
-│   └── utils/                   # Utilities
-├── tools/                       # External tool management
-├── resources/                   # Runtime resources
-├── config.example.json          # Configuration template
-├── requirements.txt             # Python dependencies
-├── build.py                     # PyInstaller build script
-└── LICENSE                      # AGPL-3.0
+
+Minimal runtime configuration:
+
+```json
+{
+  "server_url": "https://app.unjaena.com",
+  "ws_url": "wss://app.unjaena.com"
+}
 ```
+
+Source builds use build-time configuration files:
+
+```bash
+# Create a local build configuration first
+cp config.example.json config.production.json
+
+# Production build, reads config.production.json
+python build.py --production
+
+# Or create config.development.json for local testing
+cp config.example.json config.development.json
+
+# Development build, reads config.development.json
+python build.py --development
+
+# Override the server URL while building
+python build.py --production --server-url https://app.unjaena.com
+```
+
+The GitHub release workflow generates `config.production.json` from the
+`PRODUCTION_SERVER_URL` repository secret before building release assets.
+
+## External Dependencies
+
+| Component | Purpose | Notes |
+|-----------|---------|-------|
+| WinPmem | Optional physical memory acquisition on Windows | User-supplied binary; not bundled |
+| libusb | Android USB communication | Required for source builds using direct USB access |
+| Android platform-tools | ADB fallback on Windows | Bundled into Windows release assets by CI |
+| Apple Mobile Device Support | iOS communication on Windows | Installed through iTunes or Apple drivers |
+| libimobiledevice / pymobiledevice3 | iOS backup communication | `pymobiledevice3` is installed from requirements |
+
+See [resources/USB_DEPENDENCIES.md](resources/USB_DEPENDENCIES.md) for mobile
+USB setup details.
+
+## Build
+
+```bash
+python build.py --check-deps
+python build.py --production
+```
+
+Optional helpers:
+
+```bash
+python build.py --download-libusb
+python tools/download_libimobiledevice.py
+```
+
+## Legal Notice
+
+This software is provided strictly for authorized forensic activities, including
+in-house incident response, contracted investigations, and authorized research.
+You are responsible for ensuring that you have legal authority to run this tool
+against any target system and for complying with applicable laws and policies.
+
+This tool is not certified as a court-admissible evidence acquisition system.
+If collected data may be used in legal proceedings, consult qualified counsel
+and apply your organization's chain-of-custody procedures.
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0** — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU Affero General Public License v3.0. See
+[LICENSE](LICENSE) for details.
 
-This project depends on [dissect.fve](https://github.com/fox-it/dissect.fve) (AGPL-3.0) for BitLocker decryption, which requires the entire work to be distributed under AGPL-3.0.
+This collector is a standalone client application. The separate server-side
+analysis platform is independently developed and is not part of this repository.
 
-### Key Dependencies & Licenses
+## Key Dependencies and Licenses
 
 | Package | License | Notes |
 |---------|---------|-------|
-| dissect.fve | AGPL-3.0 | BitLocker decryption |
-| dissect.cstruct | AGPL-3.0 | Binary structure parsing (dissect dependency) |
-| pymobiledevice3 | GPL-3.0 | iOS USB communication |
+| dissect.fve | AGPL-3.0 | BitLocker and LUKS support |
+| dissect.cstruct | AGPL-3.0 | Binary structure parsing dependency |
+| pymobiledevice3 | GPL-3.0 | iOS communication |
 | PyQt6 | GPL-3.0 / Commercial | GUI framework |
-| pytsk3 | Apache 2.0 | The Sleuth Kit bindings |
-| adb-shell | Apache 2.0 | Android ADB protocol |
-| libusb1 | LGPL 2.1 | USB device access |
-| cryptography | Apache 2.0 / BSD | Cryptographic operations |
+| pytsk3 | Apache-2.0 | The Sleuth Kit bindings |
+| adb-shell | Apache-2.0 | Android ADB protocol |
+| libusb1 | LGPL-2.1 | USB access |
+| cryptography | Apache-2.0 / BSD | Cryptographic operations |
+
+## Community
+
+- [GitHub Discussions](https://github.com/unjaena/unjaena-collector/discussions)
+- [GitHub Issues](https://github.com/unjaena/unjaena-collector/issues)
+- [LinkedIn](https://www.linkedin.com/in/unjaena)
 
 ## Contributing
 
-This project is **source-open for transparency**, not for community-driven development.
-As a forensic evidence collection tool, code integrity directly impacts legal admissibility — all changes are reviewed and authored by the internal team.
+This project is source-open for transparency. Because evidence collection code
+directly affects data integrity and investigation quality, pull requests are not
+accepted at this time.
 
-- **Bug reports & security issues**: Please open a [GitHub Issue](https://github.com/unjaena/unjaena-collector/issues) or email `contact@unjaena.com`
-- **Feature requests**: Welcome via Issues — we review and prioritize internally
-- **Pull requests**: Not accepted at this time
+Bug reports, compatibility issues, and artifact requests are welcome through
+GitHub Issues. Security reports should follow [SECURITY.md](SECURITY.md).
