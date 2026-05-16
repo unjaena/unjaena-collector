@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 # Cryptography imports
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
     CRYPTO_AVAILABLE = True
@@ -154,6 +155,94 @@ class AESGCMCipher:
         nonce = ciphertext[:NONCE_SIZE]
         encrypted_data = ciphertext[NONCE_SIZE:]
         return self.aesgcm.decrypt(nonce, encrypted_data, associated_data)
+
+    def encrypt_file(
+        self,
+        input_path: str,
+        output_path: str,
+        associated_data: Optional[bytes] = None,
+        chunk_size: int = 8 * 1024 * 1024,
+    ) -> int:
+        """
+        Stream-protect a file using the same wire format as encrypt().
+
+        Output format remains: nonce(12) + ciphertext + tag(16).
+        """
+        nonce = secrets.token_bytes(NONCE_SIZE)
+        encryptor = Cipher(
+            algorithms.AES(self.key),
+            modes.GCM(nonce),
+        ).encryptor()
+        if associated_data:
+            encryptor.authenticate_additional_data(associated_data)
+
+        bytes_written = 0
+        with open(input_path, "rb") as src, open(output_path, "wb") as dst:
+            dst.write(nonce)
+            bytes_written += len(nonce)
+
+            for chunk in iter(lambda: src.read(chunk_size), b""):
+                protected = encryptor.update(chunk)
+                if protected:
+                    dst.write(protected)
+                    bytes_written += len(protected)
+
+            final = encryptor.finalize()
+            if final:
+                dst.write(final)
+                bytes_written += len(final)
+            dst.write(encryptor.tag)
+            bytes_written += len(encryptor.tag)
+
+        return bytes_written
+
+    def decrypt_file(
+        self,
+        input_path: str,
+        output_path: str,
+        associated_data: Optional[bytes] = None,
+        chunk_size: int = 8 * 1024 * 1024,
+    ) -> int:
+        """
+        Stream-restore a file written as nonce(12) + ciphertext + tag(16).
+        """
+        file_size = os.path.getsize(input_path)
+        if file_size < NONCE_SIZE + TAG_SIZE:
+            raise ValueError("Ciphertext is too small")
+
+        ciphertext_size = file_size - NONCE_SIZE - TAG_SIZE
+        with open(input_path, "rb") as src:
+            nonce = src.read(NONCE_SIZE)
+            src.seek(file_size - TAG_SIZE)
+            tag = src.read(TAG_SIZE)
+            src.seek(NONCE_SIZE)
+
+            decryptor = Cipher(
+                algorithms.AES(self.key),
+                modes.GCM(nonce, tag),
+            ).decryptor()
+            if associated_data:
+                decryptor.authenticate_additional_data(associated_data)
+
+            remaining = ciphertext_size
+            bytes_written = 0
+            with open(output_path, "wb") as dst:
+                while remaining > 0:
+                    chunk = src.read(min(chunk_size, remaining))
+                    if not chunk:
+                        raise ValueError("Ciphertext is truncated")
+                    remaining -= len(chunk)
+                    plaintext = decryptor.update(chunk)
+                    if plaintext:
+                        dst.write(plaintext)
+                        bytes_written += len(plaintext)
+
+                final = decryptor.finalize()
+                if final:
+                    dst.write(final)
+                    bytes_written += len(final)
+
+        return bytes_written
 
 
 def derive_key(master_secret: bytes, salt: bytes, info: bytes = b"forensic-upload") -> bytes:

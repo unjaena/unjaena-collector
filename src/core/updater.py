@@ -1,5 +1,5 @@
 """
-Auto-Update Checker — GitHub Releases API
+Auto-update checker using the GitHub Releases API.
 """
 import json
 import logging
@@ -40,7 +40,7 @@ def get_current_version() -> str:
 
 def _parse_version(version_str: str) -> Tuple[int, ...]:
     """v2.2.0 or 2.2.0 -> (2, 2, 0)"""
-    cleaned = version_str.lstrip('v').split('-')[0]  # v2.2.0-beta → 2.2.0
+    cleaned = version_str.lstrip('v').split('-')[0]  # v2.2.0-beta -> 2.2.0
     parts = []
     for p in cleaned.split('.'):
         try:
@@ -60,7 +60,7 @@ def _get_platform_asset_name() -> str:
     elif system == 'darwin':
         if machine == 'arm64':
             return 'macos-arm64.dmg'
-        return 'macos-x64.dmg'
+        return 'macos-x86_64.dmg'
     else:
         return 'linux-x64.tar.gz'
 
@@ -81,7 +81,7 @@ def check_for_update() -> Optional[dict]:
             'published_at': '2026-03-10T...',
         }
     """
-    # Skip update check when running from source — developers have the latest code
+    # Skip update check when running from source; developers have the latest code.
     if not getattr(sys, 'frozen', False):
         logger.debug("[Updater] Skipping: running from source")
         return None
@@ -102,7 +102,7 @@ def check_for_update() -> Optional[dict]:
         release = response.json()
         tag_name = release.get('tag_name', '')
 
-        # collector-v2.2.0 → 2.2.0
+        # collector-v2.2.0 -> 2.2.0
         latest_version = tag_name.replace('collector-v', '').replace('collector-', '').lstrip('v')
         latest_tuple = _parse_version(latest_version)
 

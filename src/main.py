@@ -59,6 +59,7 @@ def get_secure_config(cli_server_url: str = None) -> dict:
     Version source:
         - Bundled config.json (set by CI/CD build pipeline)
     """
+    from core.url_security import normalize_server_urls
     from gui.server_setup_dialog import load_user_config
     user_config = load_user_config() or {}
 
@@ -66,22 +67,11 @@ def get_secure_config(cli_server_url: str = None) -> dict:
 
     # Server URL: CLI arg > user config > empty (triggers wizard in GUI)
     server_url = cli_server_url or user_config.get('server_url', '')
-    if cli_server_url:
-        ws_url = cli_server_url.replace('https://', 'wss://').replace('http://', 'ws://')
-    else:
-        ws_url = user_config.get('ws_url', '')
+    ws_url = None if cli_server_url else user_config.get('ws_url', '')
 
-    # [Security] Enforce HTTPS/WSS — local HTTP allowed in dev_mode only
+    # Remote endpoints must use HTTPS/WSS. Loopback HTTP is allowed for local testing.
     if server_url:
-        local_patterns = ('127.0.0.1', 'localhost', '::1', '0.0.0.0')
-        is_local_server = any(p in server_url for p in local_patterns)
-
-        if server_url.startswith('http://') and not is_local_server:
-            raise ValueError(f"Remote server requires HTTPS. Got: {server_url}")
-
-        if ws_url.startswith('ws://') and not ws_url.startswith('wss://'):
-            if not is_local_server:
-                raise ValueError(f"Remote server requires WSS. Got: {ws_url}")
+        server_url, ws_url = normalize_server_urls(server_url, ws_url)
 
     config = {
         'server_url': server_url,
@@ -220,15 +210,18 @@ def main_gui(config: dict):
     app.setApplicationName(config['app_name'])
     app.setApplicationVersion(config['version'])
 
-    # No server URL configured → show setup wizard
+    # No server URL configured: show setup wizard.
     if not config['server_url']:
         dialog = ServerSetupDialog()
         if dialog.exec() != ServerSetupDialog.DialogCode.Accepted:
             sys.exit(0)
         result = dialog.get_config()
         if result:
-            config['server_url'] = result['server_url']
-            config['ws_url'] = result['ws_url']
+            from core.url_security import normalize_server_urls
+            config['server_url'], config['ws_url'] = normalize_server_urls(
+                result['server_url'],
+                result['ws_url'],
+            )
 
     check_admin_privilege()
 
@@ -245,7 +238,7 @@ def main_headless(args, config: dict):
 
 
 def main():
-    """Main entry point — dispatches to GUI or headless mode."""
+    """Main entry point that dispatches to GUI or headless mode."""
     args = _parse_args()
 
     if args.headless:

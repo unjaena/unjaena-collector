@@ -1,263 +1,206 @@
-# unJaena AI Digital Intelligence Collector
+# unJaena Intelligence Collector
 
-The official evidence collection client for the unJaena AI analysis platform.
+The public evidence collection client for the unJaena forensic analysis
+platform.
 
-It collects authorized forensic artifacts from live endpoints, mobile devices,
-offline mobile bundles, and disk images; preserves per-file integrity metadata;
-and uploads the selected evidence to a configured analysis service.
+This repository contains the collector only. Server-side parsing and analysis
+workflow logic are not part of this public repository.
 
-<p align="center">
-  <img src="docs/readme-demo-windows.gif" alt="unjaena-collector GUI on Windows - device selection, session token, and artifact picker" width="720" />
-  <br>
-  <sub><em>Windows GUI workflow</em></sub>
-</p>
+## Latest Release
 
-<p align="center">
-  <img src="docs/readme-demo.gif" alt="unjaena-collector demo on macOS - evidence collection workflow" width="720" />
-  <br>
-  <sub><em>macOS terminal workflow</em></sub>
-</p>
+Latest release: `collector-v2.6.3`
 
-![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)
-![Platforms: Win/macOS/Linux/Android/iOS](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-lightgrey)
-![Release](https://img.shields.io/github/v/release/unjaena/unjaena-collector?label=release)
-![Stars](https://img.shields.io/github/stars/unjaena/unjaena-collector?style=social)
+Download pre-built binaries from:
 
-## Current Release
+https://github.com/unjaena/unjaena-collector/releases/latest
 
-The latest release is
-[`collector-v2.6.2`](https://github.com/unjaena/unjaena-collector/releases/latest).
+Typical files:
 
-Pre-built release assets:
-
-| Platform | File |
-|----------|------|
+| Platform | Artifact |
+| --- | --- |
 | Windows x64 | `IntelligenceCollector-*-windows-x64.exe` |
 | macOS Apple Silicon | `IntelligenceCollector-*-macos-arm64.dmg` |
-| macOS Intel | `IntelligenceCollector-*-macos-x86_64.dmg` |
 | Linux x64 | `IntelligenceCollector-*-linux-x64.tar.gz` |
-| Checksums | `SHA256SUMS.txt` |
 
-macOS builds are signed and notarized. Windows and Linux builds are currently
-published without platform-native package signing; verify them with
-`SHA256SUMS.txt`.
+## What It Does
 
-## Quick Start
+unJaena Intelligence Collector collects forensic artifacts from authorized
+systems and uploads them to a configured analysis service with integrity
+metadata.
 
-### Use a Release Binary
+Supported collection targets include:
 
-1. Download the right asset from the
-   [Releases page](https://github.com/unjaena/unjaena-collector/releases/latest).
-2. Start the application.
-3. Enter your analysis server URL when prompted. Users of the hosted service
-   can use `https://app.unjaena.com`.
-4. Enter a valid session token, select artifact categories, and start
-   collection.
+- Windows endpoints
+- macOS endpoints
+- Linux endpoints
+- Android devices
+- iOS backups and supported mobile sources
+- Forensic disk images and virtual disk images
 
-### Run From Source
+Supported image/container formats depend on the installed optional libraries,
+but the collector is designed to work with common formats such as:
+
+- E01 / Expert Witness Format
+- RAW / DD / IMG
+- VHD / VHDX
+- VMDK
+- VDI
+- QCOW2
+- DMG
+
+## Key Capabilities
+
+- GUI-based collection workflow
+- Local disk and image-based collection
+- Artifact selection by operating system and device type
+- Windows registry, event log, browser, USB, shell, application, and user
+  activity artifacts
+- Modern Windows artifact collection, including Windows Search index files,
+  notification databases, Phone Link caches, WSL files, and related metadata
+- macOS user, system, browser, shell, and application artifacts
+- Linux log, shell, package, container, browser, and user activity artifacts
+- Android and iOS artifact acquisition paths where supported by device state,
+  backup state, and platform permissions
+- BitLocker access when the operator provides valid recovery credentials
+- Optional memory-related collection paths where the operator supplies required
+  third-party acquisition tools
+- Per-file hash calculation for chain-of-custody support
+- Secure upload to a configured analysis endpoint
+
+## Important Scope Notes
+
+This collector is an acquisition client. It does not expose the proprietary
+server-side analysis engine.
+
+The following are intentionally not included in this repository:
+
+- Server parser implementations
+- Analysis prompts or logic
+- Server-side indexing logic
+- Server-side correlation logic
+- Internal production deployment configuration
+- Service tokens, credentials, or private endpoints
+
+Public documentation should describe collection capability at a high level
+only. Do not add implementation details that would reveal server-side analysis
+logic or private operational controls.
+
+## Quick Start From Source
 
 ```bash
 git clone https://github.com/unjaena/unjaena-collector.git
 cd unjaena-collector
-
 python -m venv venv
 
 # Windows
 venv\Scripts\activate
-pip install -r requirements/base.txt -r requirements/windows.txt
 
-# macOS
+# macOS / Linux
 # source venv/bin/activate
-# pip install -r requirements/base.txt -r requirements/macos.txt
 
-# Linux
-# source venv/bin/activate
-# pip install -r requirements/base.txt -r requirements/linux.txt
-
+pip install -r requirements.txt
 python src/main.py
 ```
 
-Headless mode is available for controlled automation:
+You can also use:
 
 ```bash
-python src/main.py --headless --server https://app.unjaena.com --token SESSION_TOKEN --artifacts prefetch,eventlog
+# Windows
+run.bat
+
+# macOS / Linux
+./run.sh
 ```
-
-## What It Collects
-
-### Live Endpoints
-
-- Windows 10/11: registry hives, event logs, prefetch, MFT-oriented artifacts,
-  browser data, USB history, cloud/app traces, messenger/social application
-  artifacts, AI and coding-assistant traces, pagefile and hibernation files.
-- macOS: unified logs, property lists, Safari/browser data, shell history,
-  TCC, launch items, user artifacts, cloud/app traces, messenger/social
-  artifacts, and AI/coding-assistant traces.
-- Linux: systemd journal, audit/auth logs, shell history, cron/systemd
-  schedules, containers, user artifacts, browser data, app traces, and local
-  AI/coding-assistant traces.
-
-### Mobile Devices and Mobile Bundles
-
-- Android USB collection through the ADB protocol.
-- iOS backup and artifact extraction through `pymobiledevice3`.
-- Offline mobile filesystem bundles, including UFED/CLBX-style zip exports.
-
-### Disk Images
-
-The collector can register and collect from offline evidence images:
-
-- E01 / Ex01, including segmented E01 sets
-- RAW / DD / IMG / BIN
-- VHD / VHDX
-- VMDK
-- QCOW2
-- VDI
-- DMG, including UDIF images and raw fallback
-
-Supported filesystem access depends on the image contents and available
-dependencies, but the disk layer is designed for read-only collection.
-
-### Focused Collection Presets
-
-`Privacy Incident Preset` selects a smaller set of artifacts useful for breach
-triage, privacy incident response, CPO workflows, and 72-hour notification
-review. It is intended to reduce unnecessary data collection compared with
-selecting every artifact category.
-
-## How It Fits With the Analysis Platform
-
-The collector is the endpoint-side evidence acquisition component. The separate
-analysis platform receives uploaded evidence and can provide artifact views,
-search, timeline reconstruction, multilingual reporting, and AI-assisted
-investigation workflows depending on the configured service.
-
-This repository does not include the server-side analysis platform.
-
-## Security and Integrity
-
-- HTTPS/WSS is required for remote servers.
-- AES-256-GCM authenticated encryption is used for upload transfer.
-- Per-file SHA-256 hashes are recorded and verified during upload.
-- Session tokens are not logged in plaintext.
-- Operator consent selections are recorded with an HMAC-SHA256 integrity tag.
-- Locally entered BitLocker or LUKS credentials are used in memory and are not
-  transmitted as plaintext metadata.
-- The collector performs no background telemetry. Network activity is limited
-  to explicit connection tests, authentication, update checks, and uploads
-  initiated by the operator.
-
-See [SECURITY.md](SECURITY.md) for reporting and support policy details.
 
 ## Configuration
 
-The release binary stores first-run server configuration at:
+Copy the example configuration and set the upload endpoint for your analysis
+service.
+
+```bash
+cp config.example.json config.json
+```
+
+The hosted service endpoint is:
 
 ```text
-~/.forensic-collector/config.json
+https://app.unjaena.com
 ```
 
-Minimal runtime configuration:
+Use only authorized session credentials issued by your analysis service.
 
-```json
-{
-  "server_url": "https://app.unjaena.com",
-  "ws_url": "wss://app.unjaena.com"
-}
-```
+## Requirements
 
-Source builds use build-time configuration files:
+- Python 3.10 or newer when running from source
+- Administrator or equivalent privileges for raw disk, protected system
+  locations, and some image workflows
+- USB access permissions for mobile device collection
+- Optional platform libraries for some disk image and mobile workflows
 
-```bash
-# Create a local build configuration first
-cp config.example.json config.production.json
+## External Tools
 
-# Production build, reads config.production.json
-python build.py --production
+Some workflows require third-party tools that are not bundled in this
+repository.
 
-# Or create config.development.json for local testing
-cp config.example.json config.development.json
+| Tool | Purpose |
+| --- | --- |
+| WinPmem | Optional physical memory acquisition on Windows |
+| libimobiledevice | iOS device communication |
+| libusb | USB device access |
 
-# Development build, reads config.development.json
-python build.py --development
+Operators are responsible for obtaining third-party tools from their official
+sources and complying with their licenses.
 
-# Override the server URL while building
-python build.py --production --server-url https://app.unjaena.com
-```
+## Privacy and Data Handling
 
-The GitHub release workflow generates `config.production.json` from the
-`PRODUCTION_SERVER_URL` repository secret before building release assets.
+The collector uploads only when the operator starts a collection and provides
+valid session information.
 
-## External Dependencies
+Uploaded data may include:
 
-| Component | Purpose | Notes |
-|-----------|---------|-------|
-| WinPmem | Optional physical memory acquisition on Windows | User-supplied binary; not bundled |
-| libusb | Android USB communication | Required for source builds using direct USB access |
-| Android platform-tools | ADB fallback on Windows | Bundled into Windows release assets by CI |
-| Apple Mobile Device Support | iOS communication on Windows | Installed through iTunes or Apple drivers |
-| libimobiledevice / pymobiledevice3 | iOS backup communication | `pymobiledevice3` is installed from requirements |
+- Selected artifact files
+- File names and original paths
+- File hashes and size metadata
+- Host and device metadata needed for evidence handling
+- Collection timestamps
+- Operator consent records when enabled by the configured service
 
-See [resources/USB_DEPENDENCIES.md](resources/USB_DEPENDENCIES.md) for mobile
-USB setup details.
-
-## Build
-
-```bash
-python build.py --check-deps
-python build.py --production
-```
-
-Optional helpers:
-
-```bash
-python build.py --download-libusb
-python tools/download_libimobiledevice.py
-```
+The collector should be used only on systems where you have explicit legal
+authority to collect evidence.
 
 ## Legal Notice
 
-This software is provided strictly for authorized forensic activities, including
-in-house incident response, contracted investigations, and authorized research.
-You are responsible for ensuring that you have legal authority to run this tool
-against any target system and for complying with applicable laws and policies.
+This software is provided for authorized forensic, incident response, and
+research use. You are responsible for ensuring that your use complies with all
+applicable laws, policies, contracts, and consent requirements.
 
-This tool is not certified as a court-admissible evidence acquisition system.
-If collected data may be used in legal proceedings, consult qualified counsel
-and apply your organization's chain-of-custody procedures.
+This project is not a substitute for legal advice, organizational
+chain-of-custody procedures, or certified forensic tooling required by a
+specific court or regulator.
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0. See
-[LICENSE](LICENSE) for details.
+This project is distributed under the GNU Affero General Public License v3.0.
 
-This collector is a standalone client application. The separate server-side
-analysis platform is independently developed and is not part of this repository.
+The AGPL obligations apply to this public collector repository. The separate
+server-side analysis platform is independently developed and is not included in
+this repository.
 
-## Key Dependencies and Licenses
+See `LICENSE` for details.
 
-| Package | License | Notes |
-|---------|---------|-------|
-| dissect.fve | AGPL-3.0 | BitLocker and LUKS support |
-| dissect.cstruct | AGPL-3.0 | Binary structure parsing dependency |
-| pymobiledevice3 | GPL-3.0 | iOS communication |
-| PyQt6 | GPL-3.0 / Commercial | GUI framework |
-| pytsk3 | Apache-2.0 | The Sleuth Kit bindings |
-| adb-shell | Apache-2.0 | Android ADB protocol |
-| libusb1 | LGPL-2.1 | USB access |
-| cryptography | Apache-2.0 / BSD | Cryptographic operations |
+## Security
 
-## Community
+Please do not open public issues containing:
 
-- [GitHub Discussions](https://github.com/unjaena/unjaena-collector/discussions)
-- [GitHub Issues](https://github.com/unjaena/unjaena-collector/issues)
-- [LinkedIn](https://www.linkedin.com/in/unjaena)
+- Real evidence files
+- Session tokens
+- Credentials
+- Private URLs
+- Personal data
+- Internal case identifiers
 
-## Contributing
+Report sensitive security issues privately to the maintainers.
 
-This project is source-open for transparency. Because evidence collection code
-directly affects data integrity and investigation quality, pull requests are not
-accepted at this time.
+## Changelog
 
-Bug reports, compatibility issues, and artifact requests are welcome through
-GitHub Issues. Security reports should follow [SECURITY.md](SECURITY.md).
+See `CHANGELOG.md` for release history.

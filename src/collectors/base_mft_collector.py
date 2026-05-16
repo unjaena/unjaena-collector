@@ -210,15 +210,22 @@ ARTIFACT_MFT_FILTERS = {
         'description': 'Program execution history',
     },
     'eventlog': {
-        'path_pattern': r'windows/system32/winevt/logs/',
-        'extensions': {'.evtx'},
+        'path_patterns': [
+            r'windows/system32/winevt/logs/',
+            r'windows/system32/config/',
+        ],
+        'extensions': {'.evtx', '.evt'},
         'include_deleted': True,
         'description': 'Windows event logs',
     },
     'registry': {
         'files': {'system', 'software', 'sam', 'security', 'default', 'ntuser.dat',
                   'usrclass.dat', 'amcache.hve'},
-        'path_patterns': [r'windows/system32/config/', r'users/'],
+        'path_patterns': [
+            r'windows/system32/config/',
+            r'users/',
+            r'documents and settings/',
+        ],
         'include_deleted': True,
         'description': 'Windows registry hives',
     },
@@ -231,7 +238,7 @@ ARTIFACT_MFT_FILTERS = {
     },
     'userassist': {
         'files': {'ntuser.dat'},
-        'path_pattern': r'users/',
+        'path_patterns': [r'users/', r'documents and settings/'],
         'include_deleted': True,
         'description': 'User activity tracking',
     },
@@ -264,11 +271,16 @@ ARTIFACT_MFT_FILTERS = {
     # =========================================================================
     'browser': {
         'files': {'history', 'cookies', 'login data', 'web data', 'places.sqlite',
-                  'cookies.sqlite', 'formhistory.sqlite', 'downloads'},
+                  'cookies.sqlite', 'formhistory.sqlite', 'downloads', 'index.dat'},
         'path_patterns': [
             r'appdata/local/google/chrome/',
             r'appdata/local/microsoft/edge/',
             r'appdata/roaming/mozilla/firefox/',
+            r'documents and settings/[^/]+/application data/mozilla/firefox/',
+            r'documents and settings/[^/]+/local settings/application data/google/chrome/',
+            r'documents and settings/[^/]+/cookies/',
+            r'documents and settings/[^/]+/local settings/history/',
+            r'documents and settings/[^/]+/local settings/temporary internet files/',
         ],
         'path_optional': True,  # Collect by filename only during MFT scan even without path
         'include_deleted': True,
@@ -279,8 +291,8 @@ ARTIFACT_MFT_FILTERS = {
     # USB & External Devices
     # =========================================================================
     'usb': {
-        'files': {'setupapi.dev.log'},
-        'path_pattern': r'windows/inf/',
+        'files': {'setupapi.dev.log', 'setupapi.log'},
+        'path_patterns': [r'windows/inf/', r'windows/'],
         'path_optional': True,  # Unique filename - collect even without path
         'include_deleted': True,
         'description': 'USB device connection history',
@@ -293,6 +305,8 @@ ARTIFACT_MFT_FILTERS = {
         'path_patterns': [
             r'appdata/roaming/microsoft/windows/recent/',
             r'appdata/roaming/microsoft/office/recent/',
+            r'documents and settings/[^/]+/recent/',
+            r'documents and settings/[^/]+/application data/microsoft/office/recent/',
         ],
         'extensions': {'.lnk'},
         'include_deleted': True,
@@ -348,7 +362,7 @@ ARTIFACT_MFT_FILTERS = {
     # =========================================================================
     'shellbags': {
         'files': {'ntuser.dat', 'usrclass.dat'},
-        'path_pattern': r'users/',
+        'path_patterns': [r'users/', r'documents and settings/'],
         'include_deleted': True,
         'description': 'Explorer folder browsing history',
     },
@@ -434,6 +448,9 @@ ARTIFACT_MFT_FILTERS = {
             r'users/[^/]+/downloads/',
             r'users/[^/]+/desktop/',
             r'users/[^/]+/documents/',
+            r'documents and settings/[^/]+/my documents/my pictures/',
+            r'documents and settings/[^/]+/desktop/',
+            r'documents and settings/[^/]+/my documents/',
         ],
         'extensions': {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.heic', '.heif', '.webp'},
         'include_deleted': False,  # Exclude deleted images (storage concerns)
@@ -445,6 +462,8 @@ ARTIFACT_MFT_FILTERS = {
             r'users/[^/]+/videos/',
             r'users/[^/]+/downloads/',
             r'users/[^/]+/desktop/',
+            r'documents and settings/[^/]+/my documents/my videos/',
+            r'documents and settings/[^/]+/desktop/',
         ],
         'extensions': {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'},
         'include_deleted': False,  # Exclude deleted videos (storage concerns)
@@ -461,6 +480,43 @@ ARTIFACT_MFT_FILTERS = {
         'path_optional': True,
         'include_deleted': True,
         'description': 'Windows Timeline (ActivitiesCache.db) - includes app execution duration',
+    },
+    'windows_notification_db': {
+        'path_pattern': r'appdata/local/microsoft/windows/notifications/',
+        'files': {'wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm'},
+        'path_optional': True,
+        'include_deleted': True,
+        'description': 'Windows toast notification database',
+    },
+    'windows_phone_link': {
+        'path_patterns': [
+            r'appdata/local/packages/microsoft.yourphone_',
+            r'appdata/local/packages/microsoftwindows.client.cbs_',
+        ],
+        'extensions': {'.db', '.sqlite', '.json', '.log'},
+        'include_deleted': True,
+        'max_file_size': 50 * 1024 * 1024,
+        'description': 'Phone Link / Your Phone local cache',
+    },
+    'windows_search_index': {
+        'path_pattern': r'programdata/microsoft/search/data/applications/windows/',
+        'files': {'windows.edb'},
+        'extensions': {'.edb', '.log'},
+        'include_deleted': True,
+        'max_file_size': 1024 * 1024 * 1024,
+        'description': 'Windows Search index database and logs',
+    },
+    'windows_wsl': {
+        'path_patterns': [
+            r'users/[^/]+/appdata/local/packages/',
+            r'users/[^/]+/appdata/local/docker/wsl/',
+            r'users/[^/]+/appdata/roaming/docker/',
+            r'users/[^/]+/',
+        ],
+        'files': {'ext4.vhdx', '.wslconfig', 'settings.json'},
+        'include_deleted': True,
+        'max_file_size': 1024 * 1024 * 1024,
+        'description': 'WSL distro VHDX, user config, and Docker Desktop WSL metadata',
     },
     'pca_launch': {
         'path_pattern': r'windows/appcompat/pca/',
@@ -516,7 +572,7 @@ ARTIFACT_MFT_FILTERS = {
         # RDP connection history (Terminal Server Client)
         # Registry: NTUSER.DAT\Software\Microsoft\Terminal Server Client
         'files': {'ntuser.dat'},
-        'path_pattern': r'users/',
+        'path_patterns': [r'users/', r'documents and settings/'],
         'include_deleted': True,
         'description': 'RDP connection history (Terminal Server Client MRU)',
     },
@@ -540,7 +596,7 @@ ARTIFACT_MFT_FILTERS = {
         # Network drive mapping (HKCU\Network)
         # Registry: NTUSER.DAT\Network, Map Network Drive MRU
         'files': {'ntuser.dat'},
-        'path_pattern': r'users/',
+        'path_patterns': [r'users/', r'documents and settings/'],
         'include_deleted': True,
         'description': 'Network drive mapping (HKCU\\Network)',
     },
@@ -610,7 +666,7 @@ ARTIFACT_MFT_FILTERS = {
         # Office MRU is parsed from NTUSER.DAT
         # Path: NTUSER.DAT\Software\Microsoft\Office\{version}\{app}\File MRU
         'files': {'ntuser.dat'},
-        'path_pattern': r'users/',
+        'path_patterns': [r'users/', r'documents and settings/'],
         'include_deleted': True,
         'description': 'Office document MRU (Word, Excel, PowerPoint recent files)',
     },
@@ -618,7 +674,7 @@ ARTIFACT_MFT_FILTERS = {
         # ComDlg32 MRU (common dialog boxes)
         # Path: NTUSER.DAT\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32
         'files': {'ntuser.dat'},
-        'path_pattern': r'users/',
+        'path_patterns': [r'users/', r'documents and settings/'],
         'include_deleted': True,
         'description': 'Common dialog MRU (OpenSavePidlMRU, LastVisitedPidlMRU)',
     },
@@ -626,7 +682,7 @@ ARTIFACT_MFT_FILTERS = {
         # Application-specific MRU (Paint, ALZip, Acrobat, etc.)
         # Path: NTUSER.DAT\Software\{app_path}\Recent File List
         'files': {'ntuser.dat'},
-        'path_pattern': r'users/',
+        'path_patterns': [r'users/', r'documents and settings/'],
         'include_deleted': True,
         'description': 'Per-application MRU (Paint, ALZip, Acrobat, etc. recent files)',
     },
@@ -1074,7 +1130,7 @@ class BaseMFTCollector(ABC):
             local_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Stream file content
-            md5 = hashlib.md5()
+            md5 = hashlib.md5(usedforsecurity=False)
             sha256 = hashlib.sha256()
             total_bytes = 0
 
@@ -1341,7 +1397,7 @@ class BaseMFTCollector(ABC):
                     counter += 1
 
             # Write file with chunk streaming + hash calculation
-            md5_hash = hashlib.md5()
+            md5_hash = hashlib.md5(usedforsecurity=False)
             sha256_hash = hashlib.sha256()
             total_size = 0
             has_data = False
@@ -1444,7 +1500,7 @@ class BaseMFTCollector(ABC):
                 # $MFT (inode 0) — streaming to avoid loading entire MFT into memory
                 logger.info(f"[{source}] Collecting $MFT (inode 0)...")
                 output_file = artifact_dir / '$MFT'
-                md5_hash = hashlib.md5()
+                md5_hash = hashlib.md5(usedforsecurity=False)
                 sha256_hash = hashlib.sha256()
                 total_size = 0
 
@@ -1490,7 +1546,7 @@ class BaseMFTCollector(ABC):
                 # $LogFile (inode 2) — streaming to avoid loading entire LogFile into memory
                 logger.info(f"[{source}] Collecting $LogFile (inode 2)...")
                 output_file = artifact_dir / '$LogFile'
-                md5_hash = hashlib.md5()
+                md5_hash = hashlib.md5(usedforsecurity=False)
                 sha256_hash = hashlib.sha256()
                 total_size = 0
 
@@ -1568,7 +1624,7 @@ class BaseMFTCollector(ABC):
                         'name': '$UsnJrnl:$J',
                         'original_path': '$Extend/$UsnJrnl:$J',
                         'size': len(data),
-                        'hash_md5': hashlib.md5(data).hexdigest(),
+                        'hash_md5': hashlib.md5(data, usedforsecurity=False).hexdigest(),
                         'hash_sha256': hashlib.sha256(data).hexdigest(),
                         'collection_method': 'mft_based',
                         'source': source,
@@ -1656,7 +1712,7 @@ class BaseMFTCollector(ABC):
                                 'parent_file': filename,
                                 'parent_path': full_path,
                                 'size': len(ads_data),
-                                'hash_md5': hashlib.md5(ads_data).hexdigest(),
+                                'hash_md5': hashlib.md5(ads_data, usedforsecurity=False).hexdigest(),
                                 'hash_sha256': hashlib.sha256(ads_data).hexdigest(),
                                 'collection_method': 'mft_based',
                                 'source': source,

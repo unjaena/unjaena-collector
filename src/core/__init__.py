@@ -1,7 +1,7 @@
 """Core modules for the collector"""
 from .token_validator import TokenValidator
 from .encryptor import FileEncryptor, FileHashCalculator
-from .uploader import RealTimeUploader, SyncUploader, DirectUploader
+from .uploader import RealTimeUploader, SyncUploader, DirectUploader, R2DirectUploader
 
 __all__ = [
     'TokenValidator',
@@ -10,4 +10,5 @@ __all__ = [
     'RealTimeUploader',
     'SyncUploader',
     'DirectUploader',
+    'R2DirectUploader',
 ]

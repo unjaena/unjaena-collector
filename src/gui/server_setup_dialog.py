@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QMessageBox, QGroupBox, QFormLayout,
 )
 from PyQt6.QtCore import Qt
+from core.url_security import derive_ws_url, normalize_server_urls
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ def load_user_config() -> Optional[dict]:
 def save_user_config(server_url: str, ws_url: str) -> bool:
     """Save server configuration to user home directory."""
     try:
+        server_url, ws_url = normalize_server_urls(server_url, ws_url)
         USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         config = {
             "server_url": server_url,
@@ -135,23 +137,38 @@ class ServerSetupDialog(QDialog):
     def _on_url_changed(self, text: str):
         url = text.strip().rstrip("/")
         has_url = bool(url) and (url.startswith("http://") or url.startswith("https://"))
-        self.test_btn.setEnabled(has_url)
+        is_valid = False
         self.save_btn.setEnabled(False)
         self.status_label.setText("")
 
         if has_url:
-            if url.startswith("https://"):
-                ws = url.replace("https://", "wss://", 1)
-            else:
-                ws = url.replace("http://", "ws://", 1)
-            self.ws_label.setText(ws)
+            try:
+                normalized_url, ws = normalize_server_urls(url, derive_ws_url(url))
+                self.url_input.blockSignals(True)
+                self.url_input.setText(normalized_url)
+                self.url_input.blockSignals(False)
+                self.ws_label.setText(ws)
+                is_valid = True
+            except ValueError as e:
+                self.ws_label.setText("")
+                self.status_label.setText(str(e))
+                self.status_label.setStyleSheet("color: #ff6b6b;")
         else:
             self.ws_label.setText("")
+        self.test_btn.setEnabled(is_valid)
 
     def _test_connection(self):
         import requests
 
-        url = self.url_input.text().strip().rstrip("/")
+        try:
+            url, ws_url = normalize_server_urls(
+                self.url_input.text().strip().rstrip("/")
+            )
+        except ValueError as e:
+            self.status_label.setText(str(e))
+            self.status_label.setStyleSheet("color: #ff6b6b;")
+            return
+
         self.status_label.setText("Testing connection...")
         self.status_label.setStyleSheet("color: #888;")
         self.test_btn.setEnabled(False)
@@ -168,10 +185,7 @@ class ServerSetupDialog(QDialog):
                 self.status_label.setStyleSheet("color: #4cc9f0;")
                 self.save_btn.setEnabled(True)
                 self._server_url = url
-                if url.startswith("https://"):
-                    self._ws_url = url.replace("https://", "wss://", 1)
-                else:
-                    self._ws_url = url.replace("http://", "ws://", 1)
+                self._ws_url = ws_url
             else:
                 self.status_label.setText(f"Server returned HTTP {resp.status_code}")
                 self.status_label.setStyleSheet("color: #ff6b6b;")

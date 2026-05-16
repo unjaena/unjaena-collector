@@ -3110,6 +3110,76 @@ ARTIFACT_TYPES = {
         'collector': 'collect_user_glob',
         'forensic_value': 'App execution time/duration, clipboard history, file access history',
     },
+    'windows_notification_db': {
+        'name': 'Windows Notification Database',
+        'description': 'Toast notification database and notification payload cache',
+        'paths': [
+            r'%LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db',
+            r'%LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db-wal',
+            r'%LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db-shm',
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Local/Microsoft/Windows/Notifications',
+            'pattern': 'wpndatabase.db*',
+            'recursive': False,
+        },
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'forensic_value': 'App notification titles, bodies, sender apps, and delivery timeline',
+    },
+    'windows_phone_link': {
+        'name': 'Windows Phone Link Cache',
+        'description': 'Phone Link / Your Phone local cache for notifications, calls, messages, and paired device metadata',
+        'paths': [
+            r'%LOCALAPPDATA%\Packages\Microsoft.YourPhone_*\LocalCache\**\*.db',
+            r'%LOCALAPPDATA%\Packages\Microsoft.YourPhone_*\LocalCache\**\*.sqlite',
+            r'%LOCALAPPDATA%\Packages\Microsoft.YourPhone_*\LocalState\**\*.db',
+            r'%LOCALAPPDATA%\Packages\Microsoft.YourPhone_*\LocalState\**\*.json',
+        ],
+        'mft_config': {
+            'user_path': 'AppData/Local/Packages',
+            'path_contains': 'Microsoft.YourPhone_',
+            'extensions': ['.db', '.sqlite', '.json', '.log'],
+            'recursive': True,
+        },
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'forensic_value': 'Paired phone activity, mirrored notifications, call/message cache, and sync timeline',
+    },
+    'windows_search_index': {
+        'name': 'Windows Search Index',
+        'description': 'Windows Search ESE index (Windows.edb) and indexer logs',
+        'paths': [
+            r'C:\ProgramData\Microsoft\Search\Data\Applications\Windows\Windows.edb',
+            r'C:\ProgramData\Microsoft\Search\Data\Applications\Windows\*.log',
+        ],
+        'mft_config': {
+            'base_path': 'ProgramData/Microsoft/Search/Data/Applications/Windows',
+            'files': ['Windows.edb'],
+            'extensions': ['.log'],
+        },
+        'requires_admin': True,
+        'collector': 'collect_locked_files',
+        'forensic_value': 'Indexed file names, document fragments, app traces, and search index modification evidence',
+    },
+    'windows_wsl': {
+        'name': 'Windows WSL Artifacts',
+        'description': 'WSL distribution VHDX files, configuration, and Docker Desktop WSL metadata',
+        'paths': [
+            r'%USERPROFILE%\.wslconfig',
+            r'%LOCALAPPDATA%\Packages\*\LocalState\ext4.vhdx',
+            r'%LOCALAPPDATA%\Docker\wsl\**\ext4.vhdx',
+            r'%APPDATA%\Docker\settings.json',
+        ],
+        'mft_config': {
+            'user_paths': ['.wslconfig', 'AppData/Local/Packages', 'AppData/Local/Docker/wsl', 'AppData/Roaming/Docker'],
+            'patterns': ['ext4.vhdx', '.wslconfig', 'settings.json'],
+            'recursive': True,
+        },
+        'requires_admin': False,
+        'collector': 'collect_user_glob',
+        'forensic_value': 'Linux-on-Windows environments, distro containers, developer activity, and Docker WSL traces',
+    },
     'pca_launch': {
         'name': 'Program Compatibility Assistant (Win11+)',
         'description': 'Windows 11 22H2+ program execution records (PcaAppLaunchDic.txt)',
@@ -3784,7 +3854,7 @@ _WINDOWS_AI_PATHS = {
         'C:/Users/*/AppData/Roaming/Code/User/globalStorage/github.copilot/*',
         'C:/Users/*/AppData/Roaming/Code/User/workspaceStorage/*/github.copilot-chat/*',
         'C:/Users/*/AppData/Roaming/Code/logs/*/exthost*/output_logging_*/*.log',
-        # Sweep #15 V2 (HIGH #9): GitHub Copilot host/token store
+        # GitHub Copilot host, app, token, and diagnostic stores.
         'C:/Users/*/AppData/Roaming/github-copilot/hosts.json',
         'C:/Users/*/AppData/Roaming/github-copilot/apps.json',
         'C:/Users/*/AppData/Roaming/github-copilot/copilot-token.json',
@@ -3793,7 +3863,7 @@ _WINDOWS_AI_PATHS = {
         'C:/Users/*/.config/github-copilot/apps.json',
         'C:/Users/*/.config/github-copilot/copilot-token.json',
         'C:/Users/*/.config/github-copilot/internal/*.log',
-        # Sweep #15 V4 (MEDIUM #2): macOS / Linux variants
+        # macOS and Linux variants collected for cross-platform coverage.
         '/Users/*/Library/Application Support/Code/User/globalStorage/github.copilot/*',
         '/Users/*/Library/Application Support/Code/User/globalStorage/github.copilot-chat/*',
         '/Users/*/.config/github-copilot/hosts.json',
@@ -3903,7 +3973,7 @@ _WINDOWS_AI_PATHS = {
         'C:/Users/*/AppData/Local/JetBrains/*/AIAssistant/*',
         'C:/Users/*/AppData/Roaming/JetBrains/*/options/ai-*.xml',
         'C:/Users/*/AppData/Roaming/JetBrains/*/options/chat-history.xml',
-        # Sweep #15 V2 (HIGH #9): aichat sessions, Junie runs, idea.log
+        # JetBrains assistant settings, chat sessions, Junie runs, and IDE logs.
         'C:/Users/*/AppData/Roaming/JetBrains/*/options/ai.assistant.xml',
         'C:/Users/*/AppData/Roaming/JetBrains/*/options/ai-history.xml',
         'C:/Users/*/AppData/Roaming/JetBrains/*/options/junie.xml',
@@ -3911,7 +3981,7 @@ _WINDOWS_AI_PATHS = {
         'C:/Users/*/AppData/Roaming/JetBrains/*/junie/runs/*/*.json',
         'C:/Users/*/AppData/Local/JetBrains/*/log/idea.log',
         'C:/Users/*/AppData/Local/JetBrains/*/log/idea.log.*',
-        # Sweep #15 V4 (MEDIUM #2): macOS / Linux JetBrains variants
+        # macOS and Linux JetBrains variants.
         '/Users/*/Library/Application Support/JetBrains/*/options/ai.assistant.xml',
         '/Users/*/Library/Application Support/JetBrains/*/options/ai-history.xml',
         '/Users/*/Library/Application Support/JetBrains/*/options/junie.xml',
@@ -4047,11 +4117,9 @@ _WINDOWS_AI_PATHS = {
     ],
 
     # Round 12 - Frontier (Windows)
-    # Sweep #14 V2 Codex hot-fix (Issue 4): Slack desktop IndexedDB is
-    # heavily LevelDB-encoded and falls back to ai_browser_indexeddb
-    # generic recovery. The dedicated ai_slack_ai_recap parser targets
-    # workspace EXPORT JSON files (admin panel "Export workspace data")
-    # that are downloaded to user disk.
+    # Slack desktop IndexedDB is LevelDB-encoded and may be handled by
+    # generic browser storage recovery. Dedicated Slack AI handling targets
+    # exported workspace JSON files that are downloaded to user disk.
     'ai_slack_ai_recap': [
         'C:/Users/*/AppData/Roaming/Slack/IndexedDB/*',  # legacy fallback bucket
         'C:/Users/*/AppData/Roaming/Slack/Cache/*',
@@ -4059,8 +4127,8 @@ _WINDOWS_AI_PATHS = {
         'C:/Users/*/Documents/slack-export-*/channels/*/*.json',
         'C:/Users/*/Downloads/slack_export/*/channels/*/*.json',
     ],
-    # Sweep #14 V2 Codex hot-fix (Issue 6): Office 365 Copilot caches
-    # live under specific Olk/CopilotCache subpaths on Windows.
+    # Office 365 Copilot caches live under specific Olk/CopilotCache
+    # subpaths on Windows.
     'ai_outlook_copilot': [
         'C:/Users/*/AppData/Local/Microsoft/Outlook/*Copilot*',
         'C:/Users/*/AppData/Local/Microsoft/Olk/CopilotCache/*.json',
@@ -4093,9 +4161,7 @@ _WINDOWS_AI_PATHS = {
         'C:/Users/*/.cache/huggingface/hub/models--*/blobs/*',
     ],
 
-    # Sweep #14 (2026-05-09) — Windows path coverage for 4 newly
-    # promoted dedicated parsers (Tabnine, Sourcegraph Cody, Amazon Q,
-    # AnythingLLM). macOS + Linux covered in their respective files.
+    # Windows path coverage for dedicated AI development assistants.
     'ai_tabnine': [
         'C:/Users/*/AppData/Local/Tabnine/tabnine_config.json',
         'C:/Users/*/AppData/Local/Tabnine/tabnine.log',
@@ -4143,9 +4209,6 @@ _AI_CROSS_PLATFORM_REGISTRATIONS = {
     'ai_cicd_ai_logs': {
         'name': 'CI/CD AI Logs',
         'description': 'GitHub Actions / GitLab / Jenkins / Vercel pipeline logs that mention AI bots (Copilot, Claude, OpenAI, Cursor, Renovate AI)',
-        # Sweep #14 V2 Codex hot-fix (Issue 3): the parser scans actual
-        # log files (.log/.txt/.out) for AI bot mentions; pre-execution
-        # workflow YAMLs are configs not logs and were a mismatch.
         # Target real CI log roots across the most common platforms.
         'paths': [
             '*/.github/_logs/*.log',                 # self-hosted Actions runner logs
@@ -4171,10 +4234,8 @@ _AI_CROSS_PLATFORM_REGISTRATIONS = {
     },
     'ai_notion_ai_history': {
         'name': 'Notion AI Page History',
-        # Sweep #14 V2 Codex hot-fix (Issue 5): IndexedDB falls back
-        # to ai_browser_indexeddb generic recovery. The dedicated
-        # ai_notion_ai_history parser targets workspace EXPORTS
-        # (Settings → Export workspace as Markdown / HTML).
+        # IndexedDB falls back to generic browser storage recovery. Dedicated
+        # Notion AI history handling targets workspace exports.
         'description': 'Notion workspace export blocks.json + per-page AI markdown (IndexedDB still collected for browser_indexeddb fallback)',
         'paths': [
             # Notion desktop IndexedDB (handed to browser_indexeddb)
@@ -5496,7 +5557,7 @@ class LocalMFTCollector(_LocalMFTBase):
             hash_skipped = False
 
             if stat.st_size <= MAX_HASH_SIZE:
-                md5_hash = hashlib.md5()
+                md5_hash = hashlib.md5(usedforsecurity=False)
                 sha256_hash = hashlib.sha256()
                 # Use exclusive create to prevent race conditions
                 try:
@@ -6334,7 +6395,7 @@ class ArtifactCollector:
                 # $MFT (inode 0) — streaming to avoid loading entire MFT into memory
                 logger.debug("[ForensicDisk] Collecting $MFT (inode 0)...")
                 output_file = artifact_dir / '$MFT'
-                md5_hash = hashlib.md5()
+                md5_hash = hashlib.md5(usedforsecurity=False)
                 sha256_hash = hashlib.sha256()
                 total_size = 0
 
@@ -6412,7 +6473,7 @@ class ArtifactCollector:
                         'name': '$UsnJrnl:$J',
                         'original_path': '$Extend/$UsnJrnl:$J',
                         'size': len(data),
-                        'hash_md5': hashlib.md5(data).hexdigest(),
+                        'hash_md5': hashlib.md5(data, usedforsecurity=False).hexdigest(),
                         'hash_sha256': hashlib.sha256(data).hexdigest(),
                         'collection_method': 'forensic_disk_accessor',
                         'ads_stream': '$J',
@@ -6429,7 +6490,7 @@ class ArtifactCollector:
                 # $LogFile (inode 2) — streaming to avoid loading entire LogFile into memory
                 logger.debug("[ForensicDisk] Collecting $LogFile (inode 2)...")
                 output_file = artifact_dir / '$LogFile'
-                md5_hash = hashlib.md5()
+                md5_hash = hashlib.md5(usedforsecurity=False)
                 sha256_hash = hashlib.sha256()
                 total_size = 0
 
@@ -6556,7 +6617,7 @@ class ArtifactCollector:
                                 'parent_file': filename,
                                 'parent_path': full_path,
                                 'size': len(ads_data),
-                                'hash_md5': hashlib.md5(ads_data).hexdigest(),
+                                'hash_md5': hashlib.md5(ads_data, usedforsecurity=False).hexdigest(),
                                 'hash_sha256': hashlib.sha256(ads_data).hexdigest(),
                                 'collection_method': 'forensic_disk_accessor',
                                 'ads_stream': ads_stream_name,
@@ -6646,7 +6707,7 @@ class ArtifactCollector:
                     'name': filename,
                     'original_path': file_path,
                     'size': len(data),
-                    'hash_md5': hashlib.md5(data).hexdigest(),
+                    'hash_md5': hashlib.md5(data, usedforsecurity=False).hexdigest(),
                     'hash_sha256': hashlib.sha256(data).hexdigest(),
                     'collection_method': 'forensic_disk_accessor',
                     'collected_at': datetime.now().isoformat(),
@@ -6821,7 +6882,7 @@ class ArtifactCollector:
                             'name': filename,
                             'original_path': entry.full_path,
                             'size': len(data),
-                            'hash_md5': hashlib.md5(data).hexdigest(),
+                            'hash_md5': hashlib.md5(data, usedforsecurity=False).hexdigest(),
                             'hash_sha256': hashlib.sha256(data).hexdigest(),
                             'collection_method': 'forensic_disk_accessor',
                             'mft_inode': entry.inode,
@@ -7946,7 +8007,7 @@ class ArtifactCollector:
 
         if file_size <= MAX_HASH_SIZE:
             sha256 = hashlib.sha256()
-            md5 = hashlib.md5()
+            md5 = hashlib.md5(usedforsecurity=False)
             with open(dst_path, 'rb') as f:
                 for chunk in iter(lambda: f.read(65536), b''):
                     sha256.update(chunk)

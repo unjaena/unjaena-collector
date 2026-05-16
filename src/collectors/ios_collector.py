@@ -1523,7 +1523,7 @@ class iOSBackupParser:
         """Get file hash from Manifest.plist (iOS 9 and earlier)"""
         # Calculate the hash directly: SHA1(domain-relativePath)
         full_path = f"{domain}-{relative_path}"
-        return hashlib.sha1(full_path.encode()).hexdigest()
+        return hashlib.sha1(full_path.encode(), usedforsecurity=False).hexdigest()
 
     def list_files(
         self,
@@ -3029,7 +3029,7 @@ class iOSCollector:
 
                 # Prevent filename collisions from different subdirectories
                 # e.g. Documents/abc/DB/MM.sqlite vs Documents/def/DB/MM.sqlite
-                path_hash = hashlib.md5(rel_path.encode()).hexdigest()[:8]
+                path_hash = hashlib.sha256(rel_path.encode()).hexdigest()[:12]
                 unique_filename = f"{path_hash}_{filename}"
                 local_path = domain_dir / unique_filename
 

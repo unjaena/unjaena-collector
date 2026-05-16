@@ -1032,6 +1032,23 @@ LINUX_ARTIFACT_TYPES = {
         'mitre_attack': 'T1072',
         'kill_chain_phase': 'execution',
     },
+    'linux_flatpak': {
+        'name': 'Flatpak Application State',
+        'description': 'Flatpak app manifests, sandbox metadata, user app data, and per-app configuration',
+        'paths': [
+            '/var/lib/flatpak/app/*/*/*/metadata',
+            '/var/lib/flatpak/appstream/*',
+            '/var/lib/flatpak/exports/share/applications/*.desktop',
+            '/home/*/.local/share/flatpak/app/*/*/*/metadata',
+            '/home/*/.local/share/flatpak/exports/share/applications/*.desktop',
+            '/home/*/.var/app/*/.flatpak-info',
+            '/home/*/.var/app/*/config/*',
+            '/home/*/.var/app/*/data/*',
+        ],
+        'forensic_value': 'medium',
+        'mitre_attack': 'T1072',
+        'kill_chain_phase': 'execution',
+    },
 
     # ==========================================================================
     # System Logs - Additional (P1)

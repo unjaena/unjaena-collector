@@ -17,11 +17,23 @@ at authentication time and never persisted to disk.
 """
 import hashlib
 import hmac
+import json
 import os
 import time
+from typing import Any
 from typing import Dict, Optional
 
 _DEFAULT_HKDF_INFO = b"collector-request-signing-v1"
+
+
+def canonical_json_bytes(payload: Any) -> bytes:
+    """Serialize JSON payloads in the exact form used for request signing."""
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 def _hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:

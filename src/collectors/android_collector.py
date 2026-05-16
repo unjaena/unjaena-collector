@@ -1881,7 +1881,7 @@ class AndroidCollector:
 
         if use_su:
             # For root-protected files, copy to temp location first
-            temp_path = f'/data/local/tmp/forensic_temp_{hashlib.md5(remote_path.encode()).hexdigest()[:8]}'
+            temp_path = f'/data/local/tmp/forensic_temp_{hashlib.sha256(remote_path.encode()).hexdigest()[:12]}'
             self._adb_shell(f'cp {shlex.quote(remote_path)} {shlex.quote(temp_path)}', use_su=True)
             self._adb_shell(f'chmod 644 {shlex.quote(temp_path)}', use_su=True)
             actual_remote_path = temp_path
@@ -2872,7 +2872,7 @@ class AndroidCollector:
                 continue
 
             # Use run-as to copy file to a temp location accessible without root
-            temp_name = f'forensic_{hashlib.md5(db_rel_path.encode()).hexdigest()[:8]}'
+            temp_name = f'forensic_{hashlib.sha256(db_rel_path.encode()).hexdigest()[:12]}'
             temp_path = f'/data/local/tmp/{temp_name}'
 
             # Copy file via run-as
@@ -4442,8 +4442,8 @@ class AndroidCollector:
     def _get_supported_packages(self) -> List[str]:
         """Dynamically fetch supported app package list from server."""
         try:
-            import urllib.request
-            import urllib.error
+            import requests
+            from core.token_validator import _get_ssl_verify
 
             server_url = getattr(self, '_server_url', '')
             collection_token = getattr(self, '_collection_token', '')
@@ -4452,15 +4452,18 @@ class AndroidCollector:
                 return []
 
             url = f'{server_url}/api/v1/collector/scraping/supported-apps'
-            _debug_print(f'[SCRAPE] Supported apps GET → {url}')
-            req = urllib.request.Request(url, headers={
-                'Authorization': f'Bearer {collection_token}',
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-                packages = data.get('supported_packages', [])
-                _debug_print(f'[SCRAPE] Supported packages from server: {len(packages)}')
-                return packages
+            _debug_print(f'[SCRAPE] Supported apps GET {url}')
+            resp = requests.get(
+                url,
+                headers={'Authorization': f'Bearer {collection_token}'},
+                timeout=10,
+                verify=_get_ssl_verify(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            packages = data.get('supported_packages', [])
+            _debug_print(f'[SCRAPE] Supported packages from server: {len(packages)}')
+            return packages
         except Exception as e:
             _debug_print(f'[SCRAPE] Failed to get supported apps: {e}')
             return []
@@ -4475,8 +4478,8 @@ class AndroidCollector:
         Returns session info with available_apps.
         """
         try:
-            import urllib.request
-            import urllib.error
+            import requests
+            from core.token_validator import _get_ssl_verify
 
             server_url = getattr(self, '_server_url', None)
             collection_token = getattr(self, '_collection_token', None)
@@ -4521,19 +4524,19 @@ class AndroidCollector:
             }).encode()
 
             url = f'{server_url}/api/v1/collector/scraping/session'
-            _debug_print(f'[SCRAPE] Session POST → {url}')
-            req = urllib.request.Request(
+            _debug_print(f'[SCRAPE] Session POST {url}')
+            resp = requests.post(
                 url,
                 data=body,
                 headers={
                     'Content-Type': 'application/json',
                     'Authorization': f'Bearer {collection_token}',
                 },
-                method='POST',
+                timeout=30,
+                verify=_get_ssl_verify(),
             )
-
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read().decode())
+            resp.raise_for_status()
+            result = resp.json()
 
             # Store device_fingerprint for later use by Agent
             self._device_fingerprint = device_fingerprint

@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
-from core.token_validator import TokenValidator
+from core.token_validator import TokenValidator, _get_ssl_verify
 from core.encryptor import FileHashCalculator
 from core.uploader import DirectUploader, RealTimeUploader
 from core.request_signer import RequestSigner
@@ -304,6 +304,10 @@ SERVER_TO_COLLECTOR_MAPPING = {
 
     # === P0 new artifacts - high forensic value ===
     'activities_cache': 'activities_cache',
+    'windows_notification_db': 'windows_notification_db',
+    'windows_phone_link': 'windows_phone_link',
+    'windows_search_index': 'windows_search_index',
+    'windows_wsl': 'windows_wsl',
     'pca_launch': 'pca_launch',
     'etl_log': 'etl_log',
     'wmi_subscription': 'wmi_subscription',
@@ -506,6 +510,9 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'macos_signal': 'macos_signal',
     'macos_keychain_data': 'macos_keychain_data',
     'macos_process_memory': 'macos_process_memory',
+    'macos_shortcuts': 'macos_shortcuts',
+    'macos_screentime': 'macos_screentime',
+    'linux_flatpak': 'linux_flatpak',
 }
 
 
@@ -514,6 +521,8 @@ PRIVACY_INCIDENT_PRESET = {
     'eventlog', 'registry', 'amcache', 'prefetch', 'userassist',
     'browser', 'recent', 'jumplist', 'scheduled_task', 'usb',
     'srum', 'mft', 'usn_journal', 'email', 'document', 'recycle_bin',
+    'windows_notification_db', 'windows_phone_link', 'windows_search_index',
+    'windows_wsl',
     # PC messenger / remote access / cloud apps
     'windows_kakaotalk', 'windows_telegram', 'windows_whatsapp',
     'windows_wechat', 'windows_line', 'windows_discord',
@@ -531,6 +540,7 @@ PRIVACY_INCIDENT_PRESET = {
     'linux_trash', 'linux_firefox', 'linux_chrome', 'linux_thunderbird',
     'linux_networkmanager', 'macos_unified_log', 'macos_fseventsd',
     'macos_knowledgec', 'macos_tcc_db', 'macos_keychain',
+    'linux_flatpak', 'macos_shortcuts', 'macos_screentime',
 }
 
 
@@ -3095,6 +3105,7 @@ class CollectorWindow(QMainWindow):
                 abort_url,
                 headers=abort_headers,
                 timeout=5,
+                verify=_get_ssl_verify(),
             )
 
             if response.status_code == 200:
@@ -3450,6 +3461,7 @@ class CollectionWorker(QThread):
                             'collection_token': self.collection_token,
                         },
                         timeout=10,
+                        verify=_get_ssl_verify(),
                     )
                     if resp.ok:
                         data = resp.json()
@@ -3511,7 +3523,6 @@ class CollectionWorker(QThread):
             abort_headers = {
                 'X-Collection-Token': self.collection_token,
                 'X-Session-ID': self.session_id,
-                'Content-Type': 'application/json',
             }
             if self.request_signer:
                 abort_headers.update(self.request_signer.sign_request(
@@ -3520,8 +3531,8 @@ class CollectionWorker(QThread):
             requests.post(
                 abort_url,
                 headers=abort_headers,
-                json={'reason': 'collector_closed'},
-                timeout=5  # Quick timeout (don't wait during shutdown)
+                timeout=5,  # Quick timeout (don't wait during shutdown)
+                verify=_get_ssl_verify(),
             )
         except Exception:
             pass  # Ignore failure (shutting down)
@@ -3612,9 +3623,24 @@ class CollectionWorker(QThread):
                     return None
 
                 collector = E01ArtifactCollector(file_path, output_dir)
+                if getattr(collector, '_accessor', None) is None:
+                    error = getattr(collector, 'load_error', '') or 'Unsupported or invalid disk image'
+                    self.log_message.emit(f"Disk image open failed: {error}", True)
+                    if hasattr(collector, 'close'):
+                        collector.close()
+                    return None
 
                 # Auto-select best partition by priority: NTFS > APFS > HFS+ > ext4 > largest
                 partitions = collector.list_partitions()
+                if not partitions:
+                    self.log_message.emit(
+                        f"No supported partitions or volume filesystem found: {device.display_name}",
+                        True,
+                    )
+                    if hasattr(collector, 'close'):
+                        collector.close()
+                    return None
+
                 selected = False
                 priority_fs = ['NTFS', 'APFS', 'HFS+', 'HFSX', 'HFS', 'ext4', 'ext3', 'ext2', 'XFS', 'Btrfs', 'ZFS', 'UFS', 'FAT32', 'FAT16', 'FAT12', 'exFAT']
                 for target_fs in priority_fs:
@@ -3628,10 +3654,13 @@ class CollectionWorker(QThread):
                         break
 
                 if not selected and partitions:
-                    # Select largest partition if no known FS found
-                    largest = max(partitions, key=lambda p: getattr(p, 'size', 0))
-                    collector.select_partition(largest.index)
-                    self.log_message.emit(f"Largest partition selected: {getattr(largest, 'filesystem', 'Unknown')} ({getattr(largest, 'size_display', '')})", False)
+                    self.log_message.emit(
+                        f"No supported filesystem partition found: {device.display_name}",
+                        True,
+                    )
+                    if hasattr(collector, 'close'):
+                        collector.close()
+                    return None
 
                 return collector
 
@@ -3812,7 +3841,11 @@ class CollectionWorker(QThread):
 
         if self.config.get('dev_mode', False) and not getattr(__import__('sys'), 'frozen', False):
             # Dev: DEBUG log in TEMP directory (only in source mode, never in release builds)
-            _collector_log_path = os.path.join(os.environ.get('TEMP', '/tmp'), 'collector_debug.log')
+            import tempfile
+            _collector_log_path = os.path.join(
+                os.environ.get('TEMP') or tempfile.gettempdir(),
+                'collector_debug.log',
+            )
             _log_level = logging.DEBUG
         else:
             # Prod: INFO+ log in user home directory with rotation
@@ -4351,11 +4384,12 @@ class CollectionWorker(QThread):
                     complete_response = requests.post(
                         complete_url,
                         headers=complete_headers,
-                        json={'trigger_analysis': True},
-                        timeout=30
+                        params={'trigger_analysis': 'true'},
+                        timeout=30,
+                        verify=_get_ssl_verify(),
                     )
                     if complete_response.ok:
-                        self.log_message.emit("✓ Collection session completion signal sent (embedding started)", False)
+                        self.log_message.emit("✓ Collection session completion signal sent", False)
                     else:
                         self.log_message.emit(f"⚠ Session completion signal failed: {complete_response.status_code}", True)
                 except Exception as e:

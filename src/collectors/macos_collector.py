@@ -1118,7 +1118,7 @@ class macOSCollector:
         extraction is performed here.
 
         Args:
-            output_dir: Directory for dump files (default: /tmp)
+            output_dir: Directory for dump files. Defaults to the platform temp directory.
             target_processes: Dict of {process_name: output_label}
                              (default: MEMDUMP_TARGET_PROCESSES)
 
@@ -1132,7 +1132,8 @@ class macOSCollector:
         if target_processes is None:
             target_processes = self.MEMDUMP_TARGET_PROCESSES
 
-        dump_dir = output_dir or '/tmp'
+        import tempfile
+        dump_dir = output_dir or tempfile.gettempdir()
         results = []
 
         for process_name, output_label in target_processes.items():

@@ -159,6 +159,34 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'category': 'user_activity',
         'os_type': 'macos',
     },
+    'macos_shortcuts': {
+        'paths': [
+            '/Users/*/Library/Shortcuts/*',
+            '/Users/*/Library/Containers/com.apple.shortcuts/Data/Library/Shortcuts/*',
+            '/Users/*/Library/Group Containers/group.is.workflow.my.workflows/*',
+            '/Users/*/Library/Group Containers/group.com.apple.shortcuts/*',
+            '/private/var/mobile/Library/Shortcuts/*',
+        ],
+        'description': 'Shortcuts automation library, workflow metadata, and automation state',
+        'forensic_value': 'high',
+        'category': 'user_activity',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
+    'macos_screentime': {
+        'paths': [
+            '/Users/*/Library/Application Support/Knowledge/knowledgeC.db',
+            '/Users/*/Library/Application Support/com.apple.ScreenTimeAgent/*',
+            '/Users/*/Library/Preferences/com.apple.ScreenTimeAgent.plist',
+            '/Users/*/Library/Preferences/com.apple.ScreenTime.plist',
+            '/private/var/db/CoreDuet/Knowledge/knowledgeC.db',
+        ],
+        'description': 'Screen Time app usage, device activity, limits, and local policy state',
+        'forensic_value': 'high',
+        'category': 'user_activity',
+        'os_type': 'macos',
+        'path_optional': True,
+    },
 
     'macos_trash': {
         'paths': [
@@ -1713,7 +1741,7 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'forensic_value': 'critical',
         'category': 'ai_activity',
         'os_type': 'macos',
-        'note': 'Auto-redacted in embedding (Anthropic / OpenAI / GitHub / AWS / Google patterns).',
+        'note': 'Sensitive token patterns are treated as protected evidence metadata.',
     },
     'ai_model_files': {
         'paths': [

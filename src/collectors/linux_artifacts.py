@@ -1312,6 +1312,22 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'category': 'package_manager',
         'os_type': 'linux',
     },
+    'linux_flatpak': {
+        'paths': [
+            '/var/lib/flatpak/app/*/*/*/metadata',
+            '/var/lib/flatpak/appstream/*',
+            '/var/lib/flatpak/exports/share/applications/*.desktop',
+            '/home/*/.local/share/flatpak/app/*/*/*/metadata',
+            '/home/*/.local/share/flatpak/exports/share/applications/*.desktop',
+            '/home/*/.var/app/*/.flatpak-info',
+            '/home/*/.var/app/*/config/*',
+            '/home/*/.var/app/*/data/*',
+        ],
+        'description': 'Flatpak app manifests, sandbox metadata, user app data, and per-app configuration',
+        'forensic_value': 'medium',
+        'category': 'applications',
+        'os_type': 'linux',
+    },
 
     'linux_dmesg': {
         'paths': [
@@ -1774,19 +1790,18 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'category': 'ai_activity',
         'os_type': 'linux',
     },
-    # [2026-05-07 Sweep #10 V2/V3/V4] ai_chrome_gemini_nano Linux glob.
-    # V4 hot-fix (Codex review-gate Q_D): cover all major Linux package
-    # formats. Chrome/Chromium ships via 4 install systems on Linux:
-    #   1. Native APT/RPM    → ~/.config/google-chrome[-channel]/
-    #   2. Native Chromium   → ~/.config/chromium/
-    #   3. Snap Chromium     → ~/snap/chromium/current/.config/chromium/
-    #   4. Flatpak Chrome    → ~/.var/app/com.google.Chrome/config/google-chrome/
-    #   5. Flatpak Chromium  → ~/.var/app/org.chromium.Chromium/config/chromium/
+    # Chrome/Chromium ships through multiple Linux package systems. Each one
+    # isolates user data under a different profile root.
+    #   1. Native APT/RPM: ~/.config/google-chrome[-channel]/
+    #   2. Native Chromium: ~/.config/chromium/
+    #   3. Snap Chromium: ~/snap/chromium/current/.config/chromium/
+    #   4. Flatpak Chrome: ~/.var/app/com.google.Chrome/config/google-chrome/
+    #   5. Flatpak Chromium: ~/.var/app/org.chromium.Chromium/config/chromium/
     # Each isolates user data per-package; missing any of these means
     # the on-device AI artifact is invisible on that machine.
     'ai_chrome_gemini_nano': {
         'paths': [
-            # Native APT/RPM Chrome — 4 channel variants
+            # Native APT/RPM Chrome, including channel variants
             '/home/*/.config/google-chrome/*/OptimizationGuide*',
             '/home/*/.config/google-chrome/*/optimization_guide_*',
             '/home/*/.config/google-chrome-beta/*/OptimizationGuide*',

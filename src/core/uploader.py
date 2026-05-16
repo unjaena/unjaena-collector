@@ -8,7 +8,7 @@ Direct upload to cloud storage via presigned URLs
 [2026-04-27 Phase 4] Bidirectional WebSocket: collector now also RECEIVES
 control messages from the server (cancel, terminate, snapshot, etc.) and
 sends a periodic heartbeat. The receive loop is non-blocking with respect
-to upload work — control messages are dispatched onto self._cancelled and
+to upload work; control messages are dispatched onto self._cancelled and
 self._control_callback so the synchronous upload loop can poll them.
 """
 import asyncio
@@ -19,6 +19,7 @@ import os
 import re
 import ssl
 import sys
+import tempfile
 import threading
 import time
 
@@ -28,7 +29,15 @@ import websockets
 from pathlib import Path
 from datetime import datetime, timezone
 
-from core.token_validator import _get_ssl_verify
+try:
+    from core.token_validator import _get_ssl_verify
+    from core.request_signer import canonical_json_bytes
+except ModuleNotFoundError:
+    _src_dir = str(Path(__file__).resolve().parent.parent)
+    if _src_dir not in sys.path:
+        sys.path.insert(0, _src_dir)
+    from core.token_validator import _get_ssl_verify
+    from core.request_signer import canonical_json_bytes
 from typing import Callable, Optional
 from dataclasses import dataclass
 
@@ -184,7 +193,7 @@ class RealTimeUploader:
         self.ws = None
 
         # [2026-04-27 Phase 4] Control-protocol state
-        # Threading-safe flag — synchronous upload code reads this between chunks
+        # Thread-safe flag read by synchronous upload code between chunks.
         # to decide whether to abort. Set by _handle_server_message when server
         # sends 'cancel' or 'terminate'.
         self._cancel_event = threading.Event()
@@ -225,7 +234,7 @@ class RealTimeUploader:
           - Spawns a background receiver that dispatches server control messages
           - On any disconnect, schedules reconnect with exponential backoff
             (unless self._reconnect_stop is set by disconnect_websocket()).
-        Failure to connect is non-fatal — uploads still work over HTTP.
+        Failure to connect is non-fatal; uploads still work over HTTP.
         """
         self._reconnect_stop.clear()
         await self._connect_once()
@@ -242,7 +251,7 @@ class RealTimeUploader:
                 if getattr(sys, 'frozen', False):
                     raise RuntimeError("Insecure WebSocket (ws://) not allowed in release builds. Use wss://")
                 else:
-                    logger.warning("[WebSocket] Insecure ws:// connection — development mode only")
+                    logger.warning("[WebSocket] Insecure ws:// connection - development mode only")
 
             extra_headers = {
                 'X-Collection-Token': self.collection_token,
@@ -300,8 +309,8 @@ class RealTimeUploader:
                 try:
                     raw = await asyncio.wait_for(self.ws.recv(), timeout=WS_RECEIVE_TIMEOUT * 2)
                 except asyncio.TimeoutError:
-                    # No message for too long — likely a half-open connection. Force reconnect.
-                    logger.warning("[WebSocket] receive timeout — assuming dead, reconnecting")
+                    # No message for too long; likely a half-open connection. Force reconnect.
+                    logger.warning("[WebSocket] receive timeout - assuming dead, reconnecting")
                     try:
                         await self.ws.close()
                     except Exception:
@@ -328,7 +337,7 @@ class RealTimeUploader:
         """[Phase 4] Dispatch a single inbound server message.
 
         Server message types (see server-side api/routes/collector_ws.py):
-          - snapshot:      initial / on-reconnect state — includes cancel_flag
+          - snapshot:      initial / on-reconnect state, includes cancel_flag
           - cancel:        server-side cancel happened (web UI or auto-cleanup)
           - terminate:     hard termination (superseded, token expired, ...)
           - status:        relayed pipeline_progress envelope
@@ -373,7 +382,7 @@ class RealTimeUploader:
             self._reconnect_stop.set()
 
         elif mtype == 'status' or mtype == 'pipeline_progress':
-            # Just surface to the GUI if it cares — no protocol-level action needed.
+            # Just surface to the GUI if it cares; no protocol-level action needed.
             if self._control_callback:
                 try:
                     self._control_callback('status', msg)
@@ -410,7 +419,7 @@ class RealTimeUploader:
 
         Signals the server that we're closing cleanly so it can immediately
         release the case slot (instead of waiting for the server's idle timeout).
-        Best-effort — failure is non-fatal.
+        Best-effort; failure is non-fatal.
         """
         if not self.ws:
             return
@@ -751,12 +760,12 @@ class SyncUploader:
                         )
                     else:
                         error_text = response.text
-                        # Server paused — stop uploading
+                        # Server paused: stop uploading.
                         if response.status_code == 402:
-                            logger.warning(f"[UPLOAD] Server paused — stopping upload")
+                            logger.warning("[UPLOAD] Server paused - stopping upload")
                             return UploadResult(
                                 success=False,
-                                error="Upload paused — insufficient account balance.",
+                                error="Upload paused - insufficient account balance.",
                                 error_title="Upload Paused",
                                 error_solution="Please check your account balance on the web platform. After resolving, restart the collector to continue. Already processed files are preserved.",
                                 is_recoverable=False,
@@ -819,7 +828,7 @@ class SyncUploader:
 
 class DirectUploader:
     """
-    Direct Uploader — uploads files directly to cloud storage via presigned URLs.
+    Direct uploader for cloud storage presigned URLs.
 
     The server only issues presigned URLs and confirms completion; actual file
     transfer goes directly from client to storage, eliminating server bandwidth load.
@@ -898,12 +907,13 @@ class DirectUploader:
         max_retries = 5
         for attempt in range(1, max_retries + 1):
             try:
-                headers = self._get_auth_headers("POST", endpoint)
+                body = canonical_json_bytes(payload)
+                headers = self._get_auth_headers("POST", endpoint, body)
                 headers['Content-Type'] = 'application/json'
 
                 response = requests.post(
                     f"{self.server_url}{endpoint}",
-                    json=payload,
+                    data=body,
                     headers=headers,
                     timeout=60,
                     verify=_get_ssl_verify(),
@@ -927,7 +937,7 @@ class DirectUploader:
                     continue
 
                 if response.status_code == 409:
-                    # Session invalidated or case cancelled — do NOT retry
+                    # Session invalidated or case cancelled: do not retry.
                     detail = ""
                     try:
                         detail = response.json().get("detail", "")
@@ -940,7 +950,7 @@ class DirectUploader:
 
                 return response.json()
             except SessionCancelledError:
-                raise  # Don't retry cancelled sessions — propagate immediately
+                raise  # Do not retry cancelled sessions; propagate immediately.
             except RuntimeError:
                 if attempt < max_retries:
                     wait = attempt * 5
@@ -959,7 +969,7 @@ class DirectUploader:
         raise RuntimeError("Presigned URL request failed after all retries")
 
     def _validate_presigned_url(self, presigned_url: str) -> None:
-        """[Security] Validate presigned URL — must be HTTPS (or localhost for dev)."""
+        """Validate that a presigned URL is HTTPS, or localhost HTTP for dev."""
         from urllib.parse import urlparse
         parsed = urlparse(presigned_url)
         allowed_dev_hosts = ('127.0.0.1', 'localhost')
@@ -1011,29 +1021,20 @@ class DirectUploader:
         actual_file_size = os.path.getsize(file_path)
         total_parts = len(urls)
 
-        # Pre-read part data into memory for parallel PUT
-        parts_data = []
-        with open(file_path, 'rb') as f:
-            for idx, part_info in enumerate(urls):
-                part_number = part_info['part_number']
-                start = (part_number - 1) * part_size
-                if idx == total_parts - 1:
-                    end = actual_file_size
-                else:
-                    end = min(start + part_size, actual_file_size)
-                f.seek(start)
-                data = f.read(end - start)
-                parts_data.append((part_info, data))
-
-        def _upload_one_part(part_info, data):
+        def _upload_one_part(part_info):
             part_number = part_info['part_number']
             part_url = part_info['url']
-            chunk_size = len(data)
+            start = (part_number - 1) * part_size
+            end = actual_file_size if part_number == total_parts else min(start + part_size, actual_file_size)
+            chunk_size = max(0, end - start)
             timeout = max(120, chunk_size / (1 * 1024 * 1024) + 60)
             max_retries = 3
 
             for attempt in range(1, max_retries + 1):
                 try:
+                    with open(file_path, 'rb') as f:
+                        f.seek(start)
+                        data = f.read(chunk_size)
                     response = requests.put(
                         part_url,
                         data=data,
@@ -1062,8 +1063,8 @@ class DirectUploader:
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {}
-            for idx, (part_info, data) in enumerate(parts_data):
-                future = executor.submit(_upload_one_part, part_info, data)
+            for idx, part_info in enumerate(urls):
+                future = executor.submit(_upload_one_part, part_info)
                 futures[future] = idx
 
             for future in as_completed(futures):
@@ -1098,12 +1099,13 @@ class DirectUploader:
         max_retries = 5
         for attempt in range(1, max_retries + 1):
             try:
-                headers = self._get_auth_headers("POST", endpoint)
+                body = canonical_json_bytes(payload)
+                headers = self._get_auth_headers("POST", endpoint, body)
                 headers['Content-Type'] = 'application/json'
 
                 response = requests.post(
                     f"{self.server_url}{endpoint}",
-                    json=payload,
+                    data=body,
                     headers=headers,
                     timeout=60,
                     verify=_get_ssl_verify(),
@@ -1130,7 +1132,7 @@ class DirectUploader:
 
                 return response.json()
             except CreditPausedError:
-                raise  # Don't retry credit pause — propagate immediately
+                raise  # Do not retry credit pause; propagate immediately.
             except RuntimeError:
                 if attempt < max_retries:
                     wait = attempt * 5
@@ -1222,7 +1224,7 @@ class DirectUploader:
             is_multipart = presigned_info.get('multipart', False)
             upload_id = presigned_info.get('upload_id')
 
-            # Step 1.5: Per-Case Data Protection — protect file if server provides key
+            # Step 1.5: Per-case data protection if the server provides a key.
             encryption_key_hex = presigned_info.get('encryption_key')
             # [SECURITY] Remove key from presigned_info dict immediately to limit
             # the number of references holding sensitive key material in memory.
@@ -1231,49 +1233,35 @@ class DirectUploader:
             encrypted_path = None
 
             if encryption_key_hex:
-                # Data protection requires full plaintext in memory; skip for large files to avoid OOM
-                MAX_ENCRYPT_SIZE = 500 * 1024 * 1024  # 500MB
-                if file_size > MAX_ENCRYPT_SIZE:
-                    logger.warning(
-                        f"[DIRECT] File too large for in-memory protection ({file_size / (1024**2):.0f}MB > "
-                        f"{MAX_ENCRYPT_SIZE / (1024**2):.0f}MB), uploading without client-side protection. "
-                        f"⚠️ Evidence will be protected by TLS in transit and server-side protection at rest."
+                try:
+                    from core.secure_upload import AESGCMCipher
+                    cipher = AESGCMCipher(bytes.fromhex(encryption_key_hex))
+                    aad = file_hash.encode('utf-8')
+
+                    with tempfile.NamedTemporaryFile(
+                        prefix='collector_upload_',
+                        suffix='.enc',
+                        delete=False,
+                    ) as f:
+                        encrypted_path = f.name
+
+                    cipher.encrypt_file(file_path, encrypted_path, aad)
+                    is_encrypted = True
+                    logger.info(f"[DIRECT] File protected: {file_name} ({os.path.getsize(encrypted_path):,} bytes)")
+                except Exception as enc_err:
+                    if encrypted_path and os.path.exists(encrypted_path):
+                        try:
+                            os.remove(encrypted_path)
+                        except Exception:
+                            pass
+                    logger.error(f"[DIRECT] Data protection failed - aborting upload for evidence safety: {enc_err}")
+                    return UploadResult.from_error(
+                        f"Data protection failed for {file_name}: {enc_err}. Upload aborted to prevent unprotected evidence exposure."
                     )
-                    _pcb = getattr(self, '_progress_callback', None)
-                    if _pcb:
-                        _pcb(
-                            f"⚠️ {file_name}: Large file ({file_size / (1024**2):.0f}MB) — "
-                            f"client-side protection skipped, protected by server-side security"
-                        )
+                finally:
                     # [SECURITY] Zero out key material before releasing reference
                     _zeroize_key(encryption_key_hex)
                     del encryption_key_hex
-                else:
-                    try:
-                        from core.secure_upload import AESGCMCipher
-                        cipher = AESGCMCipher(bytes.fromhex(encryption_key_hex))
-                        with open(file_path, 'rb') as f:
-                            plaintext = f.read()
-                        aad = file_hash.encode('utf-8')
-                        encrypted_data = cipher.encrypt(plaintext, aad)
-                        del plaintext
-
-                        encrypted_path = file_path + '.enc'
-                        with open(encrypted_path, 'wb') as f:
-                            f.write(encrypted_data)
-                        del encrypted_data
-
-                        is_encrypted = True
-                        logger.info(f"[DIRECT] File protected: {file_name} ({os.path.getsize(encrypted_path):,} bytes)")
-                    except Exception as enc_err:
-                        logger.error(f"[DIRECT] Data protection failed — aborting upload for evidence safety: {enc_err}")
-                        return UploadResult.from_error(
-                            f"Data protection failed for {file_name}: {enc_err}. Upload aborted to prevent unprotected evidence exposure."
-                        )
-                    finally:
-                        # [SECURITY] Zero out key material before releasing reference
-                        _zeroize_key(encryption_key_hex)
-                        del encryption_key_hex
 
             upload_path = encrypted_path if is_encrypted else file_path
 
@@ -1302,7 +1290,7 @@ class DirectUploader:
                 original_path=original_path,
             )
 
-            logger.info(f"[DIRECT] Upload complete: {file_name} → {key}")
+            logger.info(f"[DIRECT] Upload complete: {file_name} -> {key}")
             return UploadResult(
                 success=True,
                 artifact_id=confirm_result.get('file_id'),
@@ -1326,7 +1314,7 @@ class DirectUploader:
                 os.remove(encrypted_path)
             return UploadResult(
                 success=False,
-                error="Upload paused — insufficient account balance.",
+                error="Upload paused - insufficient account balance.",
                 error_title="Upload Paused",
                 error_solution="Please check your account balance on the web platform. After resolving, restart the collector to continue. Already processed files are preserved.",
                 is_recoverable=False,
@@ -1375,7 +1363,7 @@ class DirectUploader:
             nonlocal completed_count
             if credit_paused.is_set():
                 return UploadResult(
-                    success=False, error="Upload paused — insufficient account balance.",
+                    success=False, error="Upload paused - insufficient account balance.",
                     error_title="Upload Paused",
                     error_solution="Please check your account balance on the web platform. After resolving, restart the collector to continue. Already processed files are preserved.",
                     is_recoverable=False, is_credit_paused=True,
@@ -1407,3 +1395,7 @@ class DirectUploader:
                         results[idx] = UploadResult.from_error(str(e))
 
         return results
+
+
+# Backward compatibility for integrations that imported the pre-rename class.
+R2DirectUploader = DirectUploader

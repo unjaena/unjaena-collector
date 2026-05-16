@@ -445,7 +445,7 @@ class MFTCollector:
 
             # Calculate hashes
             sha256 = hashlib.sha256(content).hexdigest()
-            md5 = hashlib.md5(content).hexdigest()
+            md5 = hashlib.md5(content, usedforsecurity=False).hexdigest()
 
             # Write content
             with open(output_path, 'wb') as out_file:
@@ -498,7 +498,7 @@ class MFTCollector:
                 output_path = str(self.output_dir / "$MFT")
 
             sha256 = hashlib.sha256()
-            md5 = hashlib.md5()
+            md5 = hashlib.md5(usedforsecurity=False)
             bytes_written = 0
 
             with open(output_path, 'wb') as out_file:
@@ -546,7 +546,7 @@ class MFTCollector:
             # Read the $J ADS via ForensicDiskAccessor
             # The USN Journal inode is typically at MFT entry for $Extend/$UsnJrnl
             sha256 = hashlib.sha256()
-            md5 = hashlib.md5()
+            md5 = hashlib.md5(usedforsecurity=False)
             bytes_written = 0
 
             try:
@@ -614,7 +614,7 @@ class MFTCollector:
                 output_path = str(self.output_dir / "$LogFile")
 
             sha256 = hashlib.sha256()
-            md5 = hashlib.md5()
+            md5 = hashlib.md5(usedforsecurity=False)
             bytes_written = 0
 
             with open(output_path, 'wb') as out_file:

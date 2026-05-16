@@ -273,13 +273,16 @@ class E01ArtifactCollector(BaseMFTCollector):
         self._selected_partition: Optional[int] = None
         self._partitions: List[PartitionInfo] = []
         self._user_folders: List[str] = []
+        self._accessor = None
+        self.load_error: str = ""
 
         self._initialize_accessor()
 
     def _initialize_accessor(self) -> bool:
         """Initialize ForensicDiskAccessor"""
         if not FORENSIC_DISK_AVAILABLE or ForensicDiskAccessor is None:
-            logger.error("ForensicDiskAccessor not available")
+            self.load_error = "ForensicDiskAccessor not available"
+            logger.error(self.load_error)
             return False
 
         try:
@@ -287,7 +290,8 @@ class E01ArtifactCollector(BaseMFTCollector):
             logger.info(f"Disk image loaded: {self.e01_path}")
             return True
         except Exception as e:
-            logger.error(f"Failed to load disk image: {e}")
+            self.load_error = f"Failed to load disk image: {e}"
+            logger.error(self.load_error)
             self._accessor = None
             return False
 
@@ -331,6 +335,11 @@ class E01ArtifactCollector(BaseMFTCollector):
 
         try:
             self._accessor.select_partition(index)
+            if (
+                getattr(self._accessor, '_extractor', None) is None
+                and getattr(self._accessor, '_dissect_fs', None) is None
+            ):
+                raise RuntimeError("Unsupported or unreadable filesystem")
             self._selected_partition = index
             logger.info(f"Selected partition {index}")
 
@@ -367,31 +376,34 @@ class E01ArtifactCollector(BaseMFTCollector):
         return None
 
     def _discover_user_folders(self) -> None:
-        """Discover user directories within Users folder"""
+        """Discover user profile directories."""
         if not self._accessor:
             return
 
         self._user_folders = []
-        system_folders = {'public', 'default', 'default user', 'all users', 'desktop.ini'}
+        system_folders = {
+            'public', 'default', 'default user', 'all users', 'desktop.ini',
+            'localservice', 'networkservice',
+        }
 
         try:
-            # Find Users directory
-            users_inode = self._accessor.resolve_path('/Users')
-            if users_inode is None:
-                users_inode = self._accessor.resolve_path('/users')
+            # Vista+ uses "Users"; Windows XP uses "Documents and Settings".
+            profile_roots = ['/Users', '/users', '/Documents and Settings', '/documents and settings']
+            for profile_root in profile_roots:
+                entries = self._accessor.list_directory(profile_root)
+                if not entries:
+                    continue
 
-            if users_inode is None:
-                logger.warning("Users directory not found")
+                for entry in entries:
+                    name = entry.filename if hasattr(entry, 'filename') else str(entry)
+                    is_dir = entry.is_directory if hasattr(entry, 'is_directory') else False
+
+                    if is_dir and name.lower() not in system_folders and name not in self._user_folders:
+                        self._user_folders.append(name)
+
+            if not self._user_folders:
+                logger.debug("User profile directories not found")
                 return
-
-            # List user folders
-            entries = self._accessor.list_directory(users_inode)
-            for entry in entries:
-                name = entry.filename if hasattr(entry, 'filename') else str(entry)
-                is_dir = entry.is_directory if hasattr(entry, 'is_directory') else False
-
-                if is_dir and name.lower() not in system_folders:
-                    self._user_folders.append(name)
 
             logger.info(f"Found {len(self._user_folders)} user folders: {self._user_folders}")
 
@@ -444,6 +456,11 @@ class E01ArtifactCollector(BaseMFTCollector):
         _linux_fs = ('ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'zfs')
         _macos_fs = ('apfs', 'hfs', 'hfs+', 'hfsx')
         _windows_fs = ('ntfs', 'fat32', 'fat16', 'fat12', 'exfat')
+
+        mft_filter = ARTIFACT_MFT_FILTERS.get(artifact_type)
+        if mft_filter and 'special' in mft_filter and fs_type != 'ntfs':
+            logger.debug(f"Skipping {artifact_type} (NTFS-only special artifact on {fs_type})")
+            return
 
         # OS-agnostic artifacts that can exist on any filesystem
         _generic_artifacts = (

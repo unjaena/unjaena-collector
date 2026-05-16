@@ -734,49 +734,58 @@ class FileContentExtractor:
                     entry_data = self._apply_fixup(entry_data)
                 return entry_data
 
-        # Slow path: per-entry read with readahead buffer
-        entries_per_cluster = self.cluster_size // self.mft_record_size
-        target_entry = entry_number
+        stream_offset = entry_number * self.mft_record_size
+        entry_data = self._read_mft_stream(stream_offset, self.mft_record_size)
+        if len(entry_data) < self.mft_record_size:
+            raise FilesystemError(f"MFT entry {entry_number} not found in data runs")
 
-        # Find entry position following data runs
+        if entry_data[:4] == b'FILE':
+            entry_data = self._apply_fixup(entry_data)
+
+        return entry_data
+
+    def _read_mft_stream(self, stream_offset: int, size: int) -> bytes:
+        """Read bytes from the logical $MFT stream across cluster runs."""
+        if size <= 0:
+            return b''
+
+        result = bytearray()
+        current_stream_offset = 0
+        target_end = stream_offset + size
+
         for run in self._mft_runs:
-            if run.is_sparse:
+            run_size = run.length * self.cluster_size
+            run_start = current_stream_offset
+            run_end = run_start + run_size
+
+            if target_end <= run_start:
+                break
+            if stream_offset >= run_end:
+                current_stream_offset = run_end
                 continue
 
-            entries_in_run = run.length * entries_per_cluster
+            offset_in_run = max(0, stream_offset - run_start)
+            bytes_from_run = min(
+                run_size - offset_in_run,
+                size - len(result),
+            )
 
-            if target_entry < entries_in_run:
-                cluster_offset = target_entry // entries_per_cluster
-                entry_in_cluster = target_entry % entries_per_cluster
+            if run.is_sparse:
+                result.extend(b'\x00' * bytes_from_run)
+            else:
+                disk_offset = (
+                    self.partition_offset
+                    + (run.lcn * self.cluster_size)
+                    + offset_in_run
+                )
+                result.extend(self.disk.read(disk_offset, bytes_from_run))
 
-                disk_offset = self.partition_offset + ((run.lcn + cluster_offset) * self.cluster_size)
-                disk_offset += entry_in_cluster * self.mft_record_size
+            if len(result) >= size:
+                break
 
-                # Check read-ahead buffer
-                if (self._mft_buf_offset >= 0 and
-                        disk_offset >= self._mft_buf_offset and
-                        disk_offset + self.mft_record_size <= self._mft_buf_offset + len(self._mft_buf)):
-                    buf_pos = disk_offset - self._mft_buf_offset
-                    entry_data = self._mft_buf[buf_pos:buf_pos + self.mft_record_size]
-                else:
-                    # Read ahead: multiple entries at once within this run
-                    remaining_in_run = entries_in_run - target_entry
-                    readahead_count = min(remaining_in_run, self._mft_readahead_entries)
-                    readahead_bytes = readahead_count * self.mft_record_size
+            current_stream_offset = run_end
 
-                    self._mft_buf = self.disk.read(disk_offset, readahead_bytes)
-                    self._mft_buf_offset = disk_offset
-                    entry_data = self._mft_buf[:self.mft_record_size]
-
-                # Apply fixup
-                if entry_data[:4] == b'FILE':
-                    entry_data = self._apply_fixup(entry_data)
-
-                return entry_data
-
-            target_entry -= entries_in_run
-
-        raise FilesystemError(f"MFT entry {entry_number} not found in data runs")
+        return bytes(result)
 
     def _parse_data_attribute(
         self,

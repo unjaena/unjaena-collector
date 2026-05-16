@@ -614,7 +614,7 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
             size_bytes = self._get_e01_disk_size(path) or size_bytes
 
         # Generate unique ID
-        device_id = f"image_{hashlib.md5(str(path).encode()).hexdigest()[:12]}"
+        device_id = f"image_{hashlib.sha256(str(path).encode()).hexdigest()[:12]}"
 
         # [New] OS type detection
         detected_os, filesystem_type = self._detect_image_os(path, device_type)
@@ -710,6 +710,37 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
             return True
         return False
 
+    def _get_e01_disk_size(self, path: Path) -> Optional[int]:
+        """Get actual disk size from E01 image"""
+        try:
+            from collectors.forensic_disk import E01DiskBackend
+            with E01DiskBackend(str(path)) as backend:
+                disk_info = backend.get_disk_info()
+                return disk_info.total_size
+        except Exception as e:
+            logger.debug(f"Could not get E01 disk size: {e}")
+            return None
+
+    def _find_e01_segments(self, first_segment: Path) -> List[str]:
+        """Find E01 segment files"""
+        segments = [str(first_segment)]
+
+        # E01 -> E02, E03, ... or Ex01 -> Ex02, Ex03, ...
+        base = first_segment.stem
+        parent = first_segment.parent
+
+        # E01 format (E01, E02, ... E99, EAA, EAB, ...)
+        if first_segment.suffix.lower() in ('.e01', '.ex01'):
+            for i in range(2, 100):
+                suffix = f".E{i:02d}" if first_segment.suffix.startswith('.E') else f".e{i:02d}"
+                segment = parent / f"{base}{suffix}"
+                if segment.exists():
+                    segments.append(str(segment))
+                else:
+                    break
+
+        return segments
+
 
 class MobileFFSBundleEnumerator(BaseDeviceEnumerator):
     """Mobile FFS bundle enumerator (Cellebrite UFED CLBX zip)."""
@@ -796,37 +827,6 @@ class MobileFFSBundleEnumerator(BaseDeviceEnumerator):
             logger.info(f"Unregistered mobile FFS bundle: {device_id}")
             return True
         return False
-
-    def _get_e01_disk_size(self, path: Path) -> Optional[int]:
-        """Get actual disk size from E01 image"""
-        try:
-            from collectors.forensic_disk import E01DiskBackend
-            with E01DiskBackend(str(path)) as backend:
-                disk_info = backend.get_disk_info()
-                return disk_info.total_size
-        except Exception as e:
-            logger.debug(f"Could not get E01 disk size: {e}")
-            return None
-
-    def _find_e01_segments(self, first_segment: Path) -> List[str]:
-        """Find E01 segment files"""
-        segments = [str(first_segment)]
-
-        # E01 -> E02, E03, ... or Ex01 -> Ex02, Ex03, ...
-        base = first_segment.stem
-        parent = first_segment.parent
-
-        # E01 format (E01, E02, ... E99, EAA, EAB, ...)
-        if first_segment.suffix.lower() in ('.e01', '.ex01'):
-            for i in range(2, 100):
-                suffix = f".E{i:02d}" if first_segment.suffix.startswith('.E') else f".e{i:02d}"
-                segment = parent / f"{base}{suffix}"
-                if segment.exists():
-                    segments.append(str(segment))
-                else:
-                    break
-
-        return segments
 
 
 # =============================================================================
