@@ -945,6 +945,21 @@ class BaseMFTCollector(ABC):
         if 'include_deleted' in kwargs:
             mft_filter['include_deleted'] = kwargs['include_deleted']
         source = self._get_source_description()
+
+        # USB/removable images often use FAT/exFAT and store user files directly
+        # at the volume root. Profile-scoped path filters are too narrow there.
+        fs_type = (getattr(self._accessor, '_dissect_fs_type', '') or '').lower()
+        if fs_type in {'fat12', 'fat16', 'fat32', 'exfat'} and artifact_type in {
+            'document', 'email', 'image', 'video',
+        }:
+            if artifact_type == 'document':
+                extensions = set(mft_filter.get('extensions') or set())
+                extensions.update({'.txt', '.csv', '.rtf'})
+                mft_filter['extensions'] = extensions
+            if mft_filter.get('extensions'):
+                mft_filter['full_disk_scan'] = True
+                mft_filter['path_optional'] = True
+
         logger.info(f"[{source}] Collecting {artifact_type}, filter={mft_filter}")
 
         # Per-artifact output directory
@@ -1273,6 +1288,13 @@ class BaseMFTCollector(ABC):
 
                     file_counter += 1
                     filename = entry.filename if hasattr(entry, 'filename') else str(entry)
+                    full_path = entry.full_path if hasattr(entry, 'full_path') else ""
+                    full_path_lower = full_path.lower().replace('\\', '/') if full_path else ""
+                    path_name_lower = full_path_lower.rsplit('/', 1)[-1] if full_path_lower else filename.lower()
+                    if artifact_type in {'document', 'email', 'image', 'video'} and (
+                        filename.lower().startswith('._') or path_name_lower.startswith('._')
+                    ):
+                        continue
                     if file_counter % 500 == 0:
                         logger.debug(f"[PROGRESS] {artifact_type}: Processing file #{file_counter} - {filename}")
 
@@ -1288,6 +1310,11 @@ class BaseMFTCollector(ABC):
             full_path_lower = full_path.lower().replace('\\', '/') if full_path else ""
 
             if not include_deleted and getattr(entry, 'is_deleted', False):
+                continue
+            path_name_lower = full_path_lower.rsplit('/', 1)[-1] if full_path_lower else filename_lower
+            if artifact_type in {'document', 'email', 'image', 'video'} and (
+                filename_lower.startswith('._') or path_name_lower.startswith('._')
+            ):
                 continue
 
             matched = False
@@ -1408,8 +1435,30 @@ class BaseMFTCollector(ABC):
             start_time = time.time()
             last_chunk_time = start_time
 
+            # Dissect-backed filesystems such as FAT/ext/APFS do not always
+            # support stable inode lookup. Prefer catalog paths when present.
+            if getattr(self._accessor, '_dissect_fs', None) is not None and full_path:
+                try:
+                    logger.debug(f"[EXTRACT START] {filename} (path={full_path}, size={file_size})")
+                    with open(output_file, 'wb') as f:
+                        for chunk in self._accessor.stream_file(full_path):
+                            current_time = time.time()
+                            if current_time - start_time > FILE_TIMEOUT:
+                                logger.debug(f"[TIMEOUT] File extraction timeout ({FILE_TIMEOUT}s): {filename}")
+                                break
+
+                            if chunk:
+                                f.write(chunk)
+                                md5_hash.update(chunk)
+                                sha256_hash.update(chunk)
+                                total_size += len(chunk)
+                                has_data = True
+                                last_chunk_time = current_time
+                except Exception as path_error:
+                    logger.debug(f"[PATH STREAM ERROR] {filename}: {path_error}")
+
             # Check for streaming method
-            if hasattr(self._accessor, 'stream_file_by_inode'):
+            if not has_data and hasattr(self._accessor, 'stream_file_by_inode'):
                 # Chunk streaming (supports large files)
                 try:
                     logger.debug(f"[EXTRACT START] {filename} (inode={inode}, size={file_size})")
@@ -1445,7 +1494,7 @@ class BaseMFTCollector(ABC):
                         output_file.unlink()
                     return
 
-            else:
+            if not has_data:
                 # Fallback: full read (for small files)
                 data = self._accessor.read_file_by_inode(inode)
                 if data:

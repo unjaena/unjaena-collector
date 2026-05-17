@@ -8,7 +8,7 @@ workflow logic are not part of this public repository.
 
 ## Latest Release
 
-Latest release: `collector-v2.6.3`
+Latest release: `collector-v2.6.4`
 
 Download pre-built binaries from:
 

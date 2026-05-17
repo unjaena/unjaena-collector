@@ -5,6 +5,24 @@ All notable public collector changes are documented here.
 This changelog covers the open-source collector client only. Server-side
 parsing and analysis workflow logic are not part of this public repository.
 
+## [2.6.4] - 2026-05-17
+
+### Fixed
+
+- Fixed forensic image extraction on FAT, ext, and other dissect-backed
+  filesystems by preferring catalog path reads when inode reads are unstable.
+- Improved removable FAT/exFAT image collection so root-level user documents,
+  images, videos, and email files are included.
+- Added collector-side text document coverage for removable FAT/exFAT images.
+- Skipped AppleDouble sidecar files during document and media collection to
+  avoid collecting metadata stubs as user content.
+
+### Verified
+
+- Full sample-image workflow validation covered image open, partition selection,
+  collection, server parsing, simulated case upload, embedding generation, and
+  downstream analysis routing.
+
 ## [2.6.3] - 2026-05-16
 
 ### Added
