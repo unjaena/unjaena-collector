@@ -4,6 +4,7 @@ Main GUI Application
 PyQt6-based graphical interface for the forensic collector.
 Supports unified device management and parallel collection.
 """
+import asyncio
 import logging
 import requests
 from pathlib import Path
@@ -3266,7 +3267,6 @@ class WsControlWorker(QThread):
         self._stop = False
 
     def run(self):
-        import asyncio
         # Each thread needs its own event loop
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
@@ -3314,7 +3314,6 @@ class WsControlWorker(QThread):
 
         Best-effort — if the loop is gone, this is a no-op. After this, call stop()+wait().
         """
-        import asyncio
         if self._loop is None or self._uploader is None:
             return
         try:

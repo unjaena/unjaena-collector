@@ -199,6 +199,31 @@ def _get_ai_artifact_filter(artifact_type: str) -> Optional[Dict[str, Any]]:
 # MFT Filter Definitions (E01 + Local combined) - Windows
 # =============================================================================
 
+DOCUMENT_EXTENSIONS = frozenset({
+    '.doc', '.docx',
+    '.xls', '.xlsx',
+    '.ppt', '.pptx',
+    '.pdf',
+    '.hwp', '.hwpx',
+    '.txt', '.csv', '.rtf',
+})
+EMAIL_EXTENSIONS = frozenset({'.eml', '.msg', '.pst', '.ost'})
+IMAGE_EXTENSIONS = frozenset({
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp',
+    '.tiff', '.tif', '.heic', '.heif', '.webp',
+    '.raw',
+})
+VIDEO_EXTENSIONS = frozenset({
+    '.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv',
+    '.webm', '.m4v', '.mpg', '.mpeg', '.3gp',
+})
+USER_FILE_EXTENSION_POLICY = {
+    'document': DOCUMENT_EXTENSIONS,
+    'email': EMAIL_EXTENSIONS,
+    'image': IMAGE_EXTENSIONS,
+    'video': VIDEO_EXTENSIONS,
+}
+
 ARTIFACT_MFT_FILTERS = {
     # =========================================================================
     # Windows System Artifacts
@@ -377,20 +402,14 @@ ARTIFACT_MFT_FILTERS = {
     # User Files - Server-parseable extensions only (based on server parser config)
     # =========================================================================
     'document': {
-        'extensions': {
-            '.doc', '.docx',      # Word (python-docx, olefile)
-            '.xls', '.xlsx',      # Excel (openpyxl, olefile)
-            '.ppt', '.pptx',      # PowerPoint (olefile)
-            '.pdf',               # PDF (pypdf)
-            '.hwp', '.hwpx',      # Hangul (olefile)
-        },
+        'extensions': set(DOCUMENT_EXTENSIONS),
         'include_deleted': True,
         'include_system_folders': True,
         'full_disk_scan': True,
         'description': 'Office documents, PDFs (server-parseable only)',
     },
     'email': {
-        'extensions': {'.eml', '.msg', '.pst', '.ost'},  # email, extract_msg, pypff
+        'extensions': set(EMAIL_EXTENSIONS),
         'include_deleted': True,
         'include_system_folders': True,
         'full_disk_scan': True,
@@ -452,7 +471,7 @@ ARTIFACT_MFT_FILTERS = {
             r'documents and settings/[^/]+/desktop/',
             r'documents and settings/[^/]+/my documents/',
         ],
-        'extensions': {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.heic', '.heif', '.webp'},
+        'extensions': set(IMAGE_EXTENSIONS),
         'include_deleted': False,  # Exclude deleted images (storage concerns)
         'max_file_size': 50 * 1024 * 1024,  # 50MB limit
         'description': 'Image files with EXIF/GPS metadata',
@@ -465,7 +484,7 @@ ARTIFACT_MFT_FILTERS = {
             r'documents and settings/[^/]+/my documents/my videos/',
             r'documents and settings/[^/]+/desktop/',
         ],
-        'extensions': {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'},
+        'extensions': set(VIDEO_EXTENSIONS),
         'include_deleted': False,  # Exclude deleted videos (storage concerns)
         'max_file_size': 500 * 1024 * 1024,  # 500MB limit
         'description': 'Video files with metadata (ffprobe)',
@@ -952,10 +971,6 @@ class BaseMFTCollector(ABC):
         if fs_type in {'fat12', 'fat16', 'fat32', 'exfat'} and artifact_type in {
             'document', 'email', 'image', 'video',
         }:
-            if artifact_type == 'document':
-                extensions = set(mft_filter.get('extensions') or set())
-                extensions.update({'.txt', '.csv', '.rtf'})
-                mft_filter['extensions'] = extensions
             if mft_filter.get('extensions'):
                 mft_filter['full_disk_scan'] = True
                 mft_filter['path_optional'] = True
@@ -1394,11 +1409,12 @@ class BaseMFTCollector(ABC):
 
         inode = entry.inode if hasattr(entry, 'inode') else None
         filename = entry.filename if hasattr(entry, 'filename') else str(entry)
-        full_path = entry.full_path if hasattr(entry, 'full_path') else f"MFT_{inode}"
+        full_path = entry.full_path if hasattr(entry, 'full_path') else (f"MFT_{inode}" if inode is not None else "")
         is_deleted = getattr(entry, 'is_deleted', False)
         file_size = getattr(entry, 'size', 0)
+        can_stream_by_path = getattr(self._accessor, '_dissect_fs', None) is not None and bool(full_path)
 
-        if inode is None:
+        if inode is None and not can_stream_by_path:
             return
 
         # Large file diagnostic — useful when a single MFT entry expands
@@ -1437,7 +1453,7 @@ class BaseMFTCollector(ABC):
 
             # Dissect-backed filesystems such as FAT/ext/APFS do not always
             # support stable inode lookup. Prefer catalog paths when present.
-            if getattr(self._accessor, '_dissect_fs', None) is not None and full_path:
+            if can_stream_by_path:
                 try:
                     logger.debug(f"[EXTRACT START] {filename} (path={full_path}, size={file_size})")
                     with open(output_file, 'wb') as f:
@@ -1458,7 +1474,7 @@ class BaseMFTCollector(ABC):
                     logger.debug(f"[PATH STREAM ERROR] {filename}: {path_error}")
 
             # Check for streaming method
-            if not has_data and hasattr(self._accessor, 'stream_file_by_inode'):
+            if not has_data and inode is not None and hasattr(self._accessor, 'stream_file_by_inode'):
                 # Chunk streaming (supports large files)
                 try:
                     logger.debug(f"[EXTRACT START] {filename} (inode={inode}, size={file_size})")
@@ -1494,7 +1510,7 @@ class BaseMFTCollector(ABC):
                         output_file.unlink()
                     return
 
-            if not has_data:
+            if not has_data and inode is not None:
                 # Fallback: full read (for small files)
                 data = self._accessor.read_file_by_inode(inode)
                 if data:

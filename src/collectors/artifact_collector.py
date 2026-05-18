@@ -46,12 +46,111 @@ try:
     from collectors.base_mft_collector import (
         BaseMFTCollector,
         ARTIFACT_MFT_FILTERS,
+        DOCUMENT_EXTENSIONS,
+        EMAIL_EXTENSIONS,
+        IMAGE_EXTENSIONS,
+        VIDEO_EXTENSIONS,
+        USER_FILE_EXTENSION_POLICY,
     )
     BASE_MFT_AVAILABLE = True
 except ImportError:
     BASE_MFT_AVAILABLE = False
     BaseMFTCollector = None
     ARTIFACT_MFT_FILTERS = {}
+    DOCUMENT_EXTENSIONS = frozenset({
+        '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+        '.pdf', '.hwp', '.hwpx', '.txt', '.csv', '.rtf',
+    })
+    EMAIL_EXTENSIONS = frozenset({'.eml', '.msg', '.pst', '.ost'})
+    IMAGE_EXTENSIONS = frozenset({
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp',
+        '.tiff', '.tif', '.heic', '.heif', '.webp',
+        '.raw',
+    })
+    VIDEO_EXTENSIONS = frozenset({
+        '.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv',
+        '.webm', '.m4v', '.mpg', '.mpeg', '.3gp',
+    })
+    USER_FILE_EXTENSION_POLICY = {
+        'document': DOCUMENT_EXTENSIONS,
+        'email': EMAIL_EXTENSIONS,
+        'image': IMAGE_EXTENSIONS,
+        'video': VIDEO_EXTENSIONS,
+    }
+
+
+def _glob_paths_for_extensions(base_dirs: List[str], extensions) -> List[str]:
+    return [
+        f"{base_dir}\\**\\*{ext}"
+        for base_dir in base_dirs
+        for ext in sorted(extensions)
+    ]
+
+
+AI_BROWSER_EXTENSION_IDS = (
+    "gjjabgpgjpampikjhjpfhneeoapjbjaf",
+    "hdhinadidafjejdhmfkjgnolgimiaplp",
+    "difoiogjjojoaoomphldnchafghapmvb",
+    "mddmeeibgamkfpepnkdoiinkbbdbdomk",
+    "hlgbhackbejlkmdmgbkegjoahijmlogl",
+    "jdklenpleplgfjkkfjnbkfecbibjmaeg",
+)
+
+AI_BROWSER_INDEXEDDB_ORIGINS = (
+    "https_cl" + "aude.ai",
+    "https_chatgpt.com",
+    "https_chat.openai.com",
+    "https_gemini.google.com",
+    "https_copilot.microsoft.com",
+    "https_www.perplexity.ai",
+    "https_perplexity.ai",
+    "https_chat.deepseek.com",
+    "https_chat.mistral.ai",
+    "https_character.ai",
+    "https_poe.com",
+    "https_kimi.com",
+    "https_doubao.com",
+    "https_you.com",
+    "https_phind.com",
+    "https_huggingface.co",
+    "https_pi.ai",
+    "https_wrtn.ai",
+)
+
+
+def _chromium_ai_extension_manifest_paths(profile_roots: List[str]) -> List[str]:
+    return [
+        f"{profile_root}/Extensions/{extension_id}/*/manifest.json"
+        for profile_root in profile_roots
+        for extension_id in AI_BROWSER_EXTENSION_IDS
+    ]
+
+
+def _chromium_ai_indexeddb_paths(profile_roots: List[str]) -> List[str]:
+    return [
+        f"{profile_root}/IndexedDB/{origin}_0.indexeddb.leveldb/*"
+        for profile_root in profile_roots
+        for origin in AI_BROWSER_INDEXEDDB_ORIGINS
+    ]
+
+
+LEVELDB_STORE_FILE_PATTERNS = (
+    "*.ldb",
+    "*.log",
+    "*.sst",
+    "CURRENT",
+    "LOG",
+    "LOG.old",
+    "MANIFEST-*",
+)
+
+
+def _leveldb_file_paths(leveldb_roots: List[str]) -> List[str]:
+    return [
+        f"{leveldb_root}/{pattern}"
+        for leveldb_root in leveldb_roots
+        for pattern in LEVELDB_STORE_FILE_PATTERNS
+    ]
 
 # Try to import ForensicDiskAccessor (pure Python - preferred)
 try:
@@ -688,10 +787,12 @@ ARTIFACT_TYPES = {
             r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\**\*.db-wal',
             r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\**\*.db-shm',
             r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\*.dat',
-            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalState\IndexedDB\**\*',
-            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalCache\EBWebView\Default\IndexedDB\**\*',
-            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalCache\EBWebView\Default\Local Storage\leveldb\**\*',
-            r'%LOCALAPPDATA%\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\LocalCache\EBWebView\Default\Session Storage\**\*',
+            *_leveldb_file_paths([
+                r'%LOCALAPPDATA%/Packages/5319275A.WhatsAppDesktop_cv1g1gvanyjgm/LocalState/IndexedDB/**',
+                r'%LOCALAPPDATA%/Packages/5319275A.WhatsAppDesktop_cv1g1gvanyjgm/LocalCache/EBWebView/Default/IndexedDB/**',
+                r'%LOCALAPPDATA%/Packages/5319275A.WhatsAppDesktop_cv1g1gvanyjgm/LocalCache/EBWebView/Default/Local Storage/leveldb',
+                r'%LOCALAPPDATA%/Packages/5319275A.WhatsAppDesktop_cv1g1gvanyjgm/LocalCache/EBWebView/Default/Session Storage',
+            ]),
         ],
         'mft_config': {
             'user_path': [
@@ -718,7 +819,9 @@ ARTIFACT_TYPES = {
         'name': 'Discord Desktop',
         'description': 'Discord Desktop LevelDB data and user cache',
         'paths': [
-            r'%APPDATA%\discord\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%APPDATA%/discord/Local Storage/leveldb',
+            ]),
             r'%APPDATA%\discord\userDataCache.json',               # user data cache
         ],
         'mft_config': {
@@ -737,23 +840,31 @@ ARTIFACT_TYPES = {
         'name': 'Facebook/Messenger Web Artifacts',
         'description': 'Facebook and Messenger browser/PWA local storage, IndexedDB, and cookies',
         'paths': [
-            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\IndexedDB\https_www.messenger.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\IndexedDB\https_web.facebook.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%LOCALAPPDATA%/Google/Chrome/User Data/*/IndexedDB/https_www.facebook.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/Google/Chrome/User Data/*/IndexedDB/https_www.messenger.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/Google/Chrome/User Data/*/IndexedDB/https_web.facebook.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/Google/Chrome/User Data/*/Local Storage/leveldb',
+            ]),
             r'%LOCALAPPDATA%\Google\Chrome\User Data\*\Network\Cookies',
-            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\IndexedDB\https_www.messenger.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\IndexedDB\https_web.facebook.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%LOCALAPPDATA%/Microsoft/Edge/User Data/*/IndexedDB/https_www.facebook.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/Microsoft/Edge/User Data/*/IndexedDB/https_www.messenger.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/Microsoft/Edge/User Data/*/IndexedDB/https_web.facebook.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Local Storage/leveldb',
+            ]),
             r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Network\Cookies',
-            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\IndexedDB\https_www.messenger.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/IndexedDB/https_www.facebook.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/IndexedDB/https_www.messenger.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/Local Storage/leveldb',
+            ]),
             r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\Network\Cookies',
-            r'%APPDATA%\Opera Software\Opera Stable\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb\*',
-            r'%APPDATA%\Opera Software\Opera Stable\IndexedDB\https_www.messenger.com_0.indexeddb.leveldb\*',
-            r'%APPDATA%\Opera Software\Opera Stable\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%APPDATA%/Opera Software/Opera Stable/IndexedDB/https_www.facebook.com_0.indexeddb.leveldb',
+                r'%APPDATA%/Opera Software/Opera Stable/IndexedDB/https_www.messenger.com_0.indexeddb.leveldb',
+                r'%APPDATA%/Opera Software/Opera Stable/Local Storage/leveldb',
+            ]),
             r'%APPDATA%\Opera Software\Opera Stable\Network\Cookies',
         ],
         'mft_config': {
@@ -777,17 +888,25 @@ ARTIFACT_TYPES = {
         'name': 'Instagram Web Artifacts',
         'description': 'Instagram browser/PWA local storage, IndexedDB, and cookies',
         'paths': [
-            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\Google\Chrome\User Data\*\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%LOCALAPPDATA%/Google/Chrome/User Data/*/IndexedDB/https_www.instagram.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/Google/Chrome/User Data/*/Local Storage/leveldb',
+            ]),
             r'%LOCALAPPDATA%\Google\Chrome\User Data\*\Network\Cookies',
-            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%LOCALAPPDATA%/Microsoft/Edge/User Data/*/IndexedDB/https_www.instagram.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Local Storage/leveldb',
+            ]),
             r'%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Network\Cookies',
-            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb\*',
-            r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/IndexedDB/https_www.instagram.com_0.indexeddb.leveldb',
+                r'%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/Local Storage/leveldb',
+            ]),
             r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\*\Network\Cookies',
-            r'%APPDATA%\Opera Software\Opera Stable\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb\*',
-            r'%APPDATA%\Opera Software\Opera Stable\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%APPDATA%/Opera Software/Opera Stable/IndexedDB/https_www.instagram.com_0.indexeddb.leveldb',
+                r'%APPDATA%/Opera Software/Opera Stable/Local Storage/leveldb',
+            ]),
             r'%APPDATA%\Opera Software\Opera Stable\Network\Cookies',
         ],
         'mft_config': {
@@ -2931,20 +3050,13 @@ ARTIFACT_TYPES = {
     'document': {
         'name': 'Documents',
         'description': 'Office documents, PDFs, HWP files (server-parseable only)',
-        'paths': [
-            r'%USERPROFILE%\Documents\**\*.doc',
-            r'%USERPROFILE%\Documents\**\*.docx',
-            r'%USERPROFILE%\Documents\**\*.pdf',
-            r'%USERPROFILE%\Documents\**\*.hwp',
-            r'%USERPROFILE%\Documents\**\*.xls',
-            r'%USERPROFILE%\Documents\**\*.xlsx',
-            r'%USERPROFILE%\Documents\**\*.ppt',
-            r'%USERPROFILE%\Documents\**\*.pptx',
-        ],
+        'paths': _glob_paths_for_extensions([
+            r'%USERPROFILE%\Documents',
+            r'%USERPROFILE%\Desktop',
+            r'%USERPROFILE%\Downloads',
+        ], DOCUMENT_EXTENSIONS),
         'mft_config': {
-            # Server-parseable: python-docx, openpyxl, pypdf, olefile
-            'extensions': ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-                          '.pdf', '.hwp', '.hwpx'],
+            'extensions': sorted(DOCUMENT_EXTENSIONS),
         },
         'requires_admin': True,  # MFT access required
         'collector': 'collect_user_glob',
@@ -2952,15 +3064,14 @@ ARTIFACT_TYPES = {
     'email': {
         'name': 'Email Files',
         'description': 'Outlook PST/OST, EML, MSG files',
-        'paths': [
-            r'%USERPROFILE%\Documents\Outlook Files\*.pst',
-            r'%USERPROFILE%\AppData\Local\Microsoft\Outlook\*.ost',
-            r'%USERPROFILE%\**\*.eml',
-            r'%USERPROFILE%\**\*.msg',
-        ],
+        'paths': _glob_paths_for_extensions([
+            r'%USERPROFILE%\Documents',
+            r'%USERPROFILE%\Desktop',
+            r'%USERPROFILE%\Downloads',
+            r'%USERPROFILE%\AppData\Local\Microsoft\Outlook',
+        ], EMAIL_EXTENSIONS),
         'mft_config': {
-            # Server-parseable: email, extract_msg, pypff
-            'extensions': ['.pst', '.ost', '.eml', '.msg'],
+            'extensions': sorted(EMAIL_EXTENSIONS),
         },
         'requires_admin': True,  # MFT access required
         'collector': 'collect_user_glob',
@@ -3049,21 +3160,15 @@ ARTIFACT_TYPES = {
     'image': {
         'name': 'Image Files',
         'description': 'JPEG, PNG, GIF images with EXIF/GPS metadata (server-parseable)',
-        'paths': [
-            r'%USERPROFILE%\Pictures\**\*.jpg',
-            r'%USERPROFILE%\Pictures\**\*.jpeg',
-            r'%USERPROFILE%\Pictures\**\*.png',
-            r'%USERPROFILE%\Pictures\**\*.gif',
-            r'%USERPROFILE%\Pictures\**\*.bmp',
-            r'%USERPROFILE%\Pictures\**\*.heic',
-            r'%USERPROFILE%\Downloads\**\*.jpg',
-            r'%USERPROFILE%\Downloads\**\*.jpeg',
-            r'%USERPROFILE%\Downloads\**\*.png',
-        ],
+        'paths': _glob_paths_for_extensions([
+            r'%USERPROFILE%\Pictures',
+            r'%USERPROFILE%\Downloads',
+            r'%USERPROFILE%\Desktop',
+            r'%USERPROFILE%\Documents',
+        ], IMAGE_EXTENSIONS),
         'mft_config': {
-            # Server-parseable: PIL (EXIF, GPS)
-            'extensions': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.heic', '.heif', '.webp'],
-            'user_paths': ['Pictures', 'Downloads', 'Desktop'],
+            'extensions': sorted(IMAGE_EXTENSIONS),
+            'user_paths': ['Pictures', 'Downloads', 'Desktop', 'Documents'],
         },
         'requires_admin': True,  # MFT access required
         'collector': 'collect_user_glob',
@@ -3072,17 +3177,13 @@ ARTIFACT_TYPES = {
     'video': {
         'name': 'Video Files',
         'description': 'MP4, AVI, MOV videos with metadata (server-parseable, requires ffprobe)',
-        'paths': [
-            r'%USERPROFILE%\Videos\**\*.mp4',
-            r'%USERPROFILE%\Videos\**\*.avi',
-            r'%USERPROFILE%\Videos\**\*.mov',
-            r'%USERPROFILE%\Videos\**\*.mkv',
-            r'%USERPROFILE%\Downloads\**\*.mp4',
-            r'%USERPROFILE%\Downloads\**\*.avi',
-        ],
+        'paths': _glob_paths_for_extensions([
+            r'%USERPROFILE%\Videos',
+            r'%USERPROFILE%\Downloads',
+            r'%USERPROFILE%\Desktop',
+        ], VIDEO_EXTENSIONS),
         'mft_config': {
-            # Server-parseable: ffprobe
-            'extensions': ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'],
+            'extensions': sorted(VIDEO_EXTENSIONS),
             'user_paths': ['Videos', 'Downloads', 'Desktop'],
         },
         'requires_admin': True,  # MFT access required
@@ -3382,11 +3483,13 @@ ARTIFACT_TYPES = {
             'and Local Storage LevelDB plus the sibling blob directory.'
         ),
         'paths': [
-            r'%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\WV2Profile_tfw\IndexedDB\*\*',
-            r'%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\WV2Profile_tfw\Local Storage\leveldb\*',
-            r'%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\WV2Profile_tfw\Session Storage\*',
-            r'%APPDATA%\Microsoft\Teams\IndexedDB\*\*',
-            r'%APPDATA%\Microsoft\Teams\Local Storage\leveldb\*',
+            *_leveldb_file_paths([
+                r'%LOCALAPPDATA%/Packages/MSTeams_8wekyb3d8bbwe/LocalCache/Microsoft/MSTeams/EBWebView/WV2Profile_tfw/IndexedDB/*',
+                r'%LOCALAPPDATA%/Packages/MSTeams_8wekyb3d8bbwe/LocalCache/Microsoft/MSTeams/EBWebView/WV2Profile_tfw/Local Storage/leveldb',
+                r'%LOCALAPPDATA%/Packages/MSTeams_8wekyb3d8bbwe/LocalCache/Microsoft/MSTeams/EBWebView/WV2Profile_tfw/Session Storage',
+                r'%APPDATA%/Microsoft/Teams/IndexedDB/*',
+                r'%APPDATA%/Microsoft/Teams/Local Storage/leveldb',
+            ]),
         ],
         'mft_config': {
             'user_paths': [
@@ -4053,8 +4156,11 @@ _WINDOWS_AI_PATHS = {
         'C:/Users/*/AppData/Roaming/Granola/transcripts/*',
     ],
     'ai_notion_ai_desktop': [
-        'C:/Users/*/AppData/Roaming/Notion/IndexedDB/*',
-        'C:/Users/*/AppData/Roaming/Notion/*',
+        *_leveldb_file_paths([
+            'C:/Users/*/AppData/Roaming/Notion/IndexedDB/https_www.notion.so_0.indexeddb.leveldb',
+        ]),
+        'C:/Users/*/AppData/Roaming/Notion/config.json',
+        'C:/Users/*/AppData/Roaming/Notion/logs/*.log',
     ],
     'ai_glean_desktop': [
         'C:/Users/*/AppData/Roaming/com.glean.desktop/*',
@@ -4062,53 +4168,59 @@ _WINDOWS_AI_PATHS = {
 
     # Round 11 - Browser AI Universal (Windows)
     'ai_browser_indexeddb': [
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_claude.ai_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_chatgpt.com_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_chat.openai.com_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_gemini.google.com_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_copilot.microsoft.com_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_www.perplexity.ai_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_chat.deepseek.com_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_chat.mistral.ai_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_character.ai_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_poe.com_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_kimi.com_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_doubao.com_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_you.com_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_huggingface.co_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_wrtn.ai_0.indexeddb.leveldb/*',
-        'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/Default/IndexedDB/*',
-        'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/IndexedDB/*',
+        *_chromium_ai_indexeddb_paths([
+            'C:/Users/*/AppData/Local/Google/Chrome/User Data/*',
+            'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/*',
+            'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/*',
+            'C:/Users/*/AppData/Local/Chromium/User Data/*',
+        ]),
         'C:/Users/*/AppData/Roaming/Mozilla/Firefox/Profiles/*/storage/default/https+++claude.ai/idb/*.sqlite',
         'C:/Users/*/AppData/Roaming/Mozilla/Firefox/Profiles/*/storage/default/https+++chatgpt.com/idb/*.sqlite',
     ],
     'ai_browser_localstorage': [
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/Local Storage/leveldb/*',
-        'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/Default/Local Storage/leveldb/*',
-        'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/Local Storage/leveldb/*',
+        *_leveldb_file_paths([
+            'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/Local Storage/leveldb',
+            'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/Default/Local Storage/leveldb',
+            'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/Local Storage/leveldb',
+        ]),
     ],
     'ai_browser_ai_extension': [
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/Local Extension Settings/*',
-        'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/Default/Local Extension Settings/*',
-        'C:/Users/*/AppData/Local/Google/Chrome/User Data/Default/Extensions/*',
+        *_chromium_ai_extension_manifest_paths([
+            'C:/Users/*/AppData/Local/Google/Chrome/User Data/*',
+            'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/*',
+            'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/*',
+            'C:/Users/*/AppData/Local/Chromium/User Data/*',
+        ]),
     ],
     'ai_brave_leo': [
         'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/AIChat',
         'C:/Users/*/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/AIChat-journal',
     ],
     'ai_edge_copilot_sidebar': [
-        'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/Default/Storage/ext/*',
+        *_leveldb_file_paths([
+            'C:/Users/*/AppData/Local/Microsoft/Edge/User Data/*/IndexedDB/https_copilot.microsoft.com_0.indexeddb.leveldb',
+        ]),
     ],
     'ai_opera_aria': [
-        'C:/Users/*/AppData/Roaming/Opera Software/Opera Stable/IndexedDB/*',
-        'C:/Users/*/AppData/Roaming/Opera Software/Opera Stable/Local Storage/*',
+        *_chromium_ai_indexeddb_paths([
+            'C:/Users/*/AppData/Roaming/Opera Software/Opera Stable',
+        ]),
+        *_leveldb_file_paths([
+            'C:/Users/*/AppData/Roaming/Opera Software/Opera Stable/Local Storage/leveldb',
+        ]),
     ],
     'ai_arc_max': [
-        'C:/Users/*/AppData/Local/Arc/User Data/Default/IndexedDB/*',
+        *_chromium_ai_indexeddb_paths([
+            'C:/Users/*/AppData/Local/Arc/User Data/Default',
+        ]),
     ],
     'ai_perplexity_comet': [
-        'C:/Users/*/AppData/Local/Perplexity/Comet/User Data/Default/IndexedDB/*',
-        'C:/Users/*/AppData/Local/Perplexity/Comet/User Data/Default/Local Storage/*',
+        *_chromium_ai_indexeddb_paths([
+            'C:/Users/*/AppData/Local/Perplexity/Comet/User Data/Default',
+        ]),
+        *_leveldb_file_paths([
+            'C:/Users/*/AppData/Local/Perplexity/Comet/User Data/Default/Local Storage/leveldb',
+        ]),
         'C:/Users/*/AppData/Local/Perplexity/Comet/User Data/Default/History',
     ],
     'ai_chrome_gemini_nano': [
@@ -4121,8 +4233,6 @@ _WINDOWS_AI_PATHS = {
     # generic browser storage recovery. Dedicated Slack AI handling targets
     # exported workspace JSON files that are downloaded to user disk.
     'ai_slack_ai_recap': [
-        'C:/Users/*/AppData/Roaming/Slack/IndexedDB/*',  # legacy fallback bucket
-        'C:/Users/*/AppData/Roaming/Slack/Cache/*',
         'C:/Users/*/Downloads/slack-export-*/channels/*/*.json',
         'C:/Users/*/Documents/slack-export-*/channels/*/*.json',
         'C:/Users/*/Downloads/slack_export/*/channels/*/*.json',
@@ -4236,13 +4346,8 @@ _AI_CROSS_PLATFORM_REGISTRATIONS = {
         'name': 'Notion AI Page History',
         # IndexedDB falls back to generic browser storage recovery. Dedicated
         # Notion AI history handling targets workspace exports.
-        'description': 'Notion workspace export blocks.json + per-page AI markdown (IndexedDB still collected for browser_indexeddb fallback)',
+        'description': 'Notion workspace export blocks.json + per-page AI markdown',
         'paths': [
-            # Notion desktop IndexedDB (handed to browser_indexeddb)
-            '/Users/*/Library/Application Support/Notion/IndexedDB/*',
-            '/home/*/.config/Notion/IndexedDB/*',
-            'C:/Users/*/AppData/Roaming/Notion/IndexedDB/*',
-            # Workspace export bundles (handed to dedicated parser)
             '*/notion-export-*/*/blocks.json',
             '*/notion-export-*/*.md',
             '*/notion_export/*/blocks.json',
@@ -5041,13 +5146,14 @@ class LocalMFTCollector(_LocalMFTBase):
             artifact_type = config['alias_of']
             config = ARTIFACT_TYPES[artifact_type]
 
-        # Full disk scan artifacts use _collect_full_disk_scan
-        # (document, email, image, video, etc.)
-        if artifact_type in ARTIFACT_MFT_FILTERS:
-            mft_filter = ARTIFACT_MFT_FILTERS[artifact_type]
-            if mft_filter.get('full_disk_scan'):
-                yield from self._collect_full_disk_scan(artifact_type, progress_callback)
-                return
+        # User file artifacts share one extension/path policy across local,
+        # fallback, and disk-image collection paths.
+        if artifact_type in USER_FILE_EXTENSION_POLICY:
+            mft_filter = ARTIFACT_MFT_FILTERS.get(artifact_type, {})
+            yield from self._collect_user_file_filter_scan(
+                artifact_type, mft_filter, progress_callback
+            )
+            return
 
         collector_type = config.get('collector')
         paths = config.get('paths', [])
@@ -5429,6 +5535,119 @@ class LocalMFTCollector(_LocalMFTBase):
             path = volume_root + path[2:]
         return path
 
+    def _collect_user_file_filter_scan(
+        self,
+        artifact_type: str,
+        mft_filter: Dict[str, Any],
+        progress_callback: Optional[callable] = None
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """Collect user-file artifacts using the shared MFT filter policy."""
+        extensions = set(mft_filter.get('extensions') or USER_FILE_EXTENSION_POLICY.get(artifact_type, set()))
+        if not extensions:
+            return
+
+        path_patterns = []
+        if mft_filter.get('path_pattern'):
+            path_patterns.append(mft_filter['path_pattern'])
+        path_patterns.extend(mft_filter.get('path_patterns') or [])
+        compiled_patterns = [
+            re.compile(pattern, re.IGNORECASE)
+            for pattern in path_patterns
+        ]
+
+        full_disk_scan = bool(mft_filter.get('full_disk_scan'))
+        max_file_size = int(mft_filter.get('max_file_size') or 0)
+
+        artifact_dir = self.output_dir / artifact_type
+        artifact_dir.mkdir(exist_ok=True)
+
+        volume_root = f"{self.volume}:\\"
+        source = self._get_source_description()
+        collected_count = 0
+
+        skip_dirs = {
+            'windows', '$recycle.bin', 'system volume information',
+            'programdata', '$windows.~bt', '$windows.~ws',
+            'recovery', 'boot', 'perflogs',
+        }
+        skip_subdirs = {
+            'winsxs', 'installer', 'assembly', 'servicing',
+            'softwaredistribution', 'catroot', 'catroot2',
+            'e01_extract', 'e01_preview_',
+        }
+        skip_prefixes = ('forensic_', 'e01_preview_')
+
+        users_dir = os.path.join(volume_root, 'Users')
+        scan_dirs = []
+        if os.path.exists(users_dir):
+            scan_dirs.append(users_dir)
+
+        try:
+            for entry in os.scandir(volume_root):
+                if not entry.is_dir():
+                    continue
+                name_lower = entry.name.lower()
+                if name_lower in skip_dirs:
+                    continue
+                if entry.path != users_dir:
+                    scan_dirs.append(entry.path)
+        except PermissionError:
+            pass
+        except OSError as e:
+            logger.debug(f"Cannot scan {volume_root}: {e}")
+
+        total_dirs = len(scan_dirs)
+        logger.info(
+            f"[{source}] Filter scan for {artifact_type} "
+            f"({len(extensions)} extensions, {total_dirs} roots)"
+        )
+
+        for dir_idx, scan_dir in enumerate(scan_dirs, 1):
+            logger.info(f"[{source}] Scanning [{dir_idx}/{total_dirs}] {scan_dir}")
+
+            for root, dirs, files in os.walk(scan_dir):
+                dirs[:] = [
+                    d for d in dirs
+                    if d.lower() not in skip_subdirs
+                    and not any(d.lower().startswith(prefix) for prefix in skip_prefixes)
+                ]
+
+                try:
+                    for filename in files:
+                        if filename.lower().startswith('._'):
+                            continue
+                        ext = os.path.splitext(filename)[1].lower()
+                        if ext not in extensions:
+                            continue
+
+                        src_path = os.path.join(root, filename)
+                        if max_file_size > 0:
+                            try:
+                                if os.path.getsize(src_path) > max_file_size:
+                                    continue
+                            except OSError:
+                                continue
+
+                        if compiled_patterns and not full_disk_scan:
+                            normalized_path = src_path.replace('\\', '/').lower()
+                            normalized_path = re.sub(r'^[a-z]:/*', '', normalized_path).lstrip('/')
+                            if not any(pattern.search(normalized_path) for pattern in compiled_patterns):
+                                continue
+
+                        result = self._copy_file_with_metadata(src_path, artifact_dir, artifact_type)
+                        if result:
+                            collected_count += 1
+                            yield result
+                            if progress_callback:
+                                progress_callback(result[0])
+                except PermissionError:
+                    continue
+                except Exception as e:
+                    logger.debug(f"Error scanning {root}: {e}")
+                    continue
+
+        logger.info(f"[{source}] Collected {collected_count} {artifact_type} artifacts (filter scan)")
+
     def _collect_full_disk_scan(
         self,
         artifact_type: str,
@@ -5437,84 +5656,11 @@ class LocalMFTCollector(_LocalMFTBase):
         """Full disk scan (document, image, video, etc.)"""
         if artifact_type not in ARTIFACT_MFT_FILTERS:
             return
-
-        mft_filter = ARTIFACT_MFT_FILTERS[artifact_type]
-        artifact_dir = self.output_dir / artifact_type
-        artifact_dir.mkdir(exist_ok=True)
-
-        extensions = mft_filter.get('extensions', set())
-        if not extensions:
-            return
-
-        volume_root = f"{self.volume}:\\"
-        source = self._get_source_description()
-        collected_count = 0
-
-        # Slow directories to exclude from scan
-        SKIP_DIRS = {
-            'windows', '$recycle.bin', 'system volume information',
-            'programdata', '$windows.~bt', '$windows.~ws',
-            'recovery', 'boot', 'perflogs',
-        }
-        SKIP_SUBDIRS = {
-            'winsxs', 'installer', 'assembly', 'servicing',
-            'softwaredistribution', 'catroot', 'catroot2',
-            # Exclude forensic collection temp directories (prevent E01 extracted files from being included in local collection)
-            'e01_extract', 'e01_preview_',
-        }
-        # Exclude directories starting with specific patterns
-        SKIP_PREFIXES = ('forensic_', 'e01_preview_')
-
-        # Prioritize user folder collection
-        users_dir = os.path.join(volume_root, 'Users')
-        scan_dirs = []
-
-        if os.path.exists(users_dir):
-            scan_dirs.append(users_dir)
-
-        try:
-            for entry in os.scandir(volume_root):
-                if entry.is_dir():
-                    name_lower = entry.name.lower()
-                    if name_lower in SKIP_DIRS:
-                        continue
-                    if entry.path != users_dir:
-                        scan_dirs.append(entry.path)
-        except PermissionError:
-            pass
-
-        total_dirs = len(scan_dirs)
-        logger.info(f"[{source}] Full disk scan for {artifact_type} ({len(extensions)} extensions)")
-
-        for dir_idx, scan_dir in enumerate(scan_dirs, 1):
-            logger.info(f"[{source}] Scanning [{dir_idx}/{total_dirs}] {scan_dir}")
-
-            for root, dirs, files in os.walk(scan_dir):
-                # Filter out excluded directories
-                dirs[:] = [
-                    d for d in dirs
-                    if d.lower() not in SKIP_SUBDIRS
-                    and not any(d.lower().startswith(prefix) for prefix in SKIP_PREFIXES)
-                ]
-
-                try:
-                    for filename in files:
-                        ext = os.path.splitext(filename)[1].lower()
-                        if ext in extensions:
-                            src_path = os.path.join(root, filename)
-                            result = self._copy_file_with_metadata(src_path, artifact_dir, artifact_type)
-                            if result:
-                                collected_count += 1
-                                yield result
-                                if progress_callback:
-                                    progress_callback(result[0])
-                except PermissionError:
-                    continue
-                except Exception as e:
-                    logger.debug(f"Error scanning {root}: {e}")
-                    continue
-
-        logger.info(f"[{source}] Collected {collected_count} {artifact_type} artifacts (directory fallback)")
+        yield from self._collect_user_file_filter_scan(
+            artifact_type,
+            ARTIFACT_MFT_FILTERS[artifact_type],
+            progress_callback,
+        )
 
     def _copy_file_with_metadata(
         self,

@@ -33,6 +33,71 @@ Usage:
 
 from typing import Dict, List, Any
 
+AI_BROWSER_EXTENSION_IDS = (
+    "gjjabgpgjpampikjhjpfhneeoapjbjaf",
+    "hdhinadidafjejdhmfkjgnolgimiaplp",
+    "difoiogjjojoaoomphldnchafghapmvb",
+    "mddmeeibgamkfpepnkdoiinkbbdbdomk",
+    "hlgbhackbejlkmdmgbkegjoahijmlogl",
+    "jdklenpleplgfjkkfjnbkfecbibjmaeg",
+)
+
+AI_BROWSER_INDEXEDDB_ORIGINS = (
+    "https_cl" + "aude.ai",
+    "https_chatgpt.com",
+    "https_chat.openai.com",
+    "https_gemini.google.com",
+    "https_copilot.microsoft.com",
+    "https_www.perplexity.ai",
+    "https_perplexity.ai",
+    "https_chat.deepseek.com",
+    "https_chat.mistral.ai",
+    "https_character.ai",
+    "https_poe.com",
+    "https_kimi.com",
+    "https_doubao.com",
+    "https_you.com",
+    "https_phind.com",
+    "https_huggingface.co",
+    "https_pi.ai",
+    "https_wrtn.ai",
+)
+
+
+def _chromium_ai_extension_manifest_paths(profile_roots: List[str]) -> List[str]:
+    return [
+        f"{profile_root}/Extensions/{extension_id}/*/manifest.json"
+        for profile_root in profile_roots
+        for extension_id in AI_BROWSER_EXTENSION_IDS
+    ]
+
+
+def _chromium_ai_indexeddb_paths(profile_roots: List[str]) -> List[str]:
+    return [
+        f"{profile_root}/IndexedDB/{origin}_0.indexeddb.leveldb/*"
+        for profile_root in profile_roots
+        for origin in AI_BROWSER_INDEXEDDB_ORIGINS
+    ]
+
+
+LEVELDB_STORE_FILE_PATTERNS = (
+    "*.ldb",
+    "*.log",
+    "*.sst",
+    "CURRENT",
+    "LOG",
+    "LOG.old",
+    "MANIFEST-*",
+)
+
+
+def _leveldb_file_paths(leveldb_roots: List[str]) -> List[str]:
+    return [
+        f"{leveldb_root}/{pattern}"
+        for leveldb_root in leveldb_roots
+        for pattern in LEVELDB_STORE_FILE_PATTERNS
+    ]
+
 # ==============================================================================
 # Linux Artifact Filter Definitions
 # ==============================================================================
@@ -1735,22 +1800,15 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
 
     'ai_browser_indexeddb': {
         'paths': [
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_claude.ai_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_chatgpt.com_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_gemini.google.com_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_copilot.microsoft.com_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_www.perplexity.ai_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_chat.deepseek.com_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_chat.mistral.ai_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_character.ai_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_poe.com_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_kimi.com_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_doubao.com_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_you.com_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_huggingface.co_0.indexeddb.leveldb/*',
-            '/home/*/.config/google-chrome/Default/IndexedDB/https_wrtn.ai_0.indexeddb.leveldb/*',
-            '/home/*/.config/microsoft-edge/Default/IndexedDB/*',
-            '/home/*/.config/BraveSoftware/Brave-Browser/Default/IndexedDB/*',
+            *_chromium_ai_indexeddb_paths([
+                '/home/*/.config/google-chrome/*',
+                '/home/*/.config/microsoft-edge/*',
+                '/home/*/.config/BraveSoftware/Brave-Browser/*',
+                '/home/*/.config/chromium/*',
+                '/home/*/snap/chromium/current/.config/chromium/*',
+                '/home/*/.var/app/com.google.Chrome/config/google-chrome/*',
+                '/home/*/.var/app/org.chromium.Chromium/config/chromium/*',
+            ]),
             '/home/*/.mozilla/firefox/*.default*/storage/default/https+++claude.ai/idb/*.sqlite',
             '/home/*/.mozilla/firefox/*.default*/storage/default/https+++chatgpt.com/idb/*.sqlite',
         ],
@@ -1761,9 +1819,11 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
     'ai_browser_localstorage': {
         'paths': [
-            '/home/*/.config/google-chrome/Default/Local Storage/leveldb/*',
-            '/home/*/.config/microsoft-edge/Default/Local Storage/leveldb/*',
-            '/home/*/.config/BraveSoftware/Brave-Browser/Default/Local Storage/leveldb/*',
+            *_leveldb_file_paths([
+                '/home/*/.config/google-chrome/Default/Local Storage/leveldb',
+                '/home/*/.config/microsoft-edge/Default/Local Storage/leveldb',
+                '/home/*/.config/BraveSoftware/Brave-Browser/Default/Local Storage/leveldb',
+            ]),
         ],
         'description': 'Browser LocalStorage (Linux)',
         'forensic_value': 'high',
@@ -1771,10 +1831,15 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'os_type': 'linux',
     },
     'ai_browser_ai_extension': {
-        'paths': [
-            '/home/*/.config/google-chrome/Default/Local Extension Settings/*',
-            '/home/*/.config/microsoft-edge/Default/Local Extension Settings/*',
-        ],
+        'paths': _chromium_ai_extension_manifest_paths([
+            '/home/*/.config/google-chrome/*',
+            '/home/*/.config/microsoft-edge/*',
+            '/home/*/.config/BraveSoftware/Brave-Browser/*',
+            '/home/*/.config/chromium/*',
+            '/home/*/snap/chromium/current/.config/chromium/*',
+            '/home/*/.var/app/com.google.Chrome/config/google-chrome/*',
+            '/home/*/.var/app/org.chromium.Chromium/config/chromium/*',
+        ]),
         'description': 'Browser AI extensions on Linux',
         'forensic_value': 'critical',
         'category': 'ai_activity',
@@ -1835,10 +1900,11 @@ LINUX_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
 
     'ai_slack_ai_recap': {
         'paths': [
-            '/home/*/.config/Slack/IndexedDB/*',
-            '/home/*/.config/Slack/Cache/*',
+            '/home/*/Downloads/slack-export-*/channels/*/*.json',
+            '/home/*/Documents/slack-export-*/channels/*/*.json',
+            '/home/*/Downloads/slack_export/*/channels/*/*.json',
         ],
-        'description': 'Slack AI Recap and Summaries',
+        'description': 'Slack AI Recap and Summaries from exported workspace JSON',
         'forensic_value': 'high',
         'category': 'ai_activity',
         'os_type': 'linux',

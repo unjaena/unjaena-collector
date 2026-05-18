@@ -5,6 +5,25 @@ All notable public collector changes are documented here.
 This changelog covers the open-source collector client only. Server-side
 parsing and analysis workflow logic are not part of this public repository.
 
+## [2.6.5] - 2026-05-19
+
+### Fixed
+
+- Bounded AI browser extension collection to known extension manifest files
+  instead of broad extension directory scans.
+- Bounded AI browser, Teams, WhatsApp, Facebook, Instagram, Notion, Arc,
+  Comet, Opera, and Slack-related cache collection to known store files or
+  explicit export files to reduce low-value bulk uploads.
+- Aligned local and disk-image user-file extension policies for documents,
+  email files, images, and videos.
+- Fixed the GUI WebSocket control worker startup path by making the event-loop
+  dependency available at module scope.
+
+### Verified
+
+- Collector compile checks passed for the changed collection and GUI modules.
+- User-file extension policy regression tests passed locally.
+
 ## [2.6.4] - 2026-05-17
 
 ### Fixed

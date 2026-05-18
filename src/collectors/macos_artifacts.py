@@ -26,6 +26,71 @@ Usage:
 
 from typing import Dict, List, Any
 
+AI_BROWSER_EXTENSION_IDS = (
+    "gjjabgpgjpampikjhjpfhneeoapjbjaf",
+    "hdhinadidafjejdhmfkjgnolgimiaplp",
+    "difoiogjjojoaoomphldnchafghapmvb",
+    "mddmeeibgamkfpepnkdoiinkbbdbdomk",
+    "hlgbhackbejlkmdmgbkegjoahijmlogl",
+    "jdklenpleplgfjkkfjnbkfecbibjmaeg",
+)
+
+AI_BROWSER_INDEXEDDB_ORIGINS = (
+    "https_cl" + "aude.ai",
+    "https_chatgpt.com",
+    "https_chat.openai.com",
+    "https_gemini.google.com",
+    "https_copilot.microsoft.com",
+    "https_www.perplexity.ai",
+    "https_perplexity.ai",
+    "https_chat.deepseek.com",
+    "https_chat.mistral.ai",
+    "https_character.ai",
+    "https_poe.com",
+    "https_kimi.com",
+    "https_doubao.com",
+    "https_you.com",
+    "https_phind.com",
+    "https_huggingface.co",
+    "https_pi.ai",
+    "https_wrtn.ai",
+)
+
+
+def _chromium_ai_extension_manifest_paths(profile_roots: List[str]) -> List[str]:
+    return [
+        f"{profile_root}/Extensions/{extension_id}/*/manifest.json"
+        for profile_root in profile_roots
+        for extension_id in AI_BROWSER_EXTENSION_IDS
+    ]
+
+
+def _chromium_ai_indexeddb_paths(profile_roots: List[str]) -> List[str]:
+    return [
+        f"{profile_root}/IndexedDB/{origin}_0.indexeddb.leveldb/*"
+        for profile_root in profile_roots
+        for origin in AI_BROWSER_INDEXEDDB_ORIGINS
+    ]
+
+
+LEVELDB_STORE_FILE_PATTERNS = (
+    "*.ldb",
+    "*.log",
+    "*.sst",
+    "CURRENT",
+    "LOG",
+    "LOG.old",
+    "MANIFEST-*",
+)
+
+
+def _leveldb_file_paths(leveldb_roots: List[str]) -> List[str]:
+    return [
+        f"{leveldb_root}/{pattern}"
+        for leveldb_root in leveldb_roots
+        for pattern in LEVELDB_STORE_FILE_PATTERNS
+    ]
+
 # ==============================================================================
 # macOS Artifact Filter Definitions
 # ==============================================================================
@@ -1554,8 +1619,11 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
     'ai_notion_ai_desktop': {
         'paths': [
-            '/Users/*/Library/Application Support/Notion/IndexedDB/*',
-            '/Users/*/Library/Application Support/Notion/*',
+            *_leveldb_file_paths([
+                '/Users/*/Library/Application Support/Notion/IndexedDB/https_www.notion.so_0.indexeddb.leveldb',
+            ]),
+            '/Users/*/Library/Application Support/Notion/config.json',
+            '/Users/*/Library/Application Support/Notion/logs/*.log',
         ],
         'description': 'Notion desktop AI cache - IndexedDB caches recent AI block responses',
         'forensic_value': 'medium',
@@ -1579,27 +1647,12 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
 
     'ai_browser_indexeddb': {
         'paths': [
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_claude.ai_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_chatgpt.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_chat.openai.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_gemini.google.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_copilot.microsoft.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_www.perplexity.ai_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_perplexity.ai_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_chat.deepseek.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_chat.mistral.ai_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_character.ai_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_poe.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_kimi.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_doubao.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_you.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_phind.com_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_huggingface.co_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_pi.ai_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/IndexedDB/https_wrtn.ai_0.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/Microsoft Edge/Default/IndexedDB/https_*.indexeddb.leveldb/*',
-            '/Users/*/Library/Application Support/BraveSoftware/Brave-Browser/Default/IndexedDB/https_*.indexeddb.leveldb/*',
-            '/Users/*/Library/Safari/Databases/__IndexedDB/*',
+            *_chromium_ai_indexeddb_paths([
+                '/Users/*/Library/Application Support/Google/Chrome/*',
+                '/Users/*/Library/Application Support/Microsoft Edge/*',
+                '/Users/*/Library/Application Support/BraveSoftware/Brave-Browser/*',
+                '/Users/*/Library/Application Support/Chromium/*',
+            ]),
             '/Users/*/Library/Containers/com.apple.Safari/Data/Library/WebKit/WebsiteData/Default/IndexedDB/v1/https_claude.ai_0/*',
             '/Users/*/Library/Containers/com.apple.Safari/Data/Library/WebKit/WebsiteData/Default/IndexedDB/v1/https_chatgpt.com_0/*',
         ],
@@ -1611,10 +1664,12 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
     'ai_browser_localstorage': {
         'paths': [
-            '/Users/*/Library/Application Support/Google/Chrome/Default/Local Storage/leveldb/*',
-            '/Users/*/Library/Application Support/Microsoft Edge/Default/Local Storage/leveldb/*',
-            '/Users/*/Library/Application Support/BraveSoftware/Brave-Browser/Default/Local Storage/leveldb/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/Session Storage/*',
+            *_leveldb_file_paths([
+                '/Users/*/Library/Application Support/Google/Chrome/Default/Local Storage/leveldb',
+                '/Users/*/Library/Application Support/Microsoft Edge/Default/Local Storage/leveldb',
+                '/Users/*/Library/Application Support/BraveSoftware/Brave-Browser/Default/Local Storage/leveldb',
+                '/Users/*/Library/Application Support/Google/Chrome/Default/Session Storage',
+            ]),
         ],
         'description': 'Browser LocalStorage / SessionStorage - cloud AI service drafts, UI state',
         'forensic_value': 'high',
@@ -1622,11 +1677,12 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
         'os_type': 'macos',
     },
     'ai_browser_ai_extension': {
-        'paths': [
-            '/Users/*/Library/Application Support/Google/Chrome/Default/Local Extension Settings/*',
-            '/Users/*/Library/Application Support/Microsoft Edge/Default/Local Extension Settings/*',
-            '/Users/*/Library/Application Support/Google/Chrome/Default/Extensions/*',
-        ],
+        'paths': _chromium_ai_extension_manifest_paths([
+            '/Users/*/Library/Application Support/Google/Chrome/*',
+            '/Users/*/Library/Application Support/Microsoft Edge/*',
+            '/Users/*/Library/Application Support/BraveSoftware/Brave-Browser/*',
+            '/Users/*/Library/Application Support/Chromium/*',
+        ]),
         'description': 'Browser AI extensions - Monica, Merlin, AITOPIA, Sider, Compose AI etc. Conversation history + (in malicious cases) exfil queue',
         'forensic_value': 'critical',
         'category': 'ai_activity',
@@ -1646,8 +1702,9 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
     'ai_arc_max': {
         'paths': [
-            '/Users/*/Library/Application Support/Arc/User Data/Default/IndexedDB/*',
-            '/Users/*/Library/Application Support/Arc/*',
+            *_chromium_ai_indexeddb_paths([
+                '/Users/*/Library/Application Support/Arc/User Data/Default',
+            ]),
         ],
         'description': 'Arc Max AI features (Browser Company) - IndexedDB conversation cache',
         'forensic_value': 'high',
@@ -1656,8 +1713,12 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
     'ai_perplexity_comet': {
         'paths': [
-            '/Users/*/Library/Application Support/Perplexity/Comet/User Data/Default/IndexedDB/*',
-            '/Users/*/Library/Application Support/Perplexity/Comet/User Data/Default/Local Storage/*',
+            *_chromium_ai_indexeddb_paths([
+                '/Users/*/Library/Application Support/Perplexity/Comet/User Data/Default',
+            ]),
+            *_leveldb_file_paths([
+                '/Users/*/Library/Application Support/Perplexity/Comet/User Data/Default/Local Storage/leveldb',
+            ]),
             '/Users/*/Library/Application Support/Perplexity/Comet/User Data/Default/History',
         ],
         'description': 'Perplexity Comet browser (Chromium fork) - history + AI sidebar conversation cache',
@@ -1694,10 +1755,11 @@ MACOS_ARTIFACT_FILTERS: Dict[str, Dict[str, Any]] = {
     },
     'ai_slack_ai_recap': {
         'paths': [
-            '/Users/*/Library/Application Support/Slack/IndexedDB/*',
-            '/Users/*/Library/Application Support/Slack/Cache/*',
+            '/Users/*/Downloads/slack-export-*/channels/*/*.json',
+            '/Users/*/Documents/slack-export-*/channels/*/*.json',
+            '/Users/*/Downloads/slack_export/*/channels/*/*.json',
         ],
-        'description': 'Slack AI Recap and Summaries - LevelDB caches summary text and conversation context',
+        'description': 'Slack AI Recap and Summaries from exported workspace JSON',
         'forensic_value': 'high',
         'category': 'ai_activity',
         'os_type': 'macos',

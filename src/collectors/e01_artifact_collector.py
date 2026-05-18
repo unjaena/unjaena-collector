@@ -27,7 +27,14 @@ from typing import Generator, Tuple, Dict, Any, List, Optional
 from dataclasses import dataclass
 
 # Import base class
-from collectors.base_mft_collector import BaseMFTCollector, ARTIFACT_MFT_FILTERS
+from collectors.base_mft_collector import (
+    BaseMFTCollector,
+    ARTIFACT_MFT_FILTERS,
+    DOCUMENT_EXTENSIONS,
+    EMAIL_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+)
 
 # Import ForensicDiskAccessor
 try:
@@ -37,6 +44,10 @@ except ImportError:
     ForensicDiskAccessor = None
 
 logger = logging.getLogger(__name__)
+
+
+def _extension_glob_pattern(extensions) -> str:
+    return ','.join(f"*{ext}" for ext in sorted(extensions))
 
 
 # =============================================================================
@@ -205,19 +216,19 @@ ARTIFACT_PATHS = {
     },
     'document': {
         'description': 'Documents',
-        'pattern': '*.doc,*.docx,*.pdf,*.xls,*.xlsx,*.ppt,*.pptx,*.hwp,*.hwpx,*.txt,*.rtf',
+        'pattern': _extension_glob_pattern(DOCUMENT_EXTENSIONS),
     },
     'email': {
         'description': 'Email Files',
-        'pattern': '*.pst,*.ost,*.eml,*.msg',
+        'pattern': _extension_glob_pattern(EMAIL_EXTENSIONS),
     },
     'image': {
         'description': 'Image Files',
-        'pattern': '*.jpg,*.jpeg,*.png,*.gif,*.bmp,*.tiff,*.webp,*.heic,*.raw',
+        'pattern': _extension_glob_pattern(IMAGE_EXTENSIONS),
     },
     'video': {
         'description': 'Video Files',
-        'pattern': '*.mp4,*.avi,*.mkv,*.mov,*.wmv,*.flv,*.webm,*.mpeg',
+        'pattern': _extension_glob_pattern(VIDEO_EXTENSIONS),
     },
     # Mobile artifacts (skip for E01)
     'mobile_android_sms': {'skip': True},
