@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from gui.styles import COLORS
-from collectors.android_collector_extended import _load_advanced_plugin
+from collectors.android_collector import _load_advanced_plugin
 
 
 # =============================================================================

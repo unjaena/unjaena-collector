@@ -40,7 +40,7 @@ Requirements:
 License:
     - This module is open source
     - pymobiledevice3 is GPL-3.0 licensed
-    - Decryption logic is NOT included here (server-only)
+    - This module collects source files only
 """
 import os
 import re
@@ -306,11 +306,10 @@ IOS_ARTIFACT_TYPES = {
 
     'mobile_ios_kakaotalk': {
         'name': 'KakaoTalk Messages (Raw)',
-        'description': 'KakaoTalk message database (raw, decryption handled on server)',
+        'description': 'KakaoTalk message database (raw source file)',
         'manifest_domain': 'AppDomain-com.iwilab.KakaoTalk',
         'manifest_path': 'Library/PrivateDocuments/Message.sqlite',
-        # NOTE: Database is encrypted. Decryption is handled server-side only.
-        # Collector extracts raw file without decryption.
+        # Collector extracts the raw source file.
     },
     # mobile_ios_kakaotalk_attachments: REMOVED (2026-02-22)
     # Filenames are random hashes with no chat/sender context linkage.
@@ -1258,7 +1257,7 @@ IOS_ARTIFACT_TYPES = {
     },
 
     # ================================================================
-    # Additional apps (server parsers existed but collection was missing)
+    # Additional apps with explicit collection targets.
     # ================================================================
     'mobile_ios_band': {
         'name': 'BAND',
@@ -1459,7 +1458,7 @@ class iOSBackupParser:
     to find and extract specific files.
 
     NOTE: This class only performs file location lookup and extraction.
-          Actual content parsing is handled on the server (ios_basic_parser.py).
+          Content interpretation is handled by the configured analysis service.
     """
 
     def __init__(self, backup_path: Path):
@@ -2419,7 +2418,7 @@ class iOSDeviceConnector:
         - Backup-based artifacts: Backup creation followed by file extraction
 
         NOTE: Collector only performs raw file extraction.
-              Parsing/decryption is handled on the server.
+              Content interpretation is handled by the configured analysis service.
 
         Args:
             artifact_type: Artifact type to collect

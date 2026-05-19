@@ -43,7 +43,7 @@ AI_BROWSER_EXTENSION_IDS = (
 )
 
 AI_BROWSER_INDEXEDDB_ORIGINS = (
-    "https_cl" + "aude.ai",
+    "https_claude.ai",
     "https_chatgpt.com",
     "https_chat.openai.com",
     "https_gemini.google.com",

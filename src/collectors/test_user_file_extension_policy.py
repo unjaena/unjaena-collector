@@ -77,7 +77,7 @@ def test_ai_browser_indexeddb_policy_uses_known_origin_paths_only():
     assert all(
         (
             any(origin in path for origin in AI_BROWSER_INDEXEDDB_ORIGINS)
-            or ("https+++cl" + "aude.ai") in path
+            or "https+++claude.ai" in path
             or "https+++chatgpt.com" in path
         )
         for path in paths

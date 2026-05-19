@@ -1,44 +1,9 @@
 {
-  "_comment": "Example configuration for the forensic collection tool. Copy to config.json before use.",
-  "_security_warning": "Set your API key via the COLLECTOR_API_KEY environment variable. Do not store it directly in this file!",
-  "server": {
-    "url": "https://app.unjaena.com",
-    "_api_key_note": "Use the COLLECTOR_API_KEY environment variable. Do not store API keys in this file!",
-    "verify_ssl": true,
-    "timeout_seconds": 300
-  },
-  "collection": {
-    "output_directory": "./collected_artifacts",
-    "include_deleted_files": true,
-    "calculate_hashes": true,
-    "hash_algorithms": [
-      "md5",
-      "sha256"
-    ],
-    "max_file_size_mb": 1024,
-    "temp_directory": "./temp"
-  },
-  "upload": {
-    "enabled": false,
-    "encrypt_before_upload": true,
-    "auto_verify": true,
-    "retry_attempts": 3,
-    "chunk_size_mb": 10
-  },
-  "logging": {
-    "level": "INFO",
-    "file": "./logs/collector.log",
-    "max_size_mb": 50,
-    "backup_count": 5
-  },
-  "security": {
-    "min_tls_version": "TLSv1.2",
-    "certificate_pinning": false
-  },
-  "advanced": {
-    "parallel_collection": false,
-    "max_threads": 4,
-    "memory_limit_mb": 512,
-    "debug_mode": false
-  }
+  "_comment": "Example user-level collector settings. GUI releases create this automatically after first-run setup.",
+  "_path_note": "User settings are stored at ~/.forensic-collector/config.json.",
+  "server_url": "https://app.unjaena.com",
+  "ws_url": "wss://app.unjaena.com",
+  "app_name": "unJaena Intelligence Collector",
+  "version": "2.6.5",
+  "dev_mode": false
 }

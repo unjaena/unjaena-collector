@@ -80,7 +80,7 @@ class PathSpecsBasic(unittest.TestCase):
         # storage location of the same data. Example: mobile_ios_notes
         # covers both the iOS 9 path Library/Notes/notes.sqlite AND
         # the modern AppGroup NoteStore.sqlite directory glob. The
-        # collector dispatches both to the same server-side parser.
+        # collector dispatches both under the same artifact key.
         KNOWN_DUAL_SPEC = {
             "mobile_ios_notes",
             "ai_mobile_chatgpt",

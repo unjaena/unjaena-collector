@@ -97,7 +97,7 @@ AI_BROWSER_EXTENSION_IDS = (
 )
 
 AI_BROWSER_INDEXEDDB_ORIGINS = (
-    "https_cl" + "aude.ai",
+    "https_claude.ai",
     "https_chatgpt.com",
     "https_chat.openai.com",
     "https_gemini.google.com",
@@ -1557,22 +1557,8 @@ ARTIFACT_TYPES = {
     },
 
     # =========================================================================
-    # Screen Scraping (Non-Root Accessibility Service) — DISABLED
-    # =========================================================================
-    # The screen-scrape collector requires the ForensicAgent.apk binary in
-    # collector/resources/agent_apk/, but the APK is not shipped with the
-    # current release (only the .sha256 stub exists). Without the APK,
-    # _collect_screen_scrape() fails at the install step with
-    # "Failed to install Agent APK", so the checkbox would always produce
-    # an error if the user selected it.
-    #
-    # Removed from ARTIFACT_TYPES to avoid surfacing a non-functional
-    # option in the GUI. The ANDROID_SUBCATEGORIES "screen_scrape" header
-    # auto-hides when no items are present, so the entire Tier 3 section
-    # disappears as well. The collector code path is preserved in
-    # android_collector.py:_collect_screen_scrape so the feature can be
-    # re-enabled by dropping ForensicAgent.apk into resources/agent_apk/
-    # and reinstating this entry.
+    # Reserved Android extension methods are intentionally not registered in
+    # the public collector build.
 
     # =========================================================================
     # iOS Messenger Apps (Global)
@@ -3045,11 +3031,11 @@ ARTIFACT_TYPES = {
         'collector': 'collect_user_glob',
     },
     # =========================================================================
-    # User Files - Server-parseable extensions only (per server parser config)
+    # User Files - supported document/media extensions only
     # =========================================================================
     'document': {
         'name': 'Documents',
-        'description': 'Office documents, PDFs, HWP files (server-parseable only)',
+        'description': 'Office documents, PDFs, and HWP files',
         'paths': _glob_paths_for_extensions([
             r'%USERPROFILE%\Documents',
             r'%USERPROFILE%\Desktop',
@@ -3159,7 +3145,7 @@ ARTIFACT_TYPES = {
     # =========================================================================
     'image': {
         'name': 'Image Files',
-        'description': 'JPEG, PNG, GIF images with EXIF/GPS metadata (server-parseable)',
+        'description': 'JPEG, PNG, GIF images with EXIF/GPS metadata',
         'paths': _glob_paths_for_extensions([
             r'%USERPROFILE%\Pictures',
             r'%USERPROFILE%\Downloads',
@@ -3176,7 +3162,7 @@ ARTIFACT_TYPES = {
     },
     'video': {
         'name': 'Video Files',
-        'description': 'MP4, AVI, MOV videos with metadata (server-parseable, requires ffprobe)',
+        'description': 'MP4, AVI, MOV videos with metadata',
         'paths': _glob_paths_for_extensions([
             r'%USERPROFILE%\Videos',
             r'%USERPROFILE%\Downloads',
@@ -7741,7 +7727,7 @@ class ArtifactCollector:
             except Exception as e:
                 logger.debug(f"[MEMORY] Error: {e}")
 
-        # 3. Collect hardware metadata (for server-side processing)
+        # 3. Collect hardware metadata for downstream processing.
         if artifact_type == 'windows_kakaotalk':
             hw_result = self._save_hardware_metadata(output_dir, artifact_type)
             if hw_result:
@@ -7750,8 +7736,8 @@ class ArtifactCollector:
     def _collect_hardware_metadata(self) -> Optional[Dict[str, str]]:
         """Collect system hardware identifiers for forensic analysis.
 
-        Gathers hardware fingerprints used by server-side parsers
-        for application data processing. No transformations performed
+        Gathers hardware fingerprints used for application data processing.
+        No transformations are performed
         on the collected values - raw identifiers only.
 
         Returns:

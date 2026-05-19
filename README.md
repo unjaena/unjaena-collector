@@ -20,6 +20,7 @@ Typical files:
 | --- | --- |
 | Windows x64 | `IntelligenceCollector-*-windows-x64.exe` |
 | macOS Apple Silicon | `IntelligenceCollector-*-macos-arm64.dmg` |
+| macOS Intel | `IntelligenceCollector-*-macos-x86_64.dmg` |
 | Linux x64 | `IntelligenceCollector-*-linux-x64.tar.gz` |
 
 ## What It Does
@@ -114,20 +115,25 @@ run.bat
 
 ## Configuration
 
-Copy the example configuration and set the upload endpoint for your analysis
-service.
+Pre-built GUI releases ask for the analysis service URL on first launch and
+store it in the user's local collector settings.
 
-```bash
-cp config.example.json config.json
-```
-
-The hosted service endpoint is:
+For the hosted service, use:
 
 ```text
 https://app.unjaena.com
 ```
 
-Use only authorized session credentials issued by your analysis service.
+When running from source or in a scripted environment, you may also pass the
+service URL explicitly:
+
+```bash
+python src/main.py --server https://app.unjaena.com
+```
+
+`config.example.json` documents the user-level settings shape used by the
+collector. Do not place session tokens, credentials, or case evidence in that
+file. Use only authorized session credentials issued by your analysis service.
 
 ## Requirements
 

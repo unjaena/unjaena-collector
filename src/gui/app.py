@@ -149,7 +149,6 @@ SERVER_TO_COLLECTOR_MAPPING = {
     'mobile_android_wifi': 'mobile_android_wifi',
     'mobile_android_location': 'mobile_android_location',
     'mobile_android_media': 'mobile_android_media',
-    'mobile_android_screen_scrape': 'mobile_android_screen_scrape',
 
     # Android Messenger & SNS (server creates these from parsed data)
     'mobile_android_kakaotalk': 'mobile_android_app',
@@ -1045,14 +1044,12 @@ class CollectorWindow(QMainWindow):
         ('app_sns',             'SNS [Root Only]'),
         ('app_korean',          'Korean Apps'),
         ('app_email_browser',   'Email / Browser'),
-        ('screen_scrape',       'Screen Scraping'),
     ]
 
     # Android Tier headers (inserted as dividers before certain subcategories)
     ANDROID_TIER_HEADERS = {
         'basic':        'Tier 1 — Basic Collection (Non-Root)',
         'app_system':   'Tier 2 — App Data (Root→DB / Non-Root→SDCard)',
-        'screen_scrape':'Tier 3 — Screen Scraping (Root/Non-Root)',
     }
 
     def _create_android_tab(self) -> QWidget:
@@ -1206,7 +1203,7 @@ class CollectorWindow(QMainWindow):
             self.android_limitation_label.setVisible(False)
         else:
             self.android_root_banner.setText(
-                "Non-Root \u2014 External storage + Screen Scraping collection"
+                "Non-Root \u2014 External storage collection"
             )
             self.android_root_banner.setStyleSheet(
                 f"background: {COLORS['warning_bg']}; color: {COLORS['warning']}; "
@@ -1214,7 +1211,7 @@ class CollectorWindow(QMainWindow):
             )
             self.android_limitation_label.setText(
                 "Non-Root: Messenger apps auto-adapt to collect external storage data. "
-                "System info, media, and screen scraping are fully available. "
+                "System info and media collection are available. "
                 "Root-only items (marked [Root]) are disabled."
             )
             self.android_limitation_label.setVisible(True)
@@ -1231,16 +1228,6 @@ class CollectorWindow(QMainWindow):
             if info.get('category') != 'android':
                 continue
             if self._disable_disallowed_artifact(artifact_type, cb):
-                continue
-
-            # Screen scraping works on both Root and Non-Root — always enable when connected
-            if info.get('subcategory') == 'screen_scrape':
-                cb.setEnabled(True)
-                cb.setChecked(True)
-                cb.setToolTip(
-                    info.get('description', '') +
-                    " | Works on both Root and Non-Root devices"
-                )
                 continue
 
             requires_root = info.get('requires_root', False)
@@ -2693,7 +2680,7 @@ class CollectorWindow(QMainWindow):
         self.worker.ios_status_update.connect(
             lambda msg: self._show_ios_status(msg) if hasattr(self, '_ios_status_dialog') and self._ios_status_dialog else None
         )
-        # Screen scraping: device unlock dialog
+        # Reserved extension signal: device unlock dialog
         self.worker.unlock_requested.connect(self._on_unlock_requested)
         self.worker.start()
 
@@ -2798,7 +2785,7 @@ class CollectorWindow(QMainWindow):
 
     def _on_unlock_requested(self, error_msg: str):
         """
-        Handle screen scraping unlock request from worker thread.
+        Handle optional extension unlock request from worker thread.
 
         Shows a modal dialog asking the user to unlock the device,
         then unblocks the worker thread with retry/skip decision.
@@ -2812,12 +2799,12 @@ class CollectorWindow(QMainWindow):
         result = QMessageBox.warning(
             self,
             "Device Unlock Required",
-            "Screen Scraping requires the device to be unlocked.\n\n"
+            "This collection method requires the device to be unlocked.\n\n"
             "Please:\n"
             "  1. Turn on the device screen\n"
             "  2. Enter PIN / pattern / fingerprint to unlock\n"
-            "  3. Click 'Retry' to continue scraping\n\n"
-            "Click 'Skip' to skip screen scraping and continue with other artifacts.",
+            "  3. Click 'Retry' to continue\n\n"
+            "Click 'Skip' to continue with other artifacts.",
             QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Discard,
             QMessageBox.StandardButton.Retry
         )
@@ -3337,7 +3324,7 @@ class CollectionWorker(QThread):
     password_requested = pyqtSignal(str)
     # iOS status text update (shown in preparing/verify dialog)
     ios_status_update = pyqtSignal(str)
-    # Screen scraping: device unlock required
+    # Optional extension: device unlock required
     unlock_requested = pyqtSignal(str)
 
     # Stage weights (total 100%)
@@ -3421,7 +3408,7 @@ class CollectionWorker(QThread):
         self._pw_event = None
         self._pw_response = None
 
-        # Screen scraping unlock callback: threading.Event for GUI/worker sync
+        # Optional unlock callback: threading.Event for GUI/worker sync
         self._unlock_event = None
         self._unlock_response = None  # True = retry, False/None = skip
 
@@ -3692,7 +3679,7 @@ class CollectionWorker(QThread):
                 from collectors.android_collector import AndroidCollector
                 serial = device.metadata.get('serial')
                 collector = AndroidCollector(output_dir)
-                # Pass server credentials for screen scraping API calls
+                # Pass server credentials to optional collection extensions.
                 collector._server_url = self.server_url
                 collector._collection_token = self.collection_token
                 if serial:
@@ -3991,50 +3978,6 @@ class CollectionWorker(QThread):
                                 if not file_path or metadata.get('status') in ('error', 'not_found', 'not_implemented'):
                                     error_msg = metadata.get('error', metadata.get('message', 'Unknown error'))
                                     status = metadata.get('status', 'error')
-
-                                    # Screen scraping unlock dialog:
-                                    # Show modal dialog and wait for user to unlock device, then retry
-                                    if (artifact_type == 'mobile_android_screen_scrape'
-                                            and 'UNLOCKED' in error_msg):
-                                        import threading
-                                        self._unlock_event = threading.Event()
-                                        self._unlock_response = None
-                                        self.unlock_requested.emit(error_msg)
-                                        self._unlock_event.wait()  # Block worker until GUI responds
-
-                                        if self._unlock_response:
-                                            # User clicked retry — re-run screen_scrape
-                                            self.log_message.emit(
-                                                f"[{device_name}] Retrying screen scraping...", False
-                                            )
-                                            try:
-                                                retry_iter = collector.collect(
-                                                    artifact_type, include_deleted=_include_deleted
-                                                )
-                                                for r_path, r_meta in retry_iter:
-                                                    if self._cancelled:
-                                                        break
-                                                    if not r_path or r_meta.get('status') in ('error', 'not_found'):
-                                                        r_err = r_meta.get('error', 'Unknown')
-                                                        self.log_message.emit(
-                                                            f"[{device_name}] {artifact_type}: {r_err}", True
-                                                        )
-                                                        error_count += 1
-                                                        continue
-                                                    r_meta['device_id'] = device.device_id
-                                                    r_meta['device_name'] = device_name
-                                                    r_meta['device_type'] = device.device_type.name
-                                                    collected_raw_files.append((r_path, artifact_type, r_meta))
-                                                    file_count += 1
-                                            except Exception as retry_e:
-                                                self.log_message.emit(
-                                                    f"[{device_name}] Screen scraping retry failed: {retry_e}", True
-                                                )
-                                        else:
-                                            self.log_message.emit(
-                                                f"[{device_name}] Screen scraping skipped by user", False
-                                            )
-                                        continue
 
                                     # not_found = file absent from backup (normal for uninstalled apps)
                                     # Unknown artifact type = other platform artifact (silent skip)

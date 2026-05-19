@@ -992,8 +992,7 @@ class macOSCollector:
                     pass
         return None
 
-    # _extract_launch_metadata removed
-    # Forensic analysis logic is performed on server (macos_basic_parser.py)
+    # _extract_launch_metadata removed; this collector only acquires source files.
 
     def _extract_username(self, path: str) -> Optional[str]:
         """

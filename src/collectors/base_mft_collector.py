@@ -399,14 +399,14 @@ ARTIFACT_MFT_FILTERS = {
     },
 
     # =========================================================================
-    # User Files - Server-parseable extensions only (based on server parser config)
+    # User Files - supported document/media extensions only
     # =========================================================================
     'document': {
         'extensions': set(DOCUMENT_EXTENSIONS),
         'include_deleted': True,
         'include_system_folders': True,
         'full_disk_scan': True,
-        'description': 'Office documents, PDFs (server-parseable only)',
+        'description': 'Office documents and PDFs',
     },
     'email': {
         'extensions': set(EMAIL_EXTENSIONS),

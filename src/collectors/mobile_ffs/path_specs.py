@@ -670,9 +670,7 @@ IOS_PATH_SPECS: Tuple[IOSArtifactSpec, ...] = (
         container_kind=ContainerKind.SYSTEM,
         description="Wallet passes + transactions",
     ),
-    # New artifact_types — server enum extension required (added in
-    # the server-side companion commit). Daubert: explicit, neutral,
-    # bundle-name-free.
+    # Additional explicit, neutral artifact targets.
     IOSArtifactSpec(
         artifact_type="mobile_ios_notification_history",
         package=None,

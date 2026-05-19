@@ -40,10 +40,10 @@ If you discover a security vulnerability in this project, please report it respo
 - Token values never logged in plaintext (SHA-256 hash used for debug)
 
 ### Data Handling
-- Collected artifacts encrypted before upload (AES-256-GCM, per-file SHA-256 bound as AAD)
+- Collected artifacts are protected in transit and include per-file integrity metadata
 - Per-file SHA-256 hashing with integrity verification at upload time
 - No credentials stored in application code or config templates
-- All sensitive configuration via environment variables
+- Session credentials are provided at runtime and are not stored in config templates
 - Operator consent record (HMAC-SHA256 integrity tag over the user's selections) is retained alongside the archive
 
 ## Supported Versions
