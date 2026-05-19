@@ -2008,6 +2008,11 @@ class CollectorWindow(QMainWindow):
                 "Confirm Collection Targets",
                 f"Collecting from {len(selected_devices)} device(s):\n\n{device_list}\n\n"
                 f"Selected artifacts: {len(selected)}\n\n"
+                "Evidence scope warning:\n"
+                "Only continue if all selected sources belong to the same "
+                "investigation scope.\n"
+                "Uncheck any unrelated device, disk image, or removable media "
+                "before starting collection.\n\n"
                 f"Continue?\n\n"
                 f"(To collect from specific devices only, select 'No'\n"
                 f"and uncheck unwanted devices)",
