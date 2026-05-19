@@ -4,6 +4,6 @@
   "server_url": "https://app.unjaena.com",
   "ws_url": "wss://app.unjaena.com",
   "app_name": "unJaena Intelligence Collector",
-  "version": "2.6.5",
+  "version": "2.6.6",
   "dev_mode": false
 }

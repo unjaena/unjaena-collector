@@ -5,6 +5,22 @@ All notable public collector changes are documented here.
 This changelog covers the open-source collector client only. Server-side
 parsing and analysis workflow logic are not part of this public repository.
 
+## [2.6.6] - 2026-05-19
+
+### Changed
+
+- Removed unused Android screen extension code paths from the public collector
+  build surface.
+- Updated public configuration examples to match the first-run GUI setup flow.
+- Refined public documentation and source comments to avoid exposing internal
+  analysis implementation details.
+- Added macOS Intel release artifact documentation.
+
+### Verified
+
+- Collector source compile checks passed.
+- User-file extension policy regression tests passed locally.
+
 ## [2.6.5] - 2026-05-19
 
 ### Fixed
