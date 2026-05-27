@@ -9,6 +9,8 @@ class AuthSession:
     collection_token: str
     server_url: str
     signing_key: str | None = None
+    challenge_salt: str | None = None
+    hardware_id: str | None = None
 
 
 @dataclass

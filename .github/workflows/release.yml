@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     tags:
+      - "thin-collector-v*"
+      - "collector-thin-v*"
       - "collector-v*"
 
 permissions:

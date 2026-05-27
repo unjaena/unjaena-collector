@@ -177,6 +177,8 @@ class ProfileRunner:
         source_files: list[Path] | None = None,
         include_local_profile_targets: bool = True,
         source_artifacts: dict[str, str] | None = None,
+        end_session: bool = True,
+        trigger_analysis: bool = True,
     ) -> dict[str, int]:
         counters = {"scanned": 0, "uploaded": 0, "skipped": 0, "failed": 0}
         seen: set[Path] = set()
@@ -214,5 +216,13 @@ class ProfileRunner:
                         continue
                     seen.add(resolved)
                     self._upload_one(resolved, target, counters)
+        if end_session and counters["uploaded"] > 0:
+            try:
+                self._emit("session_ending", **counters)
+                self.client.end_collection(self.session, trigger_analysis=trigger_analysis)
+                self._emit("session_ended", **counters)
+            except Exception as exc:
+                self._emit("session_end_failed", error=str(exc), **counters)
+                raise
         self._emit("finished", **counters)
         return counters

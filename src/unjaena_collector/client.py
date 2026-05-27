@@ -15,6 +15,9 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from .models import AuthSession, CollectionProfile, ProfileTarget
 
 
+_HKDF_INFO = b"collector-request-signing-v1"
+
+
 def _canonical(data: Any) -> bytes:
     return json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -31,15 +34,57 @@ def _headers(session: AuthSession) -> dict[str, str]:
     }
 
 
+def _hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
+    if not salt:
+        salt = b"\x00" * 32
+    prk = hmac.new(salt, ikm, hashlib.sha256).digest()
+    t = b""
+    okm = b""
+    for index in range(1, (length + 31) // 32 + 1):
+        t = hmac.new(prk, t + info + bytes([index]), hashlib.sha256).digest()
+        okm += t
+    return okm[:length]
+
+
+def _derive_key(base_key_hex: str, hardware_id: str, challenge_salt: str) -> bytes:
+    base_key = bytes.fromhex(base_key_hex)
+    salt = (challenge_salt + hardware_id).encode("utf-8")
+    return _hkdf_sha256(base_key, salt, _HKDF_INFO, length=32)
+
+
+def _signed_headers(session: AuthSession, method: str, path: str, body: bytes = b"") -> dict[str, str]:
+    headers = _headers(session)
+    if not (session.signing_key and session.challenge_salt and session.hardware_id):
+        return headers
+
+    timestamp = str(int(time.time()))
+    nonce = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii").rstrip("=")
+    body_hash = hashlib.sha256(body or b"").hexdigest()
+    token_prefix = session.collection_token[:32]
+    canonical = f"{method.upper()}\n{path}\n{timestamp}\n{nonce}\n{body_hash}\n{token_prefix}"
+    signature = hmac.new(
+        _derive_key(session.signing_key, session.hardware_id, session.challenge_salt),
+        canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    headers.update({
+        "X-Client-Signature": signature,
+        "X-Client-Timestamp": timestamp,
+        "X-Client-Nonce": nonce,
+    })
+    return headers
+
+
 class ServiceClient:
     def __init__(self, server_url: str, timeout: int = 30):
         self.server_url = server_url.rstrip("/")
         self.timeout = timeout
 
     def authenticate(self, token: str) -> AuthSession:
+        hardware_id = _hardware_id()
         payload = {
             "session_token": token,
-            "hardware_id": _hardware_id(),
+            "hardware_id": hardware_id,
             "client_info": {
                 "hostname": platform.node(),
                 "platform": platform.platform(),
@@ -59,6 +104,8 @@ class ServiceClient:
             collection_token=data["collection_token"],
             server_url=data.get("server_url") or self.server_url,
             signing_key=data.get("signing_key"),
+            challenge_salt=data.get("challenge_salt"),
+            hardware_id=hardware_id,
         )
 
     def get_profile(self, session: AuthSession) -> CollectionProfile:
@@ -106,10 +153,14 @@ class ServiceClient:
             "content_type": "application/octet-stream",
             "profile_id": profile_id,
         }
+        api_path = "/api/v1/collector/r2/presigned-url"
+        body = _canonical(payload)
+        headers = _signed_headers(session, "POST", api_path, body)
+        headers["Content-Type"] = "application/json"
         res = requests.post(
-            f"{self.server_url}/api/v1/collector/r2/presigned-url",
-            headers=_headers(session),
-            json=payload,
+            f"{self.server_url}{api_path}",
+            headers=headers,
+            data=body,
             timeout=self.timeout,
         )
         res.raise_for_status()
@@ -128,10 +179,26 @@ class ServiceClient:
             "original_path": str(path),
             "profile_id": profile_id,
         }
+        api_path = "/api/v1/collector/r2/upload-complete"
+        body = _canonical(payload)
+        headers = _signed_headers(session, "POST", api_path, body)
+        headers["Content-Type"] = "application/json"
         res = requests.post(
-            f"{self.server_url}/api/v1/collector/r2/upload-complete",
-            headers=_headers(session),
-            json=payload,
+            f"{self.server_url}{api_path}",
+            headers=headers,
+            data=body,
+            timeout=self.timeout,
+        )
+        res.raise_for_status()
+        return res.json()
+
+    def end_collection(self, session: AuthSession, trigger_analysis: bool = True) -> dict[str, Any]:
+        api_path = f"/api/v1/collector/collection/end/{session.session_id}"
+        headers = _signed_headers(session, "POST", api_path, b"")
+        res = requests.post(
+            f"{self.server_url}{api_path}",
+            headers=headers,
+            params={"trigger_analysis": str(bool(trigger_analysis)).lower()},
             timeout=self.timeout,
         )
         res.raise_for_status()
@@ -139,7 +206,12 @@ class ServiceClient:
 
     def upload_file(self, upload_url: str, path: Path) -> None:
         with path.open("rb") as handle:
-            res = requests.put(upload_url, data=handle, timeout=max(self.timeout, 300))
+            res = requests.put(
+                upload_url,
+                data=handle,
+                headers={"Content-Type": "application/octet-stream"},
+                timeout=max(self.timeout, 300),
+            )
         res.raise_for_status()
 
     def upload_multipart(self, upload_urls: list[dict[str, Any]], path: Path) -> list[dict[str, Any]]:
@@ -150,7 +222,12 @@ class ServiceClient:
                 end = int(item["end"])
                 handle.seek(start)
                 data = handle.read(end - start)
-                res = requests.put(item["url"], data=data, timeout=max(self.timeout, 300))
+                res = requests.put(
+                    item["url"],
+                    data=data,
+                    headers={"Content-Type": "application/octet-stream"},
+                    timeout=max(self.timeout, 300),
+                )
                 res.raise_for_status()
                 etag = res.headers.get("ETag") or res.headers.get("etag")
                 if not etag:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from unjaena_collector.client import _canonical, encrypted_temp_file, sha256_file
+from unjaena_collector.client import ServiceClient, _canonical, _derive_key, _signed_headers, encrypted_temp_file, sha256_file
 from unjaena_collector.models import AuthSession, CollectionProfile, ProfileTarget
 from unjaena_collector.runner import ProfileRunner
 from unjaena_collector.source_formats import candidate_artifacts_for_path, classify_source_path
@@ -21,6 +21,7 @@ class FakeClient:
         self.presigned = []
         self.uploaded = []
         self.completed = []
+        self.ended = []
 
     def presign(self, session, path, artifact_type, digest, profile_id=None):
         self.presigned.append((session, path, artifact_type, digest, profile_id))
@@ -41,6 +42,10 @@ class FakeClient:
         })
         return {"ok": True}
 
+    def end_collection(self, session, trigger_analysis=True):
+        self.ended.append({"session": session, "trigger_analysis": trigger_analysis})
+        return {"status": "completed"}
+
 
 class ClientRunnerTests(unittest.TestCase):
     def test_canonical_signature_payload_is_stable(self):
@@ -50,6 +55,68 @@ class ClientRunnerTests(unittest.TestCase):
             hmac.new(b"signing-key", _canonical(payload), hashlib.sha256).digest()
         ).decode().rstrip("=")
         self.assertTrue(sig)
+
+    def test_session_request_signature_matches_server_canonical_form(self):
+        session = AuthSession(
+            "sid",
+            "case-1",
+            "collection-token-prefix-value-for-test",
+            "https://example.test",
+            signing_key="11" * 32,
+            challenge_salt="challenge",
+            hardware_id="hardware",
+        )
+        body = _canonical({"b": 2, "a": 1})
+        with patch("unjaena_collector.client.time.time", return_value=1710000000), \
+             patch("unjaena_collector.client.os.urandom", return_value=b"\x01" * 18):
+            headers = _signed_headers(session, "POST", "/api/v1/collector/r2/presigned-url", body)
+
+        nonce = base64.urlsafe_b64encode(b"\x01" * 18).decode("ascii").rstrip("=")
+        canonical = "\n".join([
+            "POST",
+            "/api/v1/collector/r2/presigned-url",
+            "1710000000",
+            nonce,
+            hashlib.sha256(body).hexdigest(),
+            session.collection_token[:32],
+        ])
+        expected = hmac.new(
+            _derive_key(session.signing_key, session.hardware_id, session.challenge_salt),
+            canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertEqual(headers["X-Client-Signature"], expected)
+        self.assertEqual(headers["X-Client-Timestamp"], "1710000000")
+        self.assertEqual(headers["X-Client-Nonce"], nonce)
+
+    def test_upload_file_sends_octet_stream_content_type(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "sample.bin"
+            path.write_bytes(b"data")
+            fake_response = type("Response", (), {"raise_for_status": lambda self: None})()
+            with patch("unjaena_collector.client.requests.put", return_value=fake_response) as put:
+                ServiceClient("https://example.test").upload_file("https://r2.example/upload", path)
+            self.assertEqual(put.call_args.kwargs["headers"], {"Content-Type": "application/octet-stream"})
+
+    def test_end_collection_uses_signed_empty_body_request(self):
+        session = AuthSession(
+            "session-1",
+            "case-1",
+            "collection-token-prefix-value-for-test",
+            "https://example.test",
+            signing_key="22" * 32,
+            challenge_salt="challenge",
+            hardware_id="hardware",
+        )
+        fake_response = type("Response", (), {"raise_for_status": lambda self: None, "json": lambda self: {"status": "completed"}})()
+        with patch("unjaena_collector.client.time.time", return_value=1710000000), \
+             patch("unjaena_collector.client.os.urandom", return_value=b"\x02" * 18), \
+             patch("unjaena_collector.client.requests.post", return_value=fake_response) as post:
+            result = ServiceClient("https://example.test").end_collection(session, trigger_analysis=False)
+        self.assertEqual(result, {"status": "completed"})
+        self.assertEqual(post.call_args.args[0], "https://example.test/api/v1/collector/collection/end/session-1")
+        self.assertEqual(post.call_args.kwargs["params"], {"trigger_analysis": "false"})
+        self.assertIn("X-Client-Signature", post.call_args.kwargs["headers"])
 
     def test_sha256_file(self):
         with tempfile.TemporaryDirectory() as td:
@@ -92,6 +159,8 @@ class ClientRunnerTests(unittest.TestCase):
             result = ProfileRunner(client, session, profile).run()
             self.assertEqual(result, {"scanned": 2, "uploaded": 1, "skipped": 1, "failed": 0})
             self.assertEqual(len(client.uploaded), 1)
+            self.assertEqual(len(client.ended), 1)
+            self.assertTrue(client.ended[0]["trigger_analysis"])
             self.assertEqual(client.completed[0]["profile_id"], "profile-1")
             self.assertEqual(client.completed[0]["artifact_type"], "test_artifact")
 
