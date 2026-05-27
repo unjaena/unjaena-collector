@@ -21,14 +21,14 @@ jobs:
       - run: python -m pip install .
       - run: python tools/public_preflight.py
       - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile src/unjaena_collector/cli.py src/unjaena_collector/client.py src/unjaena_collector/runner.py src/unjaena_collector/gui.py src/unjaena_collector/models.py src/unjaena_collector/desktop.py tools/build_desktop.py tools/package_desktop.py tools/checksums.py
+      - run: python -m py_compile src/unjaena_collector/cli.py src/unjaena_collector/client.py src/unjaena_collector/runner.py src/unjaena_collector/gui.py src/unjaena_collector/models.py src/unjaena_collector/desktop.py tools/build_desktop.py tools/package_desktop.py tools/checksums.py tools/sign_macos.py
 
   desktop:
     needs: verify
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+        os: [windows-latest, macos-13, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +38,12 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install .[desktop]
       - run: python tools/build_desktop.py
+      - name: Sign macOS app
+        if: runner.os == 'macOS'
+        env:
+          APPLE_DEVELOPER_ID_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_BASE64 }}
+          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        run: python tools/sign_macos.py
       - run: python tools/package_desktop.py
       - run: python tools/checksums.py
       - uses: softprops/action-gh-release@v2

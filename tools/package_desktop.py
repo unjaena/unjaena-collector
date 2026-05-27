@@ -22,12 +22,23 @@ def main() -> int:
     version = _version()
     release = ROOT / "release"
     release.mkdir(exist_ok=True)
-    exe_name = "UnjaenaCollector.exe" if platform.system().lower() == "windows" else "UnjaenaCollector"
-    app = ROOT / "dist" / exe_name
+    system = platform.system().lower()
+    if system == "windows":
+        exe_name = "UnjaenaCollector.exe"
+        app = ROOT / "dist" / exe_name
+    elif system == "darwin":
+        app = ROOT / "dist" / "UnjaenaCollector.app"
+        exe_name = "UnjaenaCollector.app"
+        if not app.exists():
+            app = ROOT / "dist" / "UnjaenaCollector"
+            exe_name = "UnjaenaCollector"
+    else:
+        exe_name = "UnjaenaCollector"
+        app = ROOT / "dist" / exe_name
     if not app.exists():
         raise SystemExit(f"Missing desktop build: {app}")
     base = _asset_name(version)
-    if platform.system().lower() == "windows":
+    if system == "windows":
         target = release / f"{base}.zip"
         with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.write(app, exe_name)

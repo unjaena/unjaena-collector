@@ -25,6 +25,13 @@ PATTERNS = [
 SKIP = {".git", "__pycache__", ".pytest_cache", "dist", "build"}
 
 
+def _allow_match(path: Path, pattern: str) -> bool:
+    rel = path.relative_to(ROOT)
+    if rel.as_posix().startswith(".github/workflows/") and pattern == r"secret":
+        return True
+    return False
+
+
 def main() -> int:
     failures = []
     compiled = [re.compile(p, re.IGNORECASE) for p in PATTERNS]
@@ -41,6 +48,8 @@ def main() -> int:
             continue
         for pattern in compiled:
             if pattern.search(text):
+                if _allow_match(path, pattern.pattern):
+                    continue
                 failures.append(f"{path.relative_to(ROOT)}: {pattern.pattern}")
     if failures:
         print("Public preflight failed")
