@@ -49,7 +49,7 @@ def main() -> int:
     cert_password = os.environ.get("APPLE_DEVELOPER_ID_CERT_PASSWORD", "")
     if not cert_b64 or not cert_password:
         if signing_required():
-            raise SystemExit("macOS signing secrets are required for release builds")
+            raise SystemExit("macOS signing material is required for release builds")
         print("macOS signing skipped")
         return 0
 

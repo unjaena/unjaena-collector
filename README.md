@@ -2,14 +2,14 @@
 
 Open desktop client for authorized forensic collection workflows.
 
-This repository contains the public client shell only: service authentication, signed profile validation, local file hashing, optional encrypted transport preparation, upload completion, and a simple desktop interface. The collection catalog, parsing, scoring, analysis, reporting, policy, and recovery logic are delivered or executed by the service.
+This repository contains the public client shell only: service authentication, signed profile validation, local file hashing, optional encrypted transport preparation, upload completion, and a desktop interface for local live collection, forensic image or bundle source upload, and server-profile driven artifact selection. The collection catalog, parsing, scoring, analysis, reporting, policy, and recovery logic are delivered or executed by the service.
 
 ## Install
 
 Use the latest release asset for your platform when available. The Python package exposes both command line and desktop entry points.
 
 ```bash
-python -m pip install unjaena_collector-0.2.1-py3-none-any.whl
+python -m pip install unjaena_collector-0.3.0-py3-none-any.whl
 unjaena-collector-gui
 ```
 
@@ -24,10 +24,11 @@ unjaena-collector --server https://app.unjaena.com --token CASE_SESSION_TOKEN
 1. Open `unjaena-collector-gui`.
 2. Confirm the service address.
 3. Paste the case session token issued by the service.
-4. Start collection.
-5. Keep the app open until the upload summary is complete.
+4. Select local live filesystem and/or add an authorized forensic image or bundle file.
+5. Review the server-signed collection profile targets.
+6. Start collection and keep the app open until the upload summary is complete.
 
-The desktop app shows connection state, scan count, upload count, skipped files, failed files, and a short event log. It does not display or embed the service collection catalog.
+The desktop app shows source selection, server profile targets, scan count, upload count, skipped files, failed files, and a short event log. It does not embed local path catalogs or product-specific collection rules; profile targets are loaded after session authentication.
 
 ## Security Model
 

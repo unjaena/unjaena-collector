@@ -95,6 +95,29 @@ class ClientRunnerTests(unittest.TestCase):
             self.assertEqual(client.completed[0]["artifact_type"], "test_artifact")
 
 
+    def test_profile_runner_uploads_authorized_source_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            image = root / "evidence.E01"
+            image.write_bytes(b"image")
+            session = AuthSession("sid", "case-1", "ct", "https://example.test")
+            profile = CollectionProfile(
+                profile_id="profile-1",
+                case_id="case-1",
+                expires_at="2099-01-01T00:00:00Z",
+                targets=[ProfileTarget("e01_image", "source_file", ["*.E01", "*.e01"], metadata={"source_upload": True})],
+            )
+            client = FakeClient()
+            result = ProfileRunner(client, session, profile).run(
+                selected_artifacts={"e01_image"},
+                source_files=[image],
+                include_local_profile_targets=False,
+            )
+            self.assertEqual(result, {"scanned": 1, "uploaded": 1, "skipped": 0, "failed": 0})
+            self.assertEqual(client.completed[0]["artifact_type"], "e01_image")
+            self.assertEqual(client.completed[0]["profile_id"], "profile-1")
+
+
 class MacSigningTests(unittest.TestCase):
     def test_signing_required_accepts_release_values(self):
         with patch.dict(os.environ, {"UNJAENA_SIGNING_REQUIRED": "1"}, clear=False):

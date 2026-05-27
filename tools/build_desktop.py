@@ -6,17 +6,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _require_tk() -> None:
+def _require_desktop_gui() -> None:
     try:
-        import tkinter
-        root = tkinter.Tcl()
-        root.eval("info patchlevel")
+        import PyQt6.QtWidgets  # noqa: F401
     except Exception as exc:
-        raise SystemExit(f"Tcl/Tk desktop support is required for GUI builds: {exc}")
+        raise SystemExit(f"PyQt6 desktop support is required for GUI builds: {exc}")
 
 
 def main() -> int:
-    _require_tk()
+    _require_desktop_gui()
     entry = ROOT / "src" / "unjaena_collector" / "desktop.py"
     system = platform.system().lower()
     cmd = [

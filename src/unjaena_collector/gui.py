@@ -1,22 +1,73 @@
+from __future__ import annotations
+
 import os
 import queue
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 try:
-    import tkinter as tk
-    from tkinter import messagebox, ttk
+    from PyQt6.QtCore import Qt, QTimer
+    from PyQt6.QtGui import QFont
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QCheckBox,
+        QFileDialog,
+        QFrame,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QLineEdit,
+        QListWidget,
+        QListWidgetItem,
+        QMainWindow,
+        QMessageBox,
+        QProgressBar,
+        QPushButton,
+        QScrollArea,
+        QSplitter,
+        QTabWidget,
+        QTextEdit,
+        QVBoxLayout,
+        QWidget,
+    )
 except ModuleNotFoundError:
-    tk = None
-    messagebox = None
-    ttk = None
+    QApplication = None
+    Qt = None
+    QMainWindow = object
 
 from .client import ServiceClient
+from .models import CollectionProfile, ProfileTarget
 from .runner import ProfileRunner
 
 DEFAULT_SERVER_URL = os.environ.get("UNJAENA_SERVER_URL", "https://app.unjaena.com")
+SOURCE_FILE_FILTER = (
+    "Forensic Images and Bundles (*.E01 *.e01 *.Ex01 *.ex01 *.s01 *.S01 *.l01 *.L01 "
+    "*.dd *.raw *.img *.bin *.001 *.vmdk *.vhd *.vhdx *.qcow2 *.vdi *.dmg *.DMG *.zip);;"
+    "All Files (*)"
+)
+
+COLORS = {
+    "bg_primary": "#0d1117",
+    "bg_secondary": "#161b22",
+    "bg_tertiary": "#21262d",
+    "bg_hover": "#30363d",
+    "bg_active": "#484f58",
+    "text_primary": "#f0f6fc",
+    "text_secondary": "#8b949e",
+    "text_tertiary": "#6e7681",
+    "brand_primary": "#d4a574",
+    "brand_secondary": "#b8956e",
+    "brand_accent": "#e8c49a",
+    "success": "#3fb950",
+    "warning": "#d29922",
+    "error": "#f85149",
+    "info": "#58a6ff",
+    "border_subtle": "#30363d",
+    "border_default": "#484f58",
+}
 
 
 def _safe_text(value: Any, limit: int = 160) -> str:
@@ -26,140 +77,389 @@ def _safe_text(value: Any, limit: int = 160) -> str:
     return text
 
 
-class CollectorApp:
-    def __init__(self, root: Any):
-        self.root = root
-        self.root.title("Unjaena Collector")
-        self.root.minsize(700, 520)
+def _stylesheet() -> str:
+    return f"""
+    * {{ font-family: 'Segoe UI', 'Arial', sans-serif; }}
+    QMainWindow, QWidget {{ background-color: {COLORS['bg_primary']}; color: {COLORS['text_primary']}; }}
+    QFrame#header {{ background-color: {COLORS['bg_secondary']}; border: 1px solid {COLORS['border_subtle']}; border-radius: 8px; }}
+    QGroupBox {{ background-color: {COLORS['bg_secondary']}; border: 1px solid {COLORS['border_subtle']}; border-radius: 8px; margin-top: 10px; padding: 8px; padding-top: 18px; }}
+    QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 10px; padding: 0 6px; color: {COLORS['brand_primary']}; background-color: {COLORS['bg_secondary']}; font-weight: 600; }}
+    QLabel {{ color: {COLORS['text_primary']}; background: transparent; }}
+    QLabel#muted {{ color: {COLORS['text_tertiary']}; font-size: 11px; }}
+    QLabel#statusOk {{ color: {COLORS['success']}; font-weight: 600; }}
+    QLabel#statusWarn {{ color: {COLORS['warning']}; font-weight: 600; }}
+    QLabel#statusError {{ color: {COLORS['error']}; font-weight: 600; }}
+    QLineEdit, QTextEdit, QListWidget {{ background-color: {COLORS['bg_tertiary']}; border: 1px solid {COLORS['border_subtle']}; border-radius: 5px; color: {COLORS['text_primary']}; padding: 6px; selection-background-color: {COLORS['brand_secondary']}; }}
+    QLineEdit:focus, QTextEdit:focus, QListWidget:focus {{ border-color: {COLORS['brand_primary']}; }}
+    QPushButton {{ background-color: {COLORS['bg_tertiary']}; border: 1px solid {COLORS['border_subtle']}; border-radius: 5px; padding: 7px 12px; color: {COLORS['text_primary']}; font-weight: 600; }}
+    QPushButton:hover {{ background-color: {COLORS['bg_hover']}; border-color: {COLORS['border_default']}; }}
+    QPushButton:disabled {{ color: {COLORS['text_tertiary']}; border-color: {COLORS['border_subtle']}; background-color: {COLORS['bg_tertiary']}; }}
+    QPushButton#primary {{ background-color: {COLORS['brand_primary']}; color: {COLORS['bg_primary']}; border: none; }}
+    QPushButton#primary:hover {{ background-color: {COLORS['brand_accent']}; }}
+    QCheckBox {{ spacing: 8px; color: {COLORS['text_primary']}; }}
+    QCheckBox:disabled {{ color: {COLORS['text_tertiary']}; }}
+    QTabWidget::pane {{ border: 1px solid {COLORS['border_subtle']}; border-radius: 6px; background-color: {COLORS['bg_tertiary']}; }}
+    QTabBar::tab {{ background-color: {COLORS['bg_secondary']}; color: {COLORS['text_secondary']}; border: 1px solid {COLORS['border_subtle']}; padding: 6px 12px; margin-right: 2px; border-top-left-radius: 5px; border-top-right-radius: 5px; }}
+    QTabBar::tab:selected {{ color: {COLORS['text_primary']}; background-color: {COLORS['bg_tertiary']}; border-bottom-color: {COLORS['bg_tertiary']}; }}
+    QProgressBar {{ background-color: {COLORS['bg_tertiary']}; border: 1px solid {COLORS['border_subtle']}; border-radius: 5px; height: 14px; text-align: center; }}
+    QProgressBar::chunk {{ background-color: {COLORS['brand_primary']}; border-radius: 4px; }}
+    QScrollArea {{ border: none; background: transparent; }}
+    """
+
+
+def _label_for_target(target: ProfileTarget) -> str:
+    metadata = target.metadata or {}
+    label = metadata.get("label") or metadata.get("name") or target.artifact_type.replace("_", " ").title()
+    return _safe_text(label, 80)
+
+
+def _category_for_target(target: ProfileTarget) -> str:
+    metadata = target.metadata or {}
+    category = metadata.get("category") or metadata.get("group")
+    if category:
+        return _safe_text(category, 40).title()
+    kind = str(target.kind or "").lower()
+    if kind in {"source_file", "image_file", "forensic_image", "disk_image", "bundle", "raw_upload"}:
+        return "Evidence Sources"
+    artifact = target.artifact_type.lower()
+    if artifact.startswith("mobile_android"):
+        return "Android"
+    if artifact.startswith("mobile_ios"):
+        return "iOS"
+    if artifact.startswith("linux"):
+        return "Linux"
+    if artifact.startswith("macos"):
+        return "macOS"
+    if artifact.startswith("ai_"):
+        return "AI Activity"
+    return "Windows"
+
+
+def _target_hint(target: ProfileTarget) -> str:
+    metadata = target.metadata or {}
+    parts = []
+    if metadata.get("description"):
+        parts.append(str(metadata["description"]))
+    parts.append(f"Artifact: {target.artifact_type}")
+    if target.kind:
+        parts.append(f"Mode: {target.kind}")
+    if target.max_bytes:
+        parts.append(f"Max size: {target.max_bytes} bytes")
+    return " | ".join(parts)
+
+
+class CollectorApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.worker: threading.Thread | None = None
         self.stop_event = threading.Event()
-        self.show_token = tk.BooleanVar(value=False)
-        self.server_var = tk.StringVar(value=DEFAULT_SERVER_URL)
-        self.token_var = tk.StringVar(value="")
-        self.status_var = tk.StringVar(value="Ready")
-        self.scanned_var = tk.StringVar(value="0")
-        self.uploaded_var = tk.StringVar(value="0")
-        self.skipped_var = tk.StringVar(value="0")
-        self.failed_var = tk.StringVar(value="0")
+        self.client: ServiceClient | None = None
+        self.session = None
+        self.profile: CollectionProfile | None = None
+        self.target_checks: dict[str, QCheckBox] = {}
+        self.source_files: list[Path] = []
         self._build()
-        self.root.after(100, self._poll_events)
+        self._set_running(False)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._poll_events)
+        self.timer.start(100)
 
     def _build(self) -> None:
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(4, weight=1)
+        self.setWindowTitle("Unjaena Collector")
+        self.setMinimumSize(980, 680)
+        self.setStyleSheet(_stylesheet())
 
-        title = ttk.Label(self.root, text="Unjaena Collector", font=("Arial", 18, "bold"))
-        title.grid(row=0, column=0, sticky="w", padx=18, pady=(16, 8))
+        central = QWidget()
+        self.setCentralWidget(central)
+        main = QVBoxLayout(central)
+        main.setContentsMargins(10, 10, 10, 10)
+        main.setSpacing(10)
 
-        form = ttk.Frame(self.root)
-        form.grid(row=1, column=0, sticky="ew", padx=18)
-        form.columnconfigure(1, weight=1)
+        header = QFrame()
+        header.setObjectName("header")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(14, 8, 14, 8)
+        title = QLabel("Unjaena Collector")
+        title.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
+        header_layout.addWidget(title)
+        subtitle = QLabel("Profile-driven evidence collection")
+        subtitle.setObjectName("muted")
+        header_layout.addWidget(subtitle)
+        header_layout.addStretch()
+        self.header_status = QLabel("Ready")
+        self.header_status.setObjectName("statusWarn")
+        header_layout.addWidget(self.header_status)
+        main.addWidget(header)
 
-        ttk.Label(form, text="Server").grid(row=0, column=0, sticky="w", pady=6)
-        self.server_entry = ttk.Entry(form, textvariable=self.server_var)
-        self.server_entry.grid(row=0, column=1, sticky="ew", padx=(12, 0), pady=6)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self._left_panel())
+        splitter.addWidget(self._right_panel())
+        splitter.setSizes([610, 370])
+        main.addWidget(splitter, 1)
 
-        ttk.Label(form, text="Session token").grid(row=1, column=0, sticky="w", pady=6)
-        token_frame = ttk.Frame(form)
-        token_frame.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=6)
-        token_frame.columnconfigure(0, weight=1)
-        self.token_entry = ttk.Entry(token_frame, textvariable=self.token_var, show="*")
-        self.token_entry.grid(row=0, column=0, sticky="ew")
-        ttk.Checkbutton(token_frame, text="Show", variable=self.show_token, command=self._toggle_token).grid(row=0, column=1, padx=(10, 0))
+    def _left_panel(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(8)
 
-        buttons = ttk.Frame(self.root)
-        buttons.grid(row=2, column=0, sticky="ew", padx=18, pady=12)
-        self.start_button = ttk.Button(buttons, text="Start collection", command=self._start)
-        self.start_button.pack(side="left")
-        self.stop_button = ttk.Button(buttons, text="Stop after current file", command=self._stop, state="disabled")
-        self.stop_button.pack(side="left", padx=(10, 0))
+        source_group = QGroupBox("0. Evidence Source")
+        source_layout = QVBoxLayout(source_group)
+        self.local_live_cb = QCheckBox("Local live filesystem")
+        self.local_live_cb.setChecked(True)
+        self.local_live_cb.setToolTip("Use the server-issued collection profile against this computer's filesystem.")
+        source_layout.addWidget(self.local_live_cb)
+        source_buttons = QHBoxLayout()
+        add_file = QPushButton("Add Image / Bundle")
+        add_file.clicked.connect(self._add_source_file)
+        remove_file = QPushButton("Remove Selected")
+        remove_file.clicked.connect(self._remove_source_file)
+        source_buttons.addWidget(add_file)
+        source_buttons.addWidget(remove_file)
+        source_layout.addLayout(source_buttons)
+        self.source_list = QListWidget()
+        self.source_list.setMinimumHeight(70)
+        source_layout.addWidget(self.source_list)
+        hint = QLabel("Image and bundle files are uploaded only when the authenticated server profile authorizes that source type.")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        source_layout.addWidget(hint)
+        layout.addWidget(source_group)
 
-        summary = ttk.Frame(self.root)
-        summary.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 8))
-        for idx, (label, var) in enumerate((
-            ("Scanned", self.scanned_var),
-            ("Uploaded", self.uploaded_var),
-            ("Skipped", self.skipped_var),
-            ("Failed", self.failed_var),
-        )):
-            box = ttk.Frame(summary, padding=(0, 6))
-            box.grid(row=0, column=idx, sticky="ew", padx=(0 if idx == 0 else 10, 0))
-            summary.columnconfigure(idx, weight=1)
-            ttk.Label(box, text=label).pack(anchor="w")
-            ttk.Label(box, textvariable=var, font=("Arial", 15, "bold")).pack(anchor="w")
+        token_group = QGroupBox("1. Session")
+        token_layout = QVBoxLayout(token_group)
+        self.server_input = QLineEdit(DEFAULT_SERVER_URL)
+        self.server_input.setPlaceholderText("https://app.unjaena.com")
+        self.token_input = QLineEdit()
+        self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token_input.setPlaceholderText("Paste collection session token")
+        token_layout.addWidget(QLabel("Service URL"))
+        token_layout.addWidget(self.server_input)
+        token_layout.addWidget(QLabel("Session token"))
+        token_layout.addWidget(self.token_input)
+        token_buttons = QHBoxLayout()
+        self.show_token_btn = QPushButton("Show")
+        self.show_token_btn.setCheckable(True)
+        self.show_token_btn.clicked.connect(self._toggle_token)
+        self.validate_btn = QPushButton("Validate Token")
+        self.validate_btn.clicked.connect(self._validate_token)
+        token_buttons.addWidget(self.show_token_btn)
+        token_buttons.addWidget(self.validate_btn)
+        token_layout.addLayout(token_buttons)
+        self.token_status = QLabel("Not validated")
+        self.token_status.setObjectName("muted")
+        token_layout.addWidget(self.token_status)
+        layout.addWidget(token_group)
 
-        log_frame = ttk.Frame(self.root)
-        log_frame.grid(row=4, column=0, sticky="nsew", padx=18, pady=(0, 12))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(1, weight=1)
-        ttk.Label(log_frame, textvariable=self.status_var).grid(row=0, column=0, sticky="w", pady=(0, 6))
-        self.progress = ttk.Progressbar(log_frame, mode="indeterminate")
-        self.progress.grid(row=0, column=1, sticky="ew", padx=(12, 0), pady=(0, 6))
-        self.log = tk.Text(log_frame, height=12, wrap="word", state="disabled")
-        self.log.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
-        scroll.grid(row=1, column=2, sticky="ns")
-        self.log.configure(yscrollcommand=scroll.set)
+        profile_group = QGroupBox("2. Collection Profile")
+        profile_layout = QVBoxLayout(profile_group)
+        self.profile_tabs = QTabWidget()
+        placeholder = QLabel("Validate a session token to load the server-signed collection profile.")
+        placeholder.setObjectName("muted")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.profile_tabs.addTab(placeholder, "Profile")
+        profile_layout.addWidget(self.profile_tabs)
+        profile_buttons = QHBoxLayout()
+        self.select_all_btn = QPushButton("Select All Tab")
+        self.select_all_btn.clicked.connect(lambda: self._set_current_tab_checked(True))
+        self.clear_tab_btn = QPushButton("Clear Tab")
+        self.clear_tab_btn.clicked.connect(lambda: self._set_current_tab_checked(False))
+        profile_buttons.addWidget(self.select_all_btn)
+        profile_buttons.addWidget(self.clear_tab_btn)
+        profile_layout.addLayout(profile_buttons)
+        layout.addWidget(profile_group)
+
+        progress_group = QGroupBox("3. Progress")
+        progress_layout = QVBoxLayout(progress_group)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setVisible(False)
+        progress_layout.addWidget(self.progress)
+        counters = QHBoxLayout()
+        self.scanned_label = QLabel("Scanned 0")
+        self.uploaded_label = QLabel("Uploaded 0")
+        self.skipped_label = QLabel("Skipped 0")
+        self.failed_label = QLabel("Failed 0")
+        for label in (self.scanned_label, self.uploaded_label, self.skipped_label, self.failed_label):
+            label.setObjectName("muted")
+            counters.addWidget(label)
+        progress_layout.addLayout(counters)
+        layout.addWidget(progress_group)
+
+        actions = QHBoxLayout()
+        self.start_btn = QPushButton("Start Collection")
+        self.start_btn.setObjectName("primary")
+        self.start_btn.clicked.connect(self._start)
+        self.stop_btn = QPushButton("Stop After Current File")
+        self.stop_btn.clicked.connect(self._stop)
+        actions.addWidget(self.start_btn, 2)
+        actions.addWidget(self.stop_btn, 1)
+        layout.addLayout(actions)
+        layout.addStretch()
+        scroll.setWidget(panel)
+        return scroll
+
+    def _right_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        group = QGroupBox("Activity Log")
+        group_layout = QVBoxLayout(group)
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setFont(QFont("Consolas", 9))
+        group_layout.addWidget(self.log)
+        layout.addWidget(group)
+        return panel
 
     def _toggle_token(self) -> None:
-        self.token_entry.configure(show="" if self.show_token.get() else "*")
+        self.token_input.setEchoMode(QLineEdit.EchoMode.Normal if self.show_token_btn.isChecked() else QLineEdit.EchoMode.Password)
+        self.show_token_btn.setText("Hide" if self.show_token_btn.isChecked() else "Show")
+
+    def _add_source_file(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(self, "Select forensic image or mobile bundle", "", SOURCE_FILE_FILTER)
+        for item in files:
+            path = Path(item)
+            if path not in self.source_files:
+                self.source_files.append(path)
+                QListWidgetItem(path.name, self.source_list).setToolTip(str(path))
+        self._update_start_state()
+
+    def _remove_source_file(self) -> None:
+        rows = sorted({idx.row() for idx in self.source_list.selectedIndexes()}, reverse=True)
+        for row in rows:
+            self.source_files.pop(row)
+            self.source_list.takeItem(row)
+        self._update_start_state()
 
     def _set_running(self, running: bool) -> None:
-        state = "disabled" if running else "normal"
-        self.start_button.configure(state=state)
-        self.server_entry.configure(state=state)
-        self.token_entry.configure(state=state)
-        self.stop_button.configure(state="normal" if running else "disabled")
-        if running:
-            self.progress.start(12)
-        else:
-            self.progress.stop()
+        self.validate_btn.setEnabled(not running)
+        self.start_btn.setEnabled(not running and self.profile is not None)
+        self.stop_btn.setEnabled(running)
+        self.server_input.setEnabled(not running)
+        self.token_input.setEnabled(not running)
+        self.progress.setVisible(running)
+        self.header_status.setText("Collecting" if running else ("Profile loaded" if self.profile else "Ready"))
+        self.header_status.setObjectName("statusWarn" if running else "statusOk")
+        self.header_status.style().unpolish(self.header_status)
+        self.header_status.style().polish(self.header_status)
+
+    def _update_start_state(self) -> None:
+        if self.profile is None or self.worker and self.worker.is_alive():
+            self.start_btn.setEnabled(False)
+            return
+        has_source = self.local_live_cb.isChecked() or bool(self.source_files)
+        has_target = any(cb.isChecked() for cb in self.target_checks.values())
+        self.start_btn.setEnabled(has_source and has_target)
 
     def _log(self, message: str) -> None:
-        now = time.strftime("%H:%M:%S")
-        self.log.configure(state="normal")
-        self.log.insert("end", f"[{now}] {message}\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        self.log.append(f"[{time.strftime('%H:%M:%S')}] {_safe_text(message, 500)}")
 
     def _post(self, kind: str, payload: Any = None) -> None:
         self.events.put((kind, payload))
 
-    def _start(self) -> None:
-        server = self.server_var.get().strip().rstrip("/")
-        token = self.token_var.get().strip()
+    def _validate_token(self) -> None:
+        server = self.server_input.text().strip().rstrip("/")
+        token = self.token_input.text().strip()
         if not server:
-            messagebox.showerror("Missing server", "Enter the service address.")
+            QMessageBox.warning(self, "Missing service URL", "Enter the service URL.")
             return
         if not token:
-            messagebox.showerror("Missing token", "Enter the session token.")
+            QMessageBox.warning(self, "Missing token", "Enter the collection session token.")
+            return
+        self.validate_btn.setEnabled(False)
+        self.token_status.setText("Validating")
+        self._log("Validating session token")
+        threading.Thread(target=self._validate_worker, args=(server, token), daemon=True).start()
+
+    def _validate_worker(self, server: str, token: str) -> None:
+        try:
+            client = ServiceClient(server)
+            session = client.authenticate(token)
+            profile = client.get_profile(session)
+            self._post("validated", {"client": client, "session": session, "profile": profile})
+        except Exception as exc:
+            self._post("validate_error", _safe_text(exc, 240))
+
+    def _render_profile(self) -> None:
+        self.profile_tabs.clear()
+        self.target_checks.clear()
+        grouped: dict[str, list[ProfileTarget]] = {}
+        for target in self.profile.targets if self.profile else []:
+            grouped.setdefault(_category_for_target(target), []).append(target)
+        if not grouped:
+            label = QLabel("The authenticated server profile contains no collection targets.")
+            label.setObjectName("muted")
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.profile_tabs.addTab(label, "Profile")
+            return
+        for category in sorted(grouped):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            content = QWidget()
+            content_layout = QVBoxLayout(content)
+            content_layout.setContentsMargins(8, 8, 8, 8)
+            content_layout.setSpacing(4)
+            for target in grouped[category]:
+                cb = QCheckBox(_label_for_target(target))
+                cb.setChecked(True)
+                cb.setProperty("artifact_type", target.artifact_type)
+                cb.setToolTip(_target_hint(target))
+                cb.stateChanged.connect(lambda _state: self._update_start_state())
+                self.target_checks[target.artifact_type] = cb
+                content_layout.addWidget(cb)
+            content_layout.addStretch()
+            scroll.setWidget(content)
+            self.profile_tabs.addTab(scroll, category)
+
+    def _set_current_tab_checked(self, checked: bool) -> None:
+        current = self.profile_tabs.currentWidget()
+        if current is None:
+            return
+        for cb in current.findChildren(QCheckBox):
+            if cb.isEnabled():
+                cb.setChecked(checked)
+        self._update_start_state()
+
+    def _selected_artifacts(self) -> set[str]:
+        return {artifact for artifact, cb in self.target_checks.items() if cb.isChecked()}
+
+    def _start(self) -> None:
+        if not self.client or not self.session or not self.profile:
+            QMessageBox.warning(self, "Session required", "Validate a session token first.")
+            return
+        if not self.local_live_cb.isChecked() and not self.source_files:
+            QMessageBox.warning(self, "Source required", "Select local live filesystem or add an image/bundle file.")
+            return
+        selected = self._selected_artifacts()
+        if not selected:
+            QMessageBox.warning(self, "Profile target required", "Select at least one server profile target.")
             return
         self.stop_event.clear()
         self._set_running(True)
-        self.status_var.set("Connecting")
         self._log("Starting collection")
-        self.worker = threading.Thread(target=self._run_worker, args=(server, token), daemon=True)
+        self.worker = threading.Thread(target=self._run_worker, args=(selected, list(self.source_files), self.local_live_cb.isChecked()), daemon=True)
         self.worker.start()
 
     def _stop(self) -> None:
         self.stop_event.set()
-        self.status_var.set("Stopping")
         self._log("Stop requested")
 
-    def _run_worker(self, server: str, token: str) -> None:
+    def _run_worker(self, selected: set[str], sources: list[Path], include_local: bool) -> None:
         try:
-            client = ServiceClient(server)
-            self._post("status", "Authenticating")
-            session = client.authenticate(token)
-            self._post("status", "Loading collection profile")
-            profile = client.get_profile(session)
-            self._post("status", "Collecting")
-            runner = ProfileRunner(client, session, profile, on_event=lambda e: self._post("runner", e), should_stop=self.stop_event.is_set)
-            result = runner.run()
+            runner = ProfileRunner(
+                self.client,
+                self.session,
+                self.profile,
+                on_event=lambda e: self._post("runner", e),
+                should_stop=self.stop_event.is_set,
+            )
+            result = runner.run(selected_artifacts=selected, source_files=sources, include_local_profile_targets=include_local)
             self._post("done", result)
         except Exception as exc:
-            self._post("error", _safe_text(exc))
+            self._post("error", _safe_text(exc, 240))
 
     def _poll_events(self) -> None:
         while True:
@@ -167,67 +467,82 @@ class CollectorApp:
                 kind, payload = self.events.get_nowait()
             except queue.Empty:
                 break
-            if kind == "status":
-                self.status_var.set(_safe_text(payload, 80))
-                self._log(_safe_text(payload))
+            if kind == "validated":
+                self.client = payload["client"]
+                self.session = payload["session"]
+                self.profile = payload["profile"]
+                self.token_status.setText(f"Valid - Case {self.session.case_id[:8]}")
+                self.token_status.setObjectName("statusOk")
+                self.token_status.style().unpolish(self.token_status)
+                self.token_status.style().polish(self.token_status)
+                self._log(f"Profile loaded: {len(self.profile.targets)} target(s)")
+                self._render_profile()
+                self._set_running(False)
+                self._update_start_state()
+                self.validate_btn.setEnabled(True)
+            elif kind == "validate_error":
+                self.token_status.setText("Invalid")
+                self.token_status.setObjectName("statusError")
+                self.token_status.style().unpolish(self.token_status)
+                self.token_status.style().polish(self.token_status)
+                self._log(f"Validation failed: {payload}")
+                self.validate_btn.setEnabled(True)
+                QMessageBox.warning(self, "Validation failed", _safe_text(payload, 240))
             elif kind == "runner":
                 self._handle_runner_event(dict(payload or {}))
             elif kind == "done":
                 self._handle_done(dict(payload or {}))
             elif kind == "error":
-                self.status_var.set("Failed")
-                self._log(f"Error: {_safe_text(payload)}")
+                self._log(f"Collection failed: {payload}")
                 self._set_running(False)
-                messagebox.showerror("Collection failed", _safe_text(payload, 240))
-        self.root.after(100, self._poll_events)
+                QMessageBox.critical(self, "Collection failed", _safe_text(payload, 240))
 
     def _handle_runner_event(self, event: dict[str, Any]) -> None:
+        for key, label in (("scanned", self.scanned_label), ("uploaded", self.uploaded_label), ("skipped", self.skipped_label), ("failed", self.failed_label)):
+            if key in event:
+                label.setText(f"{key.title()} {event[key]}")
         name = _safe_text(event.get("name"), 80)
         kind = event.get("event")
-        for key, var in (("scanned", self.scanned_var), ("uploaded", self.uploaded_var), ("skipped", self.skipped_var), ("failed", self.failed_var)):
-            if key in event:
-                var.set(str(event[key]))
         if kind == "started":
             self._log("Collection profile accepted")
         elif kind == "target_started":
-            self.status_var.set("Scanning")
-        elif kind == "file_scanned":
-            self.status_var.set("Scanning files")
+            self._log(f"Target: {_safe_text(event.get('artifact_type'), 80)}")
         elif kind == "hashing":
-            self.status_var.set(f"Hashing {name}")
+            self._log(f"Hashing {name}")
         elif kind == "protecting":
-            self.status_var.set(f"Preparing {name}")
+            self._log(f"Encrypting {name}")
         elif kind == "uploading":
-            self.status_var.set(f"Uploading {name}")
+            self._log(f"Uploading {name}")
         elif kind == "file_uploaded":
             self._log(f"Uploaded {name}")
         elif kind == "file_skipped":
             self._log(f"Skipped {name}")
         elif kind == "file_failed":
-            self._log(f"Failed {name}: {_safe_text(event.get('error'), 120)}")
+            self._log(f"Failed {name}: {_safe_text(event.get('error'), 140)}")
         elif kind == "stopped":
             self._log("Collection stopped")
         elif kind == "finished":
             self._log("Collection finished")
 
     def _handle_done(self, result: dict[str, Any]) -> None:
-        self.scanned_var.set(str(result.get("scanned", 0)))
-        self.uploaded_var.set(str(result.get("uploaded", 0)))
-        self.skipped_var.set(str(result.get("skipped", 0)))
-        self.failed_var.set(str(result.get("failed", 0)))
-        self.status_var.set("Completed" if int(result.get("failed", 0) or 0) == 0 else "Completed with errors")
+        self.scanned_label.setText(f"Scanned {result.get('scanned', 0)}")
+        self.uploaded_label.setText(f"Uploaded {result.get('uploaded', 0)}")
+        self.skipped_label.setText(f"Skipped {result.get('skipped', 0)}")
+        self.failed_label.setText(f"Failed {result.get('failed', 0)}")
         self._set_running(False)
+        self._update_start_state()
         self._log("Done")
 
 
 def main() -> int:
-    if tk is None:
-        print("Graphical desktop support is not available in this Python runtime.", file=sys.stderr)
+    if QApplication is None:
+        print("PyQt6 desktop support is not available in this Python runtime.", file=sys.stderr)
         return 1
-    root = tk.Tk()
-    CollectorApp(root)
-    root.mainloop()
-    return 0
+    app = QApplication(sys.argv)
+    app.setApplicationName("Unjaena Collector")
+    window = CollectorApp()
+    window.show()
+    return app.exec()
 
 
 if __name__ == "__main__":
