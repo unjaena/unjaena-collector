@@ -24,11 +24,24 @@ unjaena-collector --server https://app.unjaena.com --token CASE_SESSION_TOKEN
 1. Open `unjaena-collector-gui`.
 2. Confirm the service address.
 3. Paste the case session token issued by the service.
-4. Select local live filesystem and/or add an authorized forensic image or bundle file.
-5. Review the server-signed collection profile targets.
-6. Start collection and keep the app open until the upload summary is complete.
+4. Select local live filesystem and/or add evidence source files.
+5. Use Auto detect for normal files, or pick a Source type for extensionless filesystem volume images.
+6. Review the server-signed collection profile targets.
+7. Start collection and keep the app open until the upload summary is complete.
 
-The desktop app shows source selection, server profile targets, scan count, upload count, skipped files, failed files, and a short event log. It does not embed local path catalogs or product-specific collection rules; profile targets are loaded after session authentication.
+The desktop app shows source type, source file size, server profile targets, scan count, upload count, skipped files, failed files, and a short event log. It does not embed local path catalogs or product-specific collection rules; profile targets are loaded after session authentication.
+
+## Supported Evidence Sources
+
+The public client can upload source files only when the authenticated server profile authorizes the matching source type. Supported source families include:
+
+- E01, Ex01, L01, Lx01, S01, and split EWF segments.
+- DD, RAW, IMG, BIN, and split raw segments such as 001/002.
+- AFF, AFF4, AFD, AFM, and AD1 forensic containers.
+- VMDK, VDI, VHD, VHDX, QCOW2, QED, HDD, and VPC virtual disks.
+- ISO, DMG, and CDR disk images.
+- NTFS, FAT, FAT12, FAT16, FAT32, exFAT, ext, ext2, ext3, ext4, XFS, Btrfs, HFS, HFSX, APFS, and UFS volume images.
+- ZIP, TAR, TGZ, GZ, and 7Z extraction bundles.
 
 ## Security Model
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from .client import ServiceClient, encrypted_temp_file, sha256_file
 from .models import AuthSession, CollectionProfile, ProfileTarget
+from .source_formats import candidate_artifacts_for_path
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 StopCallback = Callable[[], bool]
@@ -20,26 +21,6 @@ SOURCE_UPLOAD_KINDS = {
     "manual_file",
     "raw_upload",
 }
-
-IMAGE_EXTENSION_CANDIDATES = {
-    ".e01": ("e01_image", "forensic_image", "disk_image", "raw_image"),
-    ".ex01": ("e01_image", "forensic_image", "disk_image", "raw_image"),
-    ".s01": ("e01_image", "forensic_image", "disk_image", "raw_image"),
-    ".l01": ("e01_image", "forensic_image", "disk_image", "raw_image"),
-    ".dd": ("raw_image", "forensic_image", "disk_image"),
-    ".raw": ("raw_image", "forensic_image", "disk_image"),
-    ".img": ("raw_image", "forensic_image", "disk_image"),
-    ".bin": ("raw_image", "forensic_image", "disk_image"),
-    ".001": ("raw_image", "forensic_image", "disk_image"),
-    ".vmdk": ("vmdk_image", "virtual_disk_image", "forensic_image", "disk_image"),
-    ".vhd": ("vhd_image", "virtual_disk_image", "forensic_image", "disk_image"),
-    ".vhdx": ("vhdx_image", "virtual_disk_image", "forensic_image", "disk_image"),
-    ".qcow2": ("qcow2_image", "virtual_disk_image", "forensic_image", "disk_image"),
-    ".vdi": ("vdi_image", "virtual_disk_image", "forensic_image", "disk_image"),
-    ".dmg": ("dmg_image", "forensic_image", "disk_image"),
-    ".zip": ("mobile_ffs_bundle", "forensic_bundle", "source_bundle"),
-}
-
 
 def _expand_pattern(pattern: str) -> str:
     expanded = os.path.expandvars(os.path.expanduser(pattern))
@@ -83,8 +64,7 @@ def _target_matches_file(target: ProfileTarget, path: Path) -> bool:
         pattern = str(pattern or "")
         if fnmatch.fnmatch(path.name.lower(), pattern.lower()):
             return True
-    candidates = IMAGE_EXTENSION_CANDIDATES.get(ext, ())
-    return target.artifact_type in candidates
+    return target.artifact_type in candidate_artifacts_for_path(path)
 
 
 class ProfileRunner:
@@ -112,18 +92,27 @@ class ProfileRunner:
         return bool(self.should_stop and self.should_stop())
 
     def _selected_targets(self, selected_artifacts: set[str] | None) -> list[ProfileTarget]:
-        if not selected_artifacts:
+        if selected_artifacts is None:
             return list(self.profile.targets)
         return [target for target in self.profile.targets if target.artifact_type in selected_artifacts]
 
-    def _source_target_for(self, path: Path, selected_artifacts: set[str] | None) -> ProfileTarget:
+    def _source_target_for(
+        self,
+        path: Path,
+        selected_artifacts: set[str] | None,
+        preferred_artifact_type: str | None = None,
+    ) -> ProfileTarget:
         selected = self._selected_targets(selected_artifacts)
-        candidates = [target for target in selected if _is_source_upload_target(target) and _target_matches_file(target, path)]
+        if preferred_artifact_type:
+            candidates = [
+                target for target in selected
+                if _is_source_upload_target(target) and target.artifact_type == preferred_artifact_type
+            ]
+        else:
+            candidates = [target for target in selected if _is_source_upload_target(target) and _target_matches_file(target, path)]
         if not candidates:
-            candidates = [target for target in self.profile.targets if _is_source_upload_target(target) and _target_matches_file(target, path)]
-        if not candidates:
-            ext = path.suffix.lower() or "file"
-            raise RuntimeError(f"The server profile does not authorize upload for {ext} source files")
+            label = preferred_artifact_type or path.suffix.lower() or "file"
+            raise RuntimeError(f"The server profile does not authorize upload for {label} source files")
         return candidates[0]
 
     def _upload_one(self, path: Path, target: ProfileTarget, counters: dict[str, int]) -> None:
@@ -187,6 +176,7 @@ class ProfileRunner:
         selected_artifacts: set[str] | None = None,
         source_files: list[Path] | None = None,
         include_local_profile_targets: bool = True,
+        source_artifacts: dict[str, str] | None = None,
     ) -> dict[str, int]:
         counters = {"scanned": 0, "uploaded": 0, "skipped": 0, "failed": 0}
         seen: set[Path] = set()
@@ -197,9 +187,12 @@ class ProfileRunner:
             if self._stopped():
                 self._emit("stopped", **counters)
                 return counters
-            target = self._source_target_for(source, selected_artifacts)
-            self._emit("target_started", artifact_type=target.artifact_type, kind=target.kind)
             resolved = source.resolve()
+            preferred = None
+            if source_artifacts:
+                preferred = source_artifacts.get(str(source)) or source_artifacts.get(str(resolved))
+            target = self._source_target_for(resolved, selected_artifacts, preferred)
+            self._emit("target_started", artifact_type=target.artifact_type, kind=target.kind)
             if resolved not in seen:
                 seen.add(resolved)
                 self._upload_one(resolved, target, counters)

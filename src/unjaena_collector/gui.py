@@ -14,6 +14,7 @@ try:
     from PyQt6.QtWidgets import (
         QApplication,
         QCheckBox,
+        QComboBox,
         QFileDialog,
         QFrame,
         QGroupBox,
@@ -41,13 +42,15 @@ except ModuleNotFoundError:
 from .client import ServiceClient
 from .models import CollectionProfile, ProfileTarget
 from .runner import ProfileRunner
+from .source_formats import (
+    SOURCE_FILE_FILTER,
+    SOURCE_TYPE_OPTIONS,
+    classify_source_path,
+    format_file_size,
+    supported_format_summary,
+)
 
 DEFAULT_SERVER_URL = os.environ.get("UNJAENA_SERVER_URL", "https://app.unjaena.com")
-SOURCE_FILE_FILTER = (
-    "Forensic Images and Bundles (*.E01 *.e01 *.Ex01 *.ex01 *.s01 *.S01 *.l01 *.L01 "
-    "*.dd *.raw *.img *.bin *.001 *.vmdk *.vhd *.vhdx *.qcow2 *.vdi *.dmg *.DMG *.zip);;"
-    "All Files (*)"
-)
 
 COLORS = {
     "bg_primary": "#0d1117",
@@ -67,6 +70,16 @@ COLORS = {
     "info": "#58a6ff",
     "border_subtle": "#30363d",
     "border_default": "#484f58",
+}
+
+SOURCE_UPLOAD_KINDS = {
+    "source_file",
+    "image_file",
+    "forensic_image",
+    "disk_image",
+    "bundle",
+    "manual_file",
+    "raw_upload",
 }
 
 
@@ -89,8 +102,8 @@ def _stylesheet() -> str:
     QLabel#statusOk {{ color: {COLORS['success']}; font-weight: 600; }}
     QLabel#statusWarn {{ color: {COLORS['warning']}; font-weight: 600; }}
     QLabel#statusError {{ color: {COLORS['error']}; font-weight: 600; }}
-    QLineEdit, QTextEdit, QListWidget {{ background-color: {COLORS['bg_tertiary']}; border: 1px solid {COLORS['border_subtle']}; border-radius: 5px; color: {COLORS['text_primary']}; padding: 6px; selection-background-color: {COLORS['brand_secondary']}; }}
-    QLineEdit:focus, QTextEdit:focus, QListWidget:focus {{ border-color: {COLORS['brand_primary']}; }}
+    QLineEdit, QTextEdit, QListWidget, QComboBox {{ background-color: {COLORS['bg_tertiary']}; border: 1px solid {COLORS['border_subtle']}; border-radius: 5px; color: {COLORS['text_primary']}; padding: 6px; selection-background-color: {COLORS['brand_secondary']}; }}
+    QLineEdit:focus, QTextEdit:focus, QListWidget:focus, QComboBox:focus {{ border-color: {COLORS['brand_primary']}; }}
     QPushButton {{ background-color: {COLORS['bg_tertiary']}; border: 1px solid {COLORS['border_subtle']}; border-radius: 5px; padding: 7px 12px; color: {COLORS['text_primary']}; font-weight: 600; }}
     QPushButton:hover {{ background-color: {COLORS['bg_hover']}; border-color: {COLORS['border_default']}; }}
     QPushButton:disabled {{ color: {COLORS['text_tertiary']}; border-color: {COLORS['border_subtle']}; background-color: {COLORS['bg_tertiary']}; }}
@@ -113,13 +126,18 @@ def _label_for_target(target: ProfileTarget) -> str:
     return _safe_text(label, 80)
 
 
+def _target_is_source_upload(target: ProfileTarget) -> bool:
+    metadata = target.metadata or {}
+    kind = str(target.kind or "").lower()
+    return bool(kind in SOURCE_UPLOAD_KINDS or metadata.get("source_upload") is True or metadata.get("upload_source") is True)
+
+
 def _category_for_target(target: ProfileTarget) -> str:
     metadata = target.metadata or {}
     category = metadata.get("category") or metadata.get("group")
     if category:
         return _safe_text(category, 40).title()
-    kind = str(target.kind or "").lower()
-    if kind in {"source_file", "image_file", "forensic_image", "disk_image", "bundle", "raw_upload"}:
+    if _target_is_source_upload(target):
         return "Evidence Sources"
     artifact = target.artifact_type.lower()
     if artifact.startswith("mobile_android"):
@@ -158,16 +176,18 @@ class CollectorApp(QMainWindow):
         self.session = None
         self.profile: CollectionProfile | None = None
         self.target_checks: dict[str, QCheckBox] = {}
-        self.source_files: list[Path] = []
+        self.targets_by_artifact: dict[str, ProfileTarget] = {}
+        self.source_entries: list[dict[str, Any]] = []
         self._build()
         self._set_running(False)
+        self._update_source_summary()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll_events)
         self.timer.start(100)
 
     def _build(self) -> None:
         self.setWindowTitle("Unjaena Collector")
-        self.setMinimumSize(980, 680)
+        self.setMinimumSize(1060, 720)
         self.setStyleSheet(_stylesheet())
 
         central = QWidget()
@@ -183,7 +203,7 @@ class CollectorApp(QMainWindow):
         title = QLabel("Unjaena Collector")
         title.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
         header_layout.addWidget(title)
-        subtitle = QLabel("Profile-driven evidence collection")
+        subtitle = QLabel("Evidence source upload and live filesystem collection")
         subtitle.setObjectName("muted")
         header_layout.addWidget(subtitle)
         header_layout.addStretch()
@@ -195,7 +215,7 @@ class CollectorApp(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._left_panel())
         splitter.addWidget(self._right_panel())
-        splitter.setSizes([610, 370])
+        splitter.setSizes([680, 380])
         main.addWidget(splitter, 1)
 
     def _left_panel(self) -> QWidget:
@@ -210,23 +230,42 @@ class CollectorApp(QMainWindow):
         source_layout = QVBoxLayout(source_group)
         self.local_live_cb = QCheckBox("Local live filesystem")
         self.local_live_cb.setChecked(True)
-        self.local_live_cb.setToolTip("Use the server-issued collection profile against this computer's filesystem.")
+        self.local_live_cb.setToolTip("Collect files matched by the authenticated server profile on this computer.")
+        self.local_live_cb.stateChanged.connect(lambda _state: (self._update_source_summary(), self._update_start_state()))
         source_layout.addWidget(self.local_live_cb)
+
+        type_row = QHBoxLayout()
+        type_row.addWidget(QLabel("Source type"))
+        self.source_type_combo = QComboBox()
+        self.source_type_combo.addItem("Auto detect", "")
+        for label, artifact_type in SOURCE_TYPE_OPTIONS:
+            self.source_type_combo.addItem(label, artifact_type)
+        self.source_type_combo.setToolTip("Use Auto detect for normal images. Pick a type for extensionless volume images.")
+        type_row.addWidget(self.source_type_combo, 1)
+        source_layout.addLayout(type_row)
+
         source_buttons = QHBoxLayout()
-        add_file = QPushButton("Add Image / Bundle")
+        add_file = QPushButton("Add Evidence Source")
         add_file.clicked.connect(self._add_source_file)
         remove_file = QPushButton("Remove Selected")
         remove_file.clicked.connect(self._remove_source_file)
-        source_buttons.addWidget(add_file)
-        source_buttons.addWidget(remove_file)
+        clear_files = QPushButton("Clear")
+        clear_files.clicked.connect(self._clear_source_files)
+        source_buttons.addWidget(add_file, 2)
+        source_buttons.addWidget(remove_file, 1)
+        source_buttons.addWidget(clear_files)
         source_layout.addLayout(source_buttons)
+
         self.source_list = QListWidget()
-        self.source_list.setMinimumHeight(70)
+        self.source_list.setMinimumHeight(104)
         source_layout.addWidget(self.source_list)
-        hint = QLabel("Image and bundle files are uploaded only when the authenticated server profile authorizes that source type.")
-        hint.setObjectName("muted")
-        hint.setWordWrap(True)
-        source_layout.addWidget(hint)
+        self.source_summary = QLabel("")
+        self.source_summary.setObjectName("muted")
+        source_layout.addWidget(self.source_summary)
+        format_hint = QLabel(f"Supported: {supported_format_summary()}")
+        format_hint.setObjectName("muted")
+        format_hint.setWordWrap(True)
+        source_layout.addWidget(format_hint)
         layout.addWidget(source_group)
 
         token_group = QGroupBox("1. Session")
@@ -319,20 +358,51 @@ class CollectorApp(QMainWindow):
         self.show_token_btn.setText("Hide" if self.show_token_btn.isChecked() else "Show")
 
     def _add_source_file(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(self, "Select forensic image or mobile bundle", "", SOURCE_FILE_FILTER)
+        files, _ = QFileDialog.getOpenFileNames(self, "Select evidence image, virtual disk, filesystem image, or bundle", "", SOURCE_FILE_FILTER)
+        forced = str(self.source_type_combo.currentData() or "") or None
+        skipped = []
         for item in files:
             path = Path(item)
-            if path not in self.source_files:
-                self.source_files.append(path)
-                QListWidgetItem(path.name, self.source_list).setToolTip(str(path))
+            if any(entry["path"] == path for entry in self.source_entries):
+                continue
+            source_format = classify_source_path(path, forced)
+            if source_format is None:
+                skipped.append(path.name)
+                continue
+            entry = {"path": path, "artifact_type": source_format.artifact_type, "label": source_format.label}
+            self.source_entries.append(entry)
+            text = f"{source_format.label} | {path.name} | {format_file_size(path)}"
+            list_item = QListWidgetItem(text, self.source_list)
+            list_item.setToolTip(str(path))
+        if skipped:
+            QMessageBox.warning(
+                self,
+                "Source type required",
+                "Some files need an explicit Source type selection before they can be added:\n" + "\n".join(skipped[:8]),
+            )
+        self._update_source_summary()
         self._update_start_state()
 
     def _remove_source_file(self) -> None:
         rows = sorted({idx.row() for idx in self.source_list.selectedIndexes()}, reverse=True)
         for row in rows:
-            self.source_files.pop(row)
+            self.source_entries.pop(row)
             self.source_list.takeItem(row)
+        self._update_source_summary()
         self._update_start_state()
+
+    def _clear_source_files(self) -> None:
+        self.source_entries.clear()
+        self.source_list.clear()
+        self._update_source_summary()
+        self._update_start_state()
+
+    def _update_source_summary(self) -> None:
+        parts = []
+        if self.local_live_cb.isChecked():
+            parts.append("live filesystem enabled")
+        parts.append(f"{len(self.source_entries)} source file(s) selected")
+        self.source_summary.setText(" | ".join(parts))
 
     def _set_running(self, running: bool) -> None:
         self.validate_btn.setEnabled(not running)
@@ -340,19 +410,36 @@ class CollectorApp(QMainWindow):
         self.stop_btn.setEnabled(running)
         self.server_input.setEnabled(not running)
         self.token_input.setEnabled(not running)
+        self.source_type_combo.setEnabled(not running)
         self.progress.setVisible(running)
         self.header_status.setText("Collecting" if running else ("Profile loaded" if self.profile else "Ready"))
-        self.header_status.setObjectName("statusWarn" if running else "statusOk")
+        self.header_status.setObjectName("statusWarn" if running else ("statusOk" if self.profile else "statusWarn"))
         self.header_status.style().unpolish(self.header_status)
         self.header_status.style().polish(self.header_status)
+
+    def _selected_artifacts(self) -> set[str]:
+        return {artifact for artifact, cb in self.target_checks.items() if cb.isChecked()}
+
+    def _selected_has_non_source_target(self) -> bool:
+        selected = self._selected_artifacts()
+        return any(not _target_is_source_upload(self.targets_by_artifact[artifact]) for artifact in selected if artifact in self.targets_by_artifact)
+
+    def _selected_source_artifacts(self) -> set[str]:
+        selected = self._selected_artifacts()
+        return {artifact for artifact in selected if artifact in self.targets_by_artifact and _target_is_source_upload(self.targets_by_artifact[artifact])}
 
     def _update_start_state(self) -> None:
         if self.profile is None or self.worker and self.worker.is_alive():
             self.start_btn.setEnabled(False)
             return
-        has_source = self.local_live_cb.isChecked() or bool(self.source_files)
-        has_target = any(cb.isChecked() for cb in self.target_checks.values())
-        self.start_btn.setEnabled(has_source and has_target)
+        selected = self._selected_artifacts()
+        if not selected:
+            self.start_btn.setEnabled(False)
+            return
+        has_valid_live = self.local_live_cb.isChecked() and self._selected_has_non_source_target()
+        selected_source_artifacts = self._selected_source_artifacts()
+        has_valid_sources = bool(self.source_entries) and all(entry["artifact_type"] in selected_source_artifacts for entry in self.source_entries)
+        self.start_btn.setEnabled(has_valid_live or has_valid_sources)
 
     def _log(self, message: str) -> None:
         self.log.append(f"[{time.strftime('%H:%M:%S')}] {_safe_text(message, 500)}")
@@ -386,8 +473,10 @@ class CollectorApp(QMainWindow):
     def _render_profile(self) -> None:
         self.profile_tabs.clear()
         self.target_checks.clear()
+        self.targets_by_artifact.clear()
         grouped: dict[str, list[ProfileTarget]] = {}
         for target in self.profile.targets if self.profile else []:
+            self.targets_by_artifact[target.artifact_type] = target
             grouped.setdefault(_category_for_target(target), []).append(target)
         if not grouped:
             label = QLabel("The authenticated server profile contains no collection targets.")
@@ -423,31 +512,59 @@ class CollectorApp(QMainWindow):
                 cb.setChecked(checked)
         self._update_start_state()
 
-    def _selected_artifacts(self) -> set[str]:
-        return {artifact for artifact, cb in self.target_checks.items() if cb.isChecked()}
+    def _source_paths(self) -> list[Path]:
+        return [entry["path"] for entry in self.source_entries]
+
+    def _source_artifact_map(self) -> dict[str, str]:
+        mapping = {}
+        for entry in self.source_entries:
+            path = entry["path"]
+            artifact_type = str(entry["artifact_type"])
+            mapping[str(path)] = artifact_type
+            try:
+                mapping[str(path.resolve())] = artifact_type
+            except OSError:
+                pass
+        return mapping
 
     def _start(self) -> None:
         if not self.client or not self.session or not self.profile:
             QMessageBox.warning(self, "Session required", "Validate a session token first.")
             return
-        if not self.local_live_cb.isChecked() and not self.source_files:
-            QMessageBox.warning(self, "Source required", "Select local live filesystem or add an image/bundle file.")
-            return
         selected = self._selected_artifacts()
         if not selected:
             QMessageBox.warning(self, "Profile target required", "Select at least one server profile target.")
             return
+        source_artifacts = self._selected_source_artifacts()
+        missing_source_targets = sorted({entry["artifact_type"] for entry in self.source_entries if entry["artifact_type"] not in source_artifacts})
+        if missing_source_targets:
+            QMessageBox.warning(
+                self,
+                "Evidence source target required",
+                "Enable the matching Evidence Sources profile target for: " + ", ".join(missing_source_targets),
+            )
+            return
+        if self.local_live_cb.isChecked() and not self._selected_has_non_source_target() and not self.source_entries:
+            QMessageBox.warning(self, "Profile target required", "Select a non-source profile target for live filesystem collection.")
+            return
+        if not self.local_live_cb.isChecked() and not self.source_entries:
+            QMessageBox.warning(self, "Source required", "Select local live filesystem or add an evidence source file.")
+            return
         self.stop_event.clear()
         self._set_running(True)
         self._log("Starting collection")
-        self.worker = threading.Thread(target=self._run_worker, args=(selected, list(self.source_files), self.local_live_cb.isChecked()), daemon=True)
+        self.worker = threading.Thread(
+            target=self._run_worker,
+            args=(selected, self._source_paths(), self.local_live_cb.isChecked(), self._source_artifact_map()),
+            daemon=True,
+        )
         self.worker.start()
 
     def _stop(self) -> None:
         self.stop_event.set()
         self._log("Stop requested")
 
-    def _run_worker(self, selected: set[str], sources: list[Path], include_local: bool) -> None:
+    def _run_worker(self, selected: set[str], sources: list[Path], include_local: bool, source_artifacts: dict[str, str]) -> None:
         try:
             runner = ProfileRunner(
                 self.client,
@@ -456,7 +573,12 @@ class CollectorApp(QMainWindow):
                 on_event=lambda e: self._post("runner", e),
                 should_stop=self.stop_event.is_set,
             )
-            result = runner.run(selected_artifacts=selected, source_files=sources, include_local_profile_targets=include_local)
+            result = runner.run(
+                selected_artifacts=selected,
+                source_files=sources,
+                include_local_profile_targets=include_local,
+                source_artifacts=source_artifacts,
+            )
             self._post("done", result)
         except Exception as exc:
             self._post("error", _safe_text(exc, 240))

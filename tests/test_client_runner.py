@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from unjaena_collector.client import _canonical, encrypted_temp_file, sha256_file
 from unjaena_collector.models import AuthSession, CollectionProfile, ProfileTarget
 from unjaena_collector.runner import ProfileRunner
+from unjaena_collector.source_formats import candidate_artifacts_for_path, classify_source_path
 from tools import sign_macos
 
 
@@ -95,6 +96,27 @@ class ClientRunnerTests(unittest.TestCase):
             self.assertEqual(client.completed[0]["artifact_type"], "test_artifact")
 
 
+
+    def test_source_format_detection_covers_supported_image_families(self):
+        cases = {
+            "case.E02": "e01_image",
+            "logical.L01": "e01_image",
+            "disk.dd": "raw_image",
+            "split.002": "raw_image",
+            "container.aff4": "forensic_container_image",
+            "logical.ad1": "forensic_container_image",
+            "vm.vdi": "virtual_disk_image",
+            "vm.qcow2": "virtual_disk_image",
+            "volume.ntfs": "filesystem_image",
+            "volume.exfat": "filesystem_image",
+            "image.iso": "optical_disk_image",
+            "phone.zip": "mobile_ffs_bundle",
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name):
+                self.assertIn(expected, candidate_artifacts_for_path(Path(name)))
+                self.assertEqual(classify_source_path(Path(name)).artifact_type, expected)
+
     def test_profile_runner_uploads_authorized_source_file(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -116,6 +138,49 @@ class ClientRunnerTests(unittest.TestCase):
             self.assertEqual(result, {"scanned": 1, "uploaded": 1, "skipped": 0, "failed": 0})
             self.assertEqual(client.completed[0]["artifact_type"], "e01_image")
             self.assertEqual(client.completed[0]["profile_id"], "profile-1")
+
+    def test_profile_runner_respects_selected_source_targets(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            image = root / "evidence.E01"
+            image.write_bytes(b"image")
+            session = AuthSession("sid", "case-1", "ct", "https://example.test")
+            profile = CollectionProfile(
+                profile_id="profile-1",
+                case_id="case-1",
+                expires_at="2099-01-01T00:00:00Z",
+                targets=[ProfileTarget("e01_image", "source_file", ["*.E[0-9][0-9]"], metadata={"source_upload": True})],
+            )
+            client = FakeClient()
+            with self.assertRaises(RuntimeError):
+                ProfileRunner(client, session, profile).run(
+                    selected_artifacts=set(),
+                    source_files=[image],
+                    include_local_profile_targets=False,
+                )
+
+    def test_profile_runner_uploads_extensionless_filesystem_with_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            image = root / "volume"
+            image.write_bytes(b"filesystem")
+            session = AuthSession("sid", "case-1", "ct", "https://example.test")
+            profile = CollectionProfile(
+                profile_id="profile-1",
+                case_id="case-1",
+                expires_at="2099-01-01T00:00:00Z",
+                targets=[ProfileTarget("filesystem_image", "source_file", ["*.ntfs"], metadata={"source_upload": True})],
+            )
+            client = FakeClient()
+            result = ProfileRunner(client, session, profile).run(
+                selected_artifacts={"filesystem_image"},
+                source_files=[image],
+                include_local_profile_targets=False,
+                source_artifacts={str(image): "filesystem_image"},
+            )
+            self.assertEqual(result, {"scanned": 1, "uploaded": 1, "skipped": 0, "failed": 0})
+            self.assertEqual(client.completed[0]["artifact_type"], "filesystem_image")
+
 
 
 class MacSigningTests(unittest.TestCase):
