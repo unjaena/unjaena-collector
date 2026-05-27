@@ -414,6 +414,10 @@ class CollectorApp(QMainWindow):
         parts = [f"{len(devices)} device(s) detected"]
         parts.extend(item for item in diagnostics if item)
         self.device_summary.setText(" | ".join(parts))
+        self._log(f"Device scan completed: {len(devices)} device(s)")
+        for item in diagnostics:
+            if item:
+                self._log(item)
         self.refresh_devices_btn.setEnabled(True)
         self._update_source_summary()
         self._update_start_state()

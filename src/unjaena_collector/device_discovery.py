@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import ctypes
+import hashlib
+import inspect
 import json
 import os
 import platform
@@ -45,6 +48,78 @@ def _run(args: list[str], timeout: int = 4) -> subprocess.CompletedProcess[str] 
         return subprocess.run(args, text=True, capture_output=True, timeout=timeout, creationflags=flags)
     except Exception:
         return None
+
+
+def _safe_exception(exc: BaseException) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    return " ".join(message.split())[:160]
+
+
+async def _await_or_collect(value: Any) -> Any:
+    if hasattr(value, "__aiter__"):
+        return [item async for item in value]
+    return await value
+
+
+def _run_async_from_running_loop(value: Any) -> Any:
+    import threading
+
+    result: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            result["value"] = asyncio.run(_await_or_collect(value))
+        except BaseException as exc:
+            result["error"] = exc
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout=10)
+    if thread.is_alive():
+        raise TimeoutError("async device probe timed out")
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
+def _resolve_maybe_async(value: Any) -> Any:
+    if not inspect.isawaitable(value) and not hasattr(value, "__aiter__"):
+        return value
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_await_or_collect(value))
+    return _run_async_from_running_loop(value)
+
+
+def _path_device_id(prefix: str, path: Path) -> str:
+    digest = hashlib.sha1(str(path).encode("utf-8", "ignore")).hexdigest()[:12]
+    return f"{prefix}_{digest}"
+
+
+def _diagnostic_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    try:
+        return [str(item) for item in value if item]
+    except TypeError:
+        return [str(value)]
+
+
+def _probe(label: str, func: Any) -> tuple[list[DeviceInfo], list[str]]:
+    try:
+        result = _resolve_maybe_async(func())
+        if isinstance(result, tuple) and len(result) == 2:
+            devices_raw, diagnostics_raw = result
+        else:
+            devices_raw, diagnostics_raw = result, []
+        devices = [device for device in list(devices_raw or []) if isinstance(device, DeviceInfo)]
+        diagnostics = _diagnostic_list(diagnostics_raw)
+        return devices, diagnostics
+    except Exception as exc:
+        return [], [f"{label}: scan failed ({exc.__class__.__name__}: {_safe_exception(exc)})"]
 
 
 def _disk_usage(path: str) -> int:
@@ -110,6 +185,59 @@ def _windows_logical_volumes() -> list[DeviceInfo]:
             metadata={"root": root, "drive_type": dtype},
         ))
     return devices
+
+
+def _mounted_volume_roots() -> list[Path]:
+    if sys.platform == "win32":
+        return []
+    home = Path.home()
+    roots: list[Path] = []
+    if sys.platform == "darwin":
+        roots.append(Path("/Volumes"))
+    elif sys.platform.startswith("linux"):
+        roots.extend([Path("/media"), Path("/run/media"), Path("/mnt")])
+        roots.append(home / "media")
+    return roots
+
+
+def _mounted_volumes() -> tuple[list[DeviceInfo], str]:
+    if sys.platform == "win32":
+        return [], "Mounted volumes: handled through Windows logical drives."
+    devices: list[DeviceInfo] = []
+    seen: set[str] = set()
+    for root in _mounted_volume_roots():
+        if not root.exists() or not root.is_dir():
+            continue
+        candidates: list[Path] = []
+        try:
+            if root.name in {"media"} and root.parent.name in {"run", ""}:
+                for user_dir in root.iterdir():
+                    if user_dir.is_dir():
+                        candidates.extend([item for item in user_dir.iterdir() if item.is_dir()])
+            else:
+                candidates.extend([item for item in root.iterdir() if item.is_dir()])
+        except Exception:
+            continue
+        for item in candidates:
+            try:
+                resolved = str(item.resolve())
+            except Exception:
+                resolved = str(item)
+            if resolved in seen or resolved == "/":
+                continue
+            seen.add(resolved)
+            label = item.name or resolved
+            devices.append(DeviceInfo(
+                device_id=_path_device_id("mounted_volume", item),
+                kind="mounted_volume",
+                label=f"Mounted volume - {label}",
+                detail="Mounted USB/removable or external filesystem detected. Collection is controlled by the authenticated server profile.",
+                size_bytes=_disk_usage(str(item)),
+                source_path=item,
+                live_local=True,
+                metadata={"path": str(item)},
+            ))
+    return devices, "Mounted volumes: ready." if devices else "Mounted volumes: no additional mounted volume detected."
 
 
 def _windows_physical_disks() -> list[DeviceInfo]:
@@ -184,14 +312,23 @@ def _ios_usb_devices() -> tuple[list[DeviceInfo], str]:
         return [], "iOS USB: pymobiledevice3 is not available in this build."
     devices: list[DeviceInfo] = []
     try:
-        connected = list_devices()
+        connected = _resolve_maybe_async(list_devices())
     except Exception:
         return [], "iOS USB: Apple Mobile Device service/usbmux is not available."
-    for device in connected:
-        serial = getattr(device, "serial", "") or "unknown"
+    if connected is None:
+        connected = []
+    try:
+        connected_list = list(connected)
+    except TypeError:
+        return [], "iOS USB: Apple Mobile Device service returned an unsupported device list."
+    for device in connected_list:
+        serial = getattr(device, "serial", "") or getattr(device, "udid", "") or "unknown"
         try:
-            lockdown = create_using_usbmux(serial=serial)
-            values = lockdown.all_values
+            lockdown = _resolve_maybe_async(create_using_usbmux(serial=serial))
+            values_attr = getattr(lockdown, "all_values", {})
+            values = _resolve_maybe_async(values_attr() if callable(values_attr) else values_attr)
+            if not isinstance(values, dict):
+                values = {}
             name = values.get("DeviceName") or "iOS device"
             product = values.get("ProductType") or "unknown"
             version = values.get("ProductVersion") or "unknown"
@@ -267,16 +404,25 @@ def _ios_backups() -> list[DeviceInfo]:
 
 
 def discover_devices() -> tuple[list[DeviceInfo], list[str]]:
-    devices: list[DeviceInfo] = [_local_device()]
+    devices: list[DeviceInfo] = []
     diagnostics: list[str] = []
-    devices.extend(_windows_logical_volumes())
-    devices.extend(_windows_physical_disks())
-    android_devices, android_diag = _adb_devices()
-    ios_devices, ios_diag = _ios_usb_devices()
-    devices.extend(android_devices)
-    devices.extend(ios_devices)
-    devices.extend(_ios_backups())
-    diagnostics.extend([android_diag, ios_diag])
+    probes = (
+        ("Local filesystem", lambda: ([_local_device()], "Local filesystem: ready.")),
+        ("Mounted volumes", _mounted_volumes),
+        ("Windows logical volumes", _windows_logical_volumes),
+        ("Windows physical disks", _windows_physical_disks),
+        ("Android USB", _adb_devices),
+        ("iOS USB", _ios_usb_devices),
+        ("iOS backups", _ios_backups),
+    )
+    for label, func in probes:
+        probe_devices, probe_diagnostics = _probe(label, func)
+        devices.extend(probe_devices)
+        diagnostics.extend(probe_diagnostics)
+    if not devices:
+        fallback, fallback_diag = _probe("Local filesystem fallback", lambda: ([_local_device()], "Local filesystem: fallback ready."))
+        devices.extend(fallback)
+        diagnostics.extend(fallback_diag)
     unique: dict[str, DeviceInfo] = {}
     for device in devices:
         unique.setdefault(device.device_id, device)
