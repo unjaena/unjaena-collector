@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
   push:
     tags:
+      - "unjaena-collector-v*"
+      - "unJaena-collector-v*"
+      - "collector-v*"
       - "thin-collector-v*"
       - "collector-thin-v*"
-      - "collector-v*"
 
 permissions:
   contents: write
