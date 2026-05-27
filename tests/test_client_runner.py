@@ -1,8 +1,10 @@
 import base64
 import hashlib
 import hmac
+import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -10,6 +12,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from unjaena_collector.client import _canonical, encrypted_temp_file, sha256_file
 from unjaena_collector.models import AuthSession, CollectionProfile, ProfileTarget
 from unjaena_collector.runner import ProfileRunner
+from tools import sign_macos
 
 
 class FakeClient:
@@ -90,6 +93,16 @@ class ClientRunnerTests(unittest.TestCase):
             self.assertEqual(len(client.uploaded), 1)
             self.assertEqual(client.completed[0]["profile_id"], "profile-1")
             self.assertEqual(client.completed[0]["artifact_type"], "test_artifact")
+
+
+class MacSigningTests(unittest.TestCase):
+    def test_signing_required_accepts_release_values(self):
+        with patch.dict(os.environ, {"UNJAENA_SIGNING_REQUIRED": "1"}, clear=False):
+            self.assertTrue(sign_macos.signing_required())
+
+    def test_signing_required_defaults_to_false(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(sign_macos.signing_required())
 
 
 if __name__ == "__main__":

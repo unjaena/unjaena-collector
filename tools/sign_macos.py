@@ -39,10 +39,17 @@ def _identity(keychain: str) -> str:
     raise SystemExit("Developer ID Application identity was not found")
 
 
+def signing_required() -> bool:
+    value = os.environ.get("UNJAENA_SIGNING_REQUIRED", "").strip().lower()
+    return value in {"1", "true", "yes", "required"}
+
+
 def main() -> int:
     cert_b64 = "".join(os.environ.get("APPLE_DEVELOPER_ID_CERT_BASE64", "").split())
     cert_password = os.environ.get("APPLE_DEVELOPER_ID_CERT_PASSWORD", "")
     if not cert_b64 or not cert_password:
+        if signing_required():
+            raise SystemExit("macOS signing secrets are required for release builds")
         print("macOS signing skipped")
         return 0
 

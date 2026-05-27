@@ -44,6 +44,7 @@ jobs:
           APPLE_DEVELOPER_ID_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_BASE64 }}
           APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
           APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+          UNJAENA_SIGNING_REQUIRED: "1"
         run: python tools/sign_macos.py
       - run: python tools/package_desktop.py
       - run: python tools/checksums.py
