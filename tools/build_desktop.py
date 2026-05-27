@@ -5,7 +5,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _require_tk() -> None:
+    try:
+        import tkinter
+        root = tkinter.Tcl()
+        root.eval("info patchlevel")
+    except Exception as exc:
+        raise SystemExit(f"Tcl/Tk desktop support is required for GUI builds: {exc}")
+
+
 def main() -> int:
+    _require_tk()
     entry = ROOT / "src" / "unjaena_collector" / "desktop.py"
     cmd = [
         sys.executable,
