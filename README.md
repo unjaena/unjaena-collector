@@ -9,7 +9,7 @@ This repository contains the public client shell only: service authentication, s
 Use the latest release asset for your platform when available. The Python package exposes both command line and desktop entry points.
 
 ```bash
-python -m pip install unjaena_collector-0.2.0-py3-none-any.whl
+python -m pip install unjaena_collector-0.2.1-py3-none-any.whl
 unjaena-collector-gui
 ```
 
