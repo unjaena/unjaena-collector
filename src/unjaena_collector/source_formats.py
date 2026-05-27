@@ -59,10 +59,10 @@ SOURCE_FORMATS: tuple[SourceFormat, ...] = (
     ),
     SourceFormat(
         artifact_type="mobile_ffs_bundle",
-        label="Mobile or logical bundle",
+        label="Mobile extraction or logical bundle",
         family="Bundle",
-        extensions=(".zip", ".tar", ".tgz", ".gz", ".7z"),
-        patterns=("*.zip", "*.tar", "*.tgz", "*.tar.gz", "*.gz", "*.7z"),
+        extensions=(".zip", ".ufdr", ".clbx", ".tar", ".tgz", ".gz", ".7z"),
+        patterns=("*.zip", "*.ufdr", "*.UFDR", "*.clbx", "*.CLBX", "*.tar", "*.tgz", "*.tar.gz", "*.gz", "*.7z"),
     ),
 )
 
@@ -117,4 +117,4 @@ def format_file_size(path: Path) -> str:
 
 
 def supported_format_summary() -> str:
-    return "E01/Ex01/L01, DD/RAW/IMG, AFF/AFF4/AD1, VMDK/VDI/VHD/VHDX/QCOW2, ISO/DMG, NTFS/FAT/exFAT/ext/HFS/APFS volume images, ZIP/TAR bundles"
+    return "E01/Ex01/L01, DD/RAW/IMG, AFF/AFF4/AD1, VMDK/VDI/VHD/VHDX/QCOW2, ISO/DMG, NTFS/FAT/exFAT/ext/HFS/APFS volume images, Cellebrite UFDR/CLBX, ZIP/TAR bundles"

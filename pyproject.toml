@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unjaena-collector"
-version = "0.3.0"
+version = "0.3.1"
 description = "Open collection client"
 requires-python = ">=3.10"
 dependencies = ["requests>=2.31", "cryptography>=42"]
@@ -14,4 +14,4 @@ unjaena-collector = "unjaena_collector.cli:main"
 unjaena-collector-gui = "unjaena_collector.gui:main"
 
 [project.optional-dependencies]
-desktop = ["pyinstaller>=6.0", "PyQt6>=6.6,<6.8"]
+desktop = ["pyinstaller>=6.0", "PyQt6>=6.6,<6.8", "pymobiledevice3>=7.5.1", "adb-shell[usb]>=0.4.4", "libusb1>=3.0.0", "pyusb>=1.2.1", "wmi>=1.5.1; platform_system=='Windows'", "pywin32>=306; platform_system=='Windows'"]

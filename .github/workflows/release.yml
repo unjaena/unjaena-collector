@@ -23,7 +23,7 @@ jobs:
       - run: python -m pip install .
       - run: python tools/public_preflight.py
       - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile src/unjaena_collector/cli.py src/unjaena_collector/client.py src/unjaena_collector/runner.py src/unjaena_collector/gui.py src/unjaena_collector/models.py src/unjaena_collector/desktop.py tools/build_desktop.py tools/package_desktop.py tools/checksums.py tools/sign_macos.py
+      - run: python -m py_compile src/unjaena_collector/cli.py src/unjaena_collector/client.py src/unjaena_collector/runner.py src/unjaena_collector/gui.py src/unjaena_collector/models.py src/unjaena_collector/desktop.py src/unjaena_collector/device_discovery.py src/unjaena_collector/source_formats.py tools/build_desktop.py tools/package_desktop.py tools/checksums.py tools/sign_macos.py
 
   desktop:
     needs: verify

@@ -25,9 +25,15 @@ def main() -> int:
         "--windowed",
         "--name",
         "UnjaenaCollector",
+        "--hidden-import",
+        "pymobiledevice3.usbmux",
+        "--hidden-import",
+        "pymobiledevice3.lockdown",
         str(entry),
     ]
-    if system == "darwin":
+    if system == "windows":
+        cmd[5:5] = ["--onefile", "--hidden-import", "wmi", "--hidden-import", "win32com.client", "--hidden-import", "pythoncom"]
+    elif system == "darwin":
         cmd.insert(5, "--onedir")
     else:
         cmd.insert(5, "--onefile")
