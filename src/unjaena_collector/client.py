@@ -18,6 +18,25 @@ from .models import AuthSession, CollectionProfile, ProfileTarget
 _HKDF_INFO = b"collector-request-signing-v1"
 
 
+def _response_error(response: requests.Response) -> str:
+    detail: Any
+    try:
+        data = response.json()
+        detail = data.get("detail", data) if isinstance(data, dict) else data
+    except Exception:
+        detail = response.text.strip()
+    if isinstance(detail, dict):
+        message = detail.get("message") or detail.get("error") or json.dumps(detail, ensure_ascii=False)
+    else:
+        message = str(detail or "").strip()
+    reason = response.reason or "HTTP error"
+    return f"{response.status_code} {reason}: {message}"
+
+
+def _raise_for_status(response: requests.Response) -> None:
+    if response.status_code >= 400:
+        raise requests.HTTPError(_response_error(response), response=response)
+
 def _canonical(data: Any) -> bytes:
     return json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -96,7 +115,7 @@ class ServiceClient:
             json=payload,
             timeout=self.timeout,
         )
-        res.raise_for_status()
+        _raise_for_status(res)
         data = res.json()
         return AuthSession(
             session_id=data["session_id"],
@@ -114,7 +133,7 @@ class ServiceClient:
             headers=_headers(session),
             timeout=self.timeout,
         )
-        res.raise_for_status()
+        _raise_for_status(res)
         data = res.json()
         profile = CollectionProfile(
             profile_id=data["profile_id"],
@@ -143,6 +162,45 @@ class ServiceClient:
                 raise RuntimeError("Collection profile signature verification failed")
         return profile
 
+    def get_consent_template(self, language: str = "en") -> dict[str, Any]:
+        res = requests.get(
+            f"{self.server_url}/api/v1/collector/consent",
+            params={"language": language, "category": "collection"},
+            headers={"Accept": "application/json", "User-Agent": "unJaena-Collector"},
+            timeout=self.timeout,
+        )
+        _raise_for_status(res)
+        return dict(res.json())
+
+    def accept_consent(self, session: AuthSession, template: dict[str, Any]) -> dict[str, Any]:
+        agreed_items = [str(item) for item in template.get("required_checkboxes") or [] if item]
+        payload = {
+            "session_id": session.session_id,
+            "case_id": session.case_id,
+            "template_id": str(template.get("id") or ""),
+            "consent_version": str(template.get("version") or ""),
+            "consent_language": str(template.get("language") or "en"),
+            "agreed_items": agreed_items,
+            "collector_name": "unJaena Collector",
+            "collector_organization": "",
+            "target_system_info": {
+                "hostname": platform.node(),
+                "platform": platform.platform(),
+                "client": "unjaena-collector",
+                "hardware_id_prefix": (session.hardware_id or "")[:12],
+            },
+            "signature_type": "checkbox",
+            "signature_data": hashlib.sha256(f"{session.session_id}:{template.get('id', '')}".encode("utf-8")).hexdigest(),
+        }
+        res = requests.post(
+            f"{self.server_url}/api/v1/collector/consent/accept",
+            json=payload,
+            headers={"X-Hardware-ID": session.hardware_id or "", "User-Agent": "unJaena-Collector"},
+            timeout=self.timeout,
+        )
+        _raise_for_status(res)
+        return dict(res.json())
+
     def presign(self, session: AuthSession, path: Path, artifact_type: str, digest: str, profile_id: str | None = None) -> dict[str, Any]:
         payload = {
             "case_id": session.case_id,
@@ -163,7 +221,7 @@ class ServiceClient:
             data=body,
             timeout=self.timeout,
         )
-        res.raise_for_status()
+        _raise_for_status(res)
         return res.json()
 
     def complete(self, session: AuthSession, path: Path, artifact_type: str, digest: str, key: str, upload_id: str | None = None, parts: list[dict[str, Any]] | None = None, is_encrypted: bool = False, profile_id: str | None = None) -> dict[str, Any]:
@@ -189,7 +247,7 @@ class ServiceClient:
             data=body,
             timeout=self.timeout,
         )
-        res.raise_for_status()
+        _raise_for_status(res)
         return res.json()
 
     def end_collection(self, session: AuthSession, trigger_analysis: bool = True) -> dict[str, Any]:
@@ -201,7 +259,7 @@ class ServiceClient:
             params={"trigger_analysis": str(bool(trigger_analysis)).lower()},
             timeout=self.timeout,
         )
-        res.raise_for_status()
+        _raise_for_status(res)
         return res.json()
 
     def upload_file(self, upload_url: str, path: Path) -> None:
@@ -212,7 +270,7 @@ class ServiceClient:
                 headers={"Content-Type": "application/octet-stream"},
                 timeout=max(self.timeout, 300),
             )
-        res.raise_for_status()
+        _raise_for_status(res)
 
     def upload_multipart(self, upload_urls: list[dict[str, Any]], path: Path) -> list[dict[str, Any]]:
         parts = []
@@ -228,7 +286,7 @@ class ServiceClient:
                     headers={"Content-Type": "application/octet-stream"},
                     timeout=max(self.timeout, 300),
                 )
-                res.raise_for_status()
+                _raise_for_status(res)
                 etag = res.headers.get("ETag") or res.headers.get("etag")
                 if not etag:
                     raise RuntimeError("Multipart upload response did not include ETag")

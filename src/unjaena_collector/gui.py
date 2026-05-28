@@ -15,6 +15,8 @@ try:
         QApplication,
         QCheckBox,
         QComboBox,
+        QDialog,
+        QDialogButtonBox,
         QFileDialog,
         QFrame,
         QGroupBox,
@@ -51,7 +53,6 @@ from .source_formats import (
     SOURCE_TYPE_OPTIONS,
     classify_source_path,
     format_file_size,
-    supported_format_summary,
 )
 
 DEFAULT_SERVER_URL = os.environ.get("UNJAENA_SERVER_URL", "https://app.unjaena.com")
@@ -179,6 +180,7 @@ class CollectorApp(QMainWindow):
         self.client: ServiceClient | None = None
         self.session = None
         self.profile: CollectionProfile | None = None
+        self.consent_accepted = False
         self.target_checks: dict[str, QCheckBox] = {}
         self.targets_by_artifact: dict[str, ProfileTarget] = {}
         self.source_entries: list[dict[str, Any]] = []
@@ -216,15 +218,15 @@ class CollectorApp(QMainWindow):
         subtitle.setObjectName("muted")
         header_layout.addWidget(subtitle)
         header_layout.addStretch()
-        self.privilege_status = QLabel("Privilege unknown")
+        self.privilege_status = QLabel("Checking access level")
         self.privilege_status.setObjectName("statusWarn")
         header_layout.addWidget(self.privilege_status)
-        self.restart_admin_btn = QPushButton("Restart as Admin")
+        self.restart_admin_btn = QPushButton("Restart with administrator access")
         self.restart_admin_btn.clicked.connect(self._restart_as_admin)
         header_layout.addWidget(self.restart_admin_btn)
-        self.update_btn = QPushButton("Check Updates")
-        self.update_btn.clicked.connect(lambda: self._check_updates(silent=False))
-        header_layout.addWidget(self.update_btn)
+        self.update_status = QLabel("Checking for updates")
+        self.update_status.setObjectName("muted")
+        header_layout.addWidget(self.update_status)
         self.header_status = QLabel("Ready")
         self.header_status.setObjectName("statusWarn")
         header_layout.addWidget(self.header_status)
@@ -299,7 +301,10 @@ class CollectorApp(QMainWindow):
         self.source_summary = QLabel("")
         self.source_summary.setObjectName("muted")
         source_layout.addWidget(self.source_summary)
-        format_hint = QLabel(f"Supported: {supported_format_summary()}")
+        format_hint = QLabel(
+            "Add an evidence image, virtual disk, filesystem image, or mobile extraction bundle. "
+            "The service verifies allowed source types after token authentication."
+        )
         format_hint.setObjectName("muted")
         format_hint.setWordWrap(True)
         source_layout.addWidget(format_hint)
@@ -330,10 +335,10 @@ class CollectorApp(QMainWindow):
         token_layout.addWidget(self.token_status)
         layout.addWidget(token_group)
 
-        profile_group = QGroupBox("2. Collection Profile")
+        profile_group = QGroupBox("2. Server Verification")
         profile_layout = QVBoxLayout(profile_group)
         self.profile_tabs = QTabWidget()
-        placeholder = QLabel("Validate a session token to load the server-signed collection profile.")
+        placeholder = QLabel("Validate a session token to let the server verify the collection scope.")
         placeholder.setObjectName("muted")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.profile_tabs.addTab(placeholder, "Profile")
@@ -343,6 +348,8 @@ class CollectorApp(QMainWindow):
         self.select_all_btn.clicked.connect(lambda: self._set_current_tab_checked(True))
         self.clear_tab_btn = QPushButton("Clear Tab")
         self.clear_tab_btn.clicked.connect(lambda: self._set_current_tab_checked(False))
+        self.select_all_btn.setVisible(False)
+        self.clear_tab_btn.setVisible(False)
         profile_buttons.addWidget(self.select_all_btn)
         profile_buttons.addWidget(self.clear_tab_btn)
         profile_layout.addLayout(profile_buttons)
@@ -392,7 +399,11 @@ class CollectorApp(QMainWindow):
 
     def _update_privilege_status(self) -> None:
         status = privilege_status()
-        self.privilege_status.setText("Admin" if status.elevated else "Limited")
+        self.privilege_status.setText(
+            "Running with administrator privileges"
+            if status.elevated
+            else "Limited access - administrator privileges recommended"
+        )
         self.privilege_status.setObjectName("statusOk" if status.elevated else "statusWarn")
         self.privilege_status.setToolTip(status.detail)
         self.privilege_status.style().unpolish(self.privilege_status)
@@ -413,7 +424,7 @@ class CollectorApp(QMainWindow):
         self._log("Administrator relaunch failed")
 
     def _check_updates(self, silent: bool = True) -> None:
-        self.update_btn.setEnabled(False)
+        self.update_status.setText("Checking for updates")
         if not silent:
             self._log("Checking for collector updates")
         threading.Thread(target=self._check_updates_worker, args=(silent,), daemon=True).start()
@@ -426,8 +437,11 @@ class CollectorApp(QMainWindow):
             self._post("update_error", {"error": _safe_text(exc, 200), "silent": silent})
 
     def _handle_update_info(self, info: UpdateInfo, silent: bool) -> None:
-        self.update_btn.setEnabled(True)
         if info.available:
+            self.update_status.setText(f"Update available: {info.latest_version}")
+            self.update_status.setObjectName("statusWarn")
+            self.update_status.style().unpolish(self.update_status)
+            self.update_status.style().polish(self.update_status)
             asset = f" ({info.asset.name})" if info.asset else ""
             self._log(f"Update available: {info.current_version} -> {info.latest_version}{asset}")
             answer = QMessageBox.question(
@@ -444,6 +458,10 @@ class CollectorApp(QMainWindow):
             return
         if not silent:
             QMessageBox.information(self, "No update available", f"unJaena Collector {info.current_version} is current.")
+        self.update_status.setText(f"Collector is current: {info.current_version}")
+        self.update_status.setObjectName("muted")
+        self.update_status.style().unpolish(self.update_status)
+        self.update_status.style().polish(self.update_status)
         self._log(f"Collector is current: {info.current_version}")
 
     def _toggle_token(self) -> None:
@@ -476,7 +494,7 @@ class CollectorApp(QMainWindow):
             if not device.selectable:
                 flags = flags & ~Qt.ItemFlag.ItemIsEnabled
             item.setFlags(flags)
-            checked = device.live_local or device.device_id in previously_checked
+            checked = device.device_id in previously_checked
             item.setCheckState(Qt.CheckState.Checked if checked and device.selectable else Qt.CheckState.Unchecked)
             item.setData(Qt.ItemDataRole.UserRole, device.device_id)
             item.setToolTip(device.detail or device.kind)
@@ -595,7 +613,7 @@ class CollectorApp(QMainWindow):
 
     def _set_running(self, running: bool) -> None:
         self.validate_btn.setEnabled(not running)
-        self.start_btn.setEnabled(not running and self.profile is not None)
+        self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(running)
         self.server_input.setEnabled(not running)
         self.token_input.setEnabled(not running)
@@ -607,12 +625,26 @@ class CollectorApp(QMainWindow):
         self.remove_source_btn.setEnabled(not running)
         self.clear_source_btn.setEnabled(not running)
         self.progress.setVisible(running)
-        self.header_status.setText("Collecting" if running else ("Profile loaded" if self.profile else "Ready"))
-        self.header_status.setObjectName("statusWarn" if running else ("statusOk" if self.profile else "statusWarn"))
+        if running:
+            header_text = "Collecting"
+            header_object = "statusWarn"
+        elif self.consent_accepted:
+            header_text = "Ready to collect"
+            header_object = "statusOk"
+        elif self.profile:
+            header_text = "Consent required"
+            header_object = "statusWarn"
+        else:
+            header_text = "Ready"
+            header_object = "statusWarn"
+        self.header_status.setText(header_text)
+        self.header_status.setObjectName(header_object)
         self.header_status.style().unpolish(self.header_status)
         self.header_status.style().polish(self.header_status)
 
     def _selected_artifacts(self) -> set[str]:
+        if self.profile and not self.target_checks:
+            return set(self.targets_by_artifact)
         return {artifact for artifact, cb in self.target_checks.items() if cb.isChecked()}
 
     def _selected_has_non_source_target(self) -> bool:
@@ -624,7 +656,7 @@ class CollectorApp(QMainWindow):
         return {artifact for artifact in selected if artifact in self.targets_by_artifact and _target_is_source_upload(self.targets_by_artifact[artifact])}
 
     def _update_start_state(self) -> None:
-        if self.profile is None or self.worker and self.worker.is_alive():
+        if self.profile is None or not self.consent_accepted or self.worker and self.worker.is_alive():
             self.start_btn.setEnabled(False)
             return
         selected = self._selected_artifacts()
@@ -651,8 +683,9 @@ class CollectorApp(QMainWindow):
         if not token:
             QMessageBox.warning(self, "Missing token", "Enter the collection session token.")
             return
+        self.consent_accepted = False
         self.validate_btn.setEnabled(False)
-        self.token_status.setText("Validating")
+        self.token_status.setText("Validating token with server")
         self._log("Validating session token")
         threading.Thread(target=self._validate_worker, args=(server, token), daemon=True).start()
 
@@ -661,42 +694,85 @@ class CollectorApp(QMainWindow):
             client = ServiceClient(server)
             session = client.authenticate(token)
             profile = client.get_profile(session)
-            self._post("validated", {"client": client, "session": session, "profile": profile})
+            consent_template = client.get_consent_template("en")
+            self._post("validated", {"client": client, "session": session, "profile": profile, "consent_template": consent_template})
         except Exception as exc:
             self._post("validate_error", _safe_text(exc, 240))
+
+    def _show_consent_dialog(self, template: dict[str, Any]) -> bool:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(str(template.get("title") or "Collection consent"))
+        dialog.setMinimumWidth(560)
+        layout = QVBoxLayout(dialog)
+
+        summary_text = str(template.get("summary") or "Review and accept the collection consent before uploading evidence.")
+        summary = QLabel(summary_text)
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        body = QTextEdit()
+        body.setReadOnly(True)
+        body.setMinimumHeight(220)
+        body.setPlainText(str(template.get("content") or summary_text))
+        layout.addWidget(body)
+
+        checks: list[QCheckBox] = []
+        for item in template.get("required_checkboxes") or []:
+            cb = QCheckBox(str(item))
+            checks.append(cb)
+            layout.addWidget(cb)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+
+        def sync_ok() -> None:
+            ok_button.setEnabled(all(cb.isChecked() for cb in checks))
+
+        for cb in checks:
+            cb.stateChanged.connect(lambda _state: sync_ok())
+        sync_ok()
+
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
+    def _accept_consent_worker(self, template: dict[str, Any]) -> None:
+        try:
+            if not self.client or not self.session:
+                raise RuntimeError("Session is not available")
+            result = self.client.accept_consent(self.session, template)
+            self._post("consent_accepted", result)
+        except Exception as exc:
+            self._post("consent_error", _safe_text(exc, 240))
 
     def _render_profile(self) -> None:
         self.profile_tabs.clear()
         self.target_checks.clear()
         self.targets_by_artifact.clear()
-        grouped: dict[str, list[ProfileTarget]] = {}
         for target in self.profile.targets if self.profile else []:
             self.targets_by_artifact[target.artifact_type] = target
-            grouped.setdefault(_category_for_target(target), []).append(target)
-        if not grouped:
-            label = QLabel("The authenticated server profile contains no collection targets.")
-            label.setObjectName("muted")
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.profile_tabs.addTab(label, "Profile")
-            return
-        for category in sorted(grouped):
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            content = QWidget()
-            content_layout = QVBoxLayout(content)
-            content_layout.setContentsMargins(8, 8, 8, 8)
-            content_layout.setSpacing(4)
-            for target in grouped[category]:
-                cb = QCheckBox(_label_for_target(target))
-                cb.setChecked(True)
-                cb.setProperty("artifact_type", target.artifact_type)
-                cb.setToolTip(_target_hint(target))
-                cb.stateChanged.connect(lambda _state: self._update_start_state())
-                self.target_checks[target.artifact_type] = cb
-                content_layout.addWidget(cb)
-            content_layout.addStretch()
-            scroll.setWidget(content)
-            self.profile_tabs.addTab(scroll, category)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(12, 12, 12, 12)
+        content_layout.setSpacing(8)
+        if not self.targets_by_artifact:
+            title = QLabel("Server verified the token, but no collection targets are authorized.")
+            title.setObjectName("statusWarn")
+        else:
+            title = QLabel("Server verified this token and authorized collection for this case.")
+            title.setObjectName("statusOk")
+        title.setWordWrap(True)
+        content_layout.addWidget(title)
+        detail = QLabel(
+            "Specific artifact rules are enforced by the service and are not displayed in the public collector. "
+            "Choose evidence sources below; unauthorized source types will be rejected before upload."
+        )
+        detail.setObjectName("muted")
+        detail.setWordWrap(True)
+        content_layout.addWidget(detail)
+        content_layout.addStretch()
+        self.profile_tabs.addTab(content, "Verified")
 
     def _set_current_tab_checked(self, checked: bool) -> None:
         current = self.profile_tabs.currentWidget()
@@ -726,23 +802,26 @@ class CollectorApp(QMainWindow):
         if not self.client or not self.session or not self.profile:
             QMessageBox.warning(self, "Session required", "Validate a session token first.")
             return
+        if not self.consent_accepted:
+            QMessageBox.warning(self, "Consent required", "Complete the collection consent step before starting collection.")
+            return
         selected = self._selected_artifacts()
         if not selected:
-            QMessageBox.warning(self, "Profile target required", "Select at least one server profile target.")
+            QMessageBox.warning(self, "Server authorization required", "This token does not authorize any collection target.")
             return
         source_artifacts = self._selected_source_artifacts()
         missing_source_targets = sorted({entry["artifact_type"] for entry in self.source_entries if entry["artifact_type"] not in source_artifacts})
         if missing_source_targets:
             QMessageBox.warning(
                 self,
-                "Evidence source target required",
-                "Enable the matching Evidence Sources profile target for: " + ", ".join(missing_source_targets),
+                "Source type not authorized",
+                "This session token does not authorize the selected source type(s): " + ", ".join(missing_source_targets),
             )
             return
         selected_devices = self._selected_detected_devices()
         selected_direct_mobile = [device for device in selected_devices if device.kind in {"android_usb", "ios_usb"}]
         if self._has_selected_live_device() and not self._selected_has_non_source_target() and not self.source_entries:
-            QMessageBox.warning(self, "Profile target required", "Select a non-source profile target for live filesystem collection.")
+            QMessageBox.warning(self, "Live collection not authorized", "This session token does not authorize live filesystem collection.")
             return
         if selected_direct_mobile and not self.source_entries and not self._has_selected_live_device():
             QMessageBox.information(
@@ -797,15 +876,27 @@ class CollectorApp(QMainWindow):
                 self.client = payload["client"]
                 self.session = payload["session"]
                 self.profile = payload["profile"]
-                self.token_status.setText(f"Valid - Case {self.session.case_id[:8]}")
+                self.consent_accepted = False
+                self.token_status.setText(f"Token verified by server - Case {self.session.case_id[:8]}")
                 self.token_status.setObjectName("statusOk")
                 self.token_status.style().unpolish(self.token_status)
                 self.token_status.style().polish(self.token_status)
-                self._log(f"Profile loaded: {len(self.profile.targets)} target(s)")
+                self._log(f"Server verified collection scope: {len(self.profile.targets)} authorized target(s)")
                 self._render_profile()
                 self._set_running(False)
                 self._update_start_state()
-                self.validate_btn.setEnabled(True)
+                if self._show_consent_dialog(dict(payload.get("consent_template") or {})):
+                    self.validate_btn.setEnabled(False)
+                    self.token_status.setText("Recording collection consent with server")
+                    self._log("Recording collection consent")
+                    threading.Thread(target=self._accept_consent_worker, args=(dict(payload.get("consent_template") or {}),), daemon=True).start()
+                else:
+                    self.token_status.setText("Consent required before collection")
+                    self.token_status.setObjectName("statusWarn")
+                    self.token_status.style().unpolish(self.token_status)
+                    self.token_status.style().polish(self.token_status)
+                    self._log("Collection consent was not accepted")
+                    self.validate_btn.setEnabled(True)
             elif kind == "devices":
                 data = dict(payload or {})
                 self._render_devices(list(data.get("devices") or []), list(data.get("diagnostics") or []))
@@ -818,11 +909,35 @@ class CollectorApp(QMainWindow):
                 self._handle_update_info(data["info"], bool(data.get("silent", True)))
             elif kind == "update_error":
                 data = dict(payload or {})
-                self.update_btn.setEnabled(True)
+                self.update_status.setText("Update check unavailable")
+                self.update_status.setObjectName("statusWarn")
+                self.update_status.style().unpolish(self.update_status)
+                self.update_status.style().polish(self.update_status)
                 if not data.get("silent", True):
                     QMessageBox.warning(self, "Update check failed", _safe_text(data.get("error"), 200))
                 self._log(f"Update check failed: {_safe_text(data.get('error'), 200)}")
+            elif kind == "consent_accepted":
+                self.consent_accepted = True
+                self.token_status.setText("Server verified token and recorded collection consent")
+                self.token_status.setObjectName("statusOk")
+                self.token_status.style().unpolish(self.token_status)
+                self.token_status.style().polish(self.token_status)
+                self._log("Collection consent recorded by server")
+                self._set_running(False)
+                self._update_start_state()
+                self.validate_btn.setEnabled(True)
+            elif kind == "consent_error":
+                self.consent_accepted = False
+                self.token_status.setText("Consent could not be recorded")
+                self.token_status.setObjectName("statusError")
+                self.token_status.style().unpolish(self.token_status)
+                self.token_status.style().polish(self.token_status)
+                self._log(f"Consent failed: {payload}")
+                self._set_running(False)
+                self.validate_btn.setEnabled(True)
+                QMessageBox.warning(self, "Consent failed", _safe_text(payload, 240))
             elif kind == "validate_error":
+                self.consent_accepted = False
                 self.token_status.setText("Invalid")
                 self.token_status.setObjectName("statusError")
                 self.token_status.style().unpolish(self.token_status)
@@ -846,7 +961,7 @@ class CollectorApp(QMainWindow):
         name = _safe_text(event.get("name"), 80)
         kind = event.get("event")
         if kind == "started":
-            self._log("Collection profile accepted")
+            self._log("Server collection authorization accepted")
         elif kind == "target_started":
             self._log(f"Target: {_safe_text(event.get('artifact_type'), 80)}")
         elif kind == "hashing":

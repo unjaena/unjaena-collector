@@ -9,7 +9,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from unjaena_collector.client import ServiceClient, _canonical, _derive_key, _signed_headers, encrypted_temp_file, sha256_file
+from unjaena_collector.client import ServiceClient, _canonical, _derive_key, _response_error, _signed_headers, encrypted_temp_file, sha256_file
 from unjaena_collector.models import AuthSession, CollectionProfile, ProfileTarget
 from unjaena_collector.runner import ProfileRunner
 from unjaena_collector.source_formats import candidate_artifacts_for_path, classify_source_path
@@ -93,7 +93,7 @@ class ClientRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "sample.bin"
             path.write_bytes(b"data")
-            fake_response = type("Response", (), {"raise_for_status": lambda self: None})()
+            fake_response = type("Response", (), {"status_code": 200, "reason": "OK", "text": "", "headers": {}})()
             with patch("unjaena_collector.client.requests.put", return_value=fake_response) as put:
                 ServiceClient("https://example.test").upload_file("https://r2.example/upload", path)
             self.assertEqual(put.call_args.kwargs["headers"], {"Content-Type": "application/octet-stream"})
@@ -108,7 +108,7 @@ class ClientRunnerTests(unittest.TestCase):
             challenge_salt="challenge",
             hardware_id="hardware",
         )
-        fake_response = type("Response", (), {"raise_for_status": lambda self: None, "json": lambda self: {"status": "completed"}})()
+        fake_response = type("Response", (), {"status_code": 200, "reason": "OK", "text": "", "json": lambda self: {"status": "completed"}})()
         with patch("unjaena_collector.client.time.time", return_value=1710000000), \
              patch("unjaena_collector.client.os.urandom", return_value=b"\x02" * 18), \
              patch("unjaena_collector.client.requests.post", return_value=fake_response) as post:
@@ -117,6 +117,55 @@ class ClientRunnerTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], "https://example.test/api/v1/collector/collection/end/session-1")
         self.assertEqual(post.call_args.kwargs["params"], {"trigger_analysis": "false"})
         self.assertIn("X-Client-Signature", post.call_args.kwargs["headers"])
+
+
+    def test_response_error_includes_server_detail(self):
+        response = type(
+            "Response",
+            (),
+            {
+                "status_code": 403,
+                "reason": "Forbidden",
+                "text": '{"detail":"Consent required before upload"}',
+                "json": lambda self: {"detail": "Consent required before upload"},
+            },
+        )()
+        self.assertIn("403 Forbidden", _response_error(response))
+        self.assertIn("Consent required before upload", _response_error(response))
+
+    def test_accept_consent_posts_session_and_hardware_identity(self):
+        session = AuthSession(
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+            "collection-token",
+            "https://example.test",
+            hardware_id="hardware-abc",
+        )
+        template = {
+            "id": "33333333-3333-3333-3333-333333333333",
+            "version": "2026-05",
+            "language": "en",
+            "required_checkboxes": ["I am authorized to collect this evidence."],
+        }
+        fake_response = type(
+            "Response",
+            (),
+            {
+                "status_code": 200,
+                "reason": "OK",
+                "text": "",
+                "json": lambda self: {"consent_id": "consent-1"},
+            },
+        )()
+        with patch("unjaena_collector.client.requests.post", return_value=fake_response) as post:
+            result = ServiceClient("https://example.test").accept_consent(session, template)
+        self.assertEqual(result, {"consent_id": "consent-1"})
+        self.assertEqual(post.call_args.args[0], "https://example.test/api/v1/collector/consent/accept")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["session_id"], session.session_id)
+        self.assertEqual(payload["case_id"], session.case_id)
+        self.assertEqual(payload["agreed_items"], template["required_checkboxes"])
+        self.assertEqual(post.call_args.kwargs["headers"]["X-Hardware-ID"], "hardware-abc")
 
     def test_sha256_file(self):
         with tempfile.TemporaryDirectory() as td:
