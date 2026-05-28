@@ -175,7 +175,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install libusb create-dmg || true
+          brew install libusb || true
           pip install -r requirements/base.txt
           pip install -r requirements/macos.txt
           pip install pyinstaller
@@ -256,15 +256,6 @@ jobs:
           DMG_NAME="IntelligenceCollector-${VERSION}-macos-${ARCH}.dmg"
 
           if [ -d "IntelligenceCollector.app" ]; then
-            create-dmg \
-              --volname "Intelligence Collector" \
-              --window-size 600 400 \
-              --icon-size 100 \
-              --icon "IntelligenceCollector.app" 175 190 \
-              --app-drop-link 425 190 \
-              --no-internet-enable \
-              "${DMG_NAME}" \
-              "IntelligenceCollector.app" 2>/dev/null || \
             hdiutil create -volname "IntelligenceCollector" \
               -srcfolder IntelligenceCollector.app \
               -ov -format UDZO \
@@ -274,11 +265,9 @@ jobs:
             tar czf "IntelligenceCollector-${VERSION}-macos-${ARCH}.tar.gz" IntelligenceCollector
           fi
 
-      # Split notarization into submit + poll + staple so the job survives
-      # a slow Apple queue (observed > 4h on 2026-04-13). If the poll loop
-      # does not see Accepted within the in-job budget, the submission id
-      # and the unstapled DMG are saved as a separate artifact so that
-      # notary-staple.yml can finish the work asynchronously.
+      # Split notarization into submit + poll + staple. macOS release assets
+      # must be notarized; missing Apple credentials or a timeout fails the
+      # macOS job so the GitHub Release cannot silently ship without DMGs.
       - name: Notarize DMG (submit)
         id: notarize_submit
         working-directory: dist
@@ -289,11 +278,19 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           DMG_FILE=$(ls IntelligenceCollector-*-macos-${ARCH}.dmg 2>/dev/null | head -1)
-          if [ -z "$DMG_FILE" ] || [ -z "$APPLE_ID" ]; then
-            echo "[NOTARIZE] Skipped (no DMG or credentials missing)"
+          if [ -z "$DMG_FILE" ]; then
+            echo "[NOTARIZE] Skipped (no DMG produced)"
             echo "dmg_file=" >> "$GITHUB_OUTPUT"
             echo "submission_id=" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          echo "dmg_file=$DMG_FILE" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::error::Apple notarization credentials are required for macOS release assets. Configure APPLE_ID, APPLE_APP_PASSWORD, and APPLE_TEAM_ID."
+            echo "submission_id=" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
 
           echo "[NOTARIZE] Submitting $DMG_FILE..."
@@ -310,7 +307,6 @@ jobs:
             exit 1
           fi
           echo "[NOTARIZE] Submission id: $SUBMISSION_ID"
-          echo "dmg_file=$DMG_FILE" >> "$GITHUB_OUTPUT"
           echo "submission_id=$SUBMISSION_ID" >> "$GITHUB_OUTPUT"
 
       # Poll for up to ~90 min (18 * 5min). If Accepted, staple inline.
@@ -359,8 +355,9 @@ jobs:
             echo "[STAPLE] Done."
             echo "accepted=true" >> "$GITHUB_OUTPUT"
           else
-            echo "[NOTARIZE] Timed out waiting for Apple  -  release will ship Windows/Linux first; run notary-staple workflow once submission reaches Accepted."
+            echo "::error::Timed out waiting for Apple notarization. The release will not be published without notarized macOS assets."
             echo "accepted=false" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
 
       - name: Clean up keychain
@@ -401,12 +398,10 @@ jobs:
   # Release  -  SHA256 checksums + GitHub Release assembly
   # =========================================================================
   release:
-    # Wait for macOS too so the DMG (when notarization finishes in-job)
-    # lands in the release alongside the other assets. macOS is not
-    # gated  -  if notarize times out the DMG goes to a pending artifact
-    # and the release still ships with Windows + Linux.
+    # Require every platform to succeed so release assets cannot be
+    # incomplete or miss trusted macOS DMGs without a visible failure.
     needs: [build-windows, build-linux, build-macos]
-    if: always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
+    if: always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success' && needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
     # Only this job needs write access to create the GitHub Release.
     permissions:
