@@ -40,8 +40,11 @@ except ModuleNotFoundError:
     QMainWindow = object
 
 from .client import ServiceClient
+from . import __version__
 from .models import CollectionProfile, ProfileTarget
 from .runner import ProfileRunner
+from .privileges import privilege_status, relaunch_elevated
+from .updater import UpdateInfo, check_for_update, open_update
 from .device_discovery import DeviceInfo, discover_devices
 from .source_formats import (
     SOURCE_FILE_FILTER,
@@ -184,10 +187,12 @@ class CollectorApp(QMainWindow):
         self._build()
         self._set_running(False)
         self._update_source_summary()
+        self._update_privilege_status()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll_events)
         self.timer.start(100)
         self._refresh_devices()
+        QTimer.singleShot(700, lambda: self._check_updates(silent=True))
 
     def _build(self) -> None:
         self.setWindowTitle("unJaena Collector")
@@ -211,6 +216,15 @@ class CollectorApp(QMainWindow):
         subtitle.setObjectName("muted")
         header_layout.addWidget(subtitle)
         header_layout.addStretch()
+        self.privilege_status = QLabel("Privilege unknown")
+        self.privilege_status.setObjectName("statusWarn")
+        header_layout.addWidget(self.privilege_status)
+        self.restart_admin_btn = QPushButton("Restart as Admin")
+        self.restart_admin_btn.clicked.connect(self._restart_as_admin)
+        header_layout.addWidget(self.restart_admin_btn)
+        self.update_btn = QPushButton("Check Updates")
+        self.update_btn.clicked.connect(lambda: self._check_updates(silent=False))
+        header_layout.addWidget(self.update_btn)
         self.header_status = QLabel("Ready")
         self.header_status.setObjectName("statusWarn")
         header_layout.addWidget(self.header_status)
@@ -375,6 +389,62 @@ class CollectorApp(QMainWindow):
         group_layout.addWidget(self.log)
         layout.addWidget(group)
         return panel
+
+    def _update_privilege_status(self) -> None:
+        status = privilege_status()
+        self.privilege_status.setText("Admin" if status.elevated else "Limited")
+        self.privilege_status.setObjectName("statusOk" if status.elevated else "statusWarn")
+        self.privilege_status.setToolTip(status.detail)
+        self.privilege_status.style().unpolish(self.privilege_status)
+        self.privilege_status.style().polish(self.privilege_status)
+        self.restart_admin_btn.setVisible(not status.elevated and status.can_relaunch)
+        self._log(status.detail)
+
+    def _restart_as_admin(self) -> None:
+        self._log("Requesting administrator relaunch")
+        if relaunch_elevated():
+            QApplication.quit()
+            return
+        QMessageBox.warning(
+            self,
+            "Administrator relaunch failed",
+            "Unable to relaunch with administrator privileges. Start unJaena Collector as administrator/root to access physical disks and protected locations.",
+        )
+        self._log("Administrator relaunch failed")
+
+    def _check_updates(self, silent: bool = True) -> None:
+        self.update_btn.setEnabled(False)
+        if not silent:
+            self._log("Checking for collector updates")
+        threading.Thread(target=self._check_updates_worker, args=(silent,), daemon=True).start()
+
+    def _check_updates_worker(self, silent: bool) -> None:
+        try:
+            info = check_for_update(__version__)
+            self._post("update", {"info": info, "silent": silent})
+        except Exception as exc:
+            self._post("update_error", {"error": _safe_text(exc, 200), "silent": silent})
+
+    def _handle_update_info(self, info: UpdateInfo, silent: bool) -> None:
+        self.update_btn.setEnabled(True)
+        if info.available:
+            asset = f" ({info.asset.name})" if info.asset else ""
+            self._log(f"Update available: {info.current_version} -> {info.latest_version}{asset}")
+            answer = QMessageBox.question(
+                self,
+                "Update available",
+                f"unJaena Collector {info.latest_version} is available. Download the update now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                if open_update(info):
+                    self._log("Opened update download")
+                else:
+                    self._log("Failed to open update download")
+            return
+        if not silent:
+            QMessageBox.information(self, "No update available", f"unJaena Collector {info.current_version} is current.")
+        self._log(f"Collector is current: {info.current_version}")
 
     def _toggle_token(self) -> None:
         self.token_input.setEchoMode(QLineEdit.EchoMode.Normal if self.show_token_btn.isChecked() else QLineEdit.EchoMode.Password)
@@ -743,6 +813,15 @@ class CollectorApp(QMainWindow):
                 self.refresh_devices_btn.setEnabled(True)
                 self.device_summary.setText(f"Device scan failed: {payload}")
                 self._log(f"Device scan failed: {payload}")
+            elif kind == "update":
+                data = dict(payload or {})
+                self._handle_update_info(data["info"], bool(data.get("silent", True)))
+            elif kind == "update_error":
+                data = dict(payload or {})
+                self.update_btn.setEnabled(True)
+                if not data.get("silent", True):
+                    QMessageBox.warning(self, "Update check failed", _safe_text(data.get("error"), 200))
+                self._log(f"Update check failed: {_safe_text(data.get('error'), 200)}")
             elif kind == "validate_error":
                 self.token_status.setText("Invalid")
                 self.token_status.setObjectName("statusError")

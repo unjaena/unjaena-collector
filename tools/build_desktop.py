@@ -32,7 +32,7 @@ def main() -> int:
         str(entry),
     ]
     if system == "windows":
-        cmd[5:5] = ["--onefile", "--hidden-import", "wmi", "--hidden-import", "win32com.client", "--hidden-import", "pythoncom"]
+        cmd[5:5] = ["--onefile", "--uac-admin", "--hidden-import", "wmi", "--hidden-import", "win32com.client", "--hidden-import", "pythoncom"]
     elif system == "darwin":
         cmd.insert(5, "--onedir")
     else:

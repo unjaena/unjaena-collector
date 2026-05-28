@@ -240,6 +240,97 @@ def _mounted_volumes() -> tuple[list[DeviceInfo], str]:
     return devices, "Mounted volumes: ready." if devices else "Mounted volumes: no additional mounted volume detected."
 
 
+def _linux_block_devices() -> tuple[list[DeviceInfo], str]:
+    if not sys.platform.startswith("linux"):
+        return [], "Linux block devices: not applicable."
+    lsblk = shutil.which("lsblk")
+    if not lsblk:
+        return [], "Linux block devices: lsblk is not available."
+    result = _run([lsblk, "-J", "-b", "-o", "NAME,TYPE,SIZE,MODEL,TRAN,RM,MOUNTPOINT,LABEL"], timeout=5)
+    if not result or result.returncode != 0:
+        return [], "Linux block devices: lsblk did not respond."
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except Exception as exc:
+        return [], f"Linux block devices: invalid lsblk output ({_safe_exception(exc)})."
+    devices: list[DeviceInfo] = []
+
+    def visit(items: list[dict[str, Any]]) -> None:
+        for item in items:
+            name = str(item.get("name") or "")
+            dtype = str(item.get("type") or "")
+            if name and dtype in {"disk", "part"}:
+                model = str(item.get("model") or "").strip()
+                tran = str(item.get("tran") or "").strip()
+                label = str(item.get("label") or "").strip()
+                mountpoint = str(item.get("mountpoint") or "").strip()
+                removable = bool(item.get("rm")) or tran == "usb"
+                title = label or model or name
+                prefix = "USB block device" if removable else "Block device"
+                path = Path("/dev") / name
+                devices.append(DeviceInfo(
+                    device_id=f"linux_block_{name.replace('/', '_')}",
+                    kind="linux_block_device",
+                    label=f"{prefix} - {title}",
+                    status="ready" if is_root_process() else "limited",
+                    detail="Raw block device detected. Administrator/root privileges and a server-authorized profile are required for physical acquisition.",
+                    size_bytes=int(item.get("size") or 0),
+                    source_path=path,
+                    selectable=False,
+                    metadata={"path": str(path), "type": dtype, "transport": tran, "mountpoint": mountpoint, "removable": removable},
+                ))
+            children = item.get("children") or []
+            if isinstance(children, list):
+                visit(children)
+
+    visit(list(payload.get("blockdevices") or []))
+    return devices, "Linux block devices: ready." if devices else "Linux block devices: no block device detected."
+
+
+def _macos_physical_disks() -> tuple[list[DeviceInfo], str]:
+    if sys.platform != "darwin":
+        return [], "macOS disks: not applicable."
+    diskutil = shutil.which("diskutil")
+    if not diskutil:
+        return [], "macOS disks: diskutil is not available."
+    result = _run([diskutil, "list", "-plist"], timeout=8)
+    if not result or result.returncode != 0:
+        return [], "macOS disks: diskutil did not respond."
+    try:
+        payload = plistlib.loads((result.stdout or "").encode("utf-8"))
+    except Exception as exc:
+        return [], f"macOS disks: invalid diskutil output ({_safe_exception(exc)})."
+    devices: list[DeviceInfo] = []
+    for item in payload.get("AllDisksAndPartitions") or []:
+        identifier = str(item.get("DeviceIdentifier") or "")
+        if not identifier:
+            continue
+        name = str(item.get("VolumeName") or item.get("Content") or identifier)
+        size = int(item.get("Size") or 0)
+        path = Path("/dev") / f"r{identifier}"
+        devices.append(DeviceInfo(
+            device_id=f"macos_disk_{identifier}",
+            kind="macos_disk",
+            label=f"Disk - {name}",
+            status="ready" if is_root_process() else "limited",
+            detail="Physical disk detected. Administrator/root privileges and a server-authorized profile are required for physical acquisition.",
+            size_bytes=size,
+            source_path=path,
+            selectable=False,
+            metadata={"identifier": identifier, "path": str(path)},
+        ))
+    return devices, "macOS disks: ready." if devices else "macOS disks: no disk detected."
+
+
+def is_root_process() -> bool:
+    if hasattr(os, "geteuid"):
+        try:
+            return os.geteuid() == 0
+        except Exception:
+            return False
+    return False
+
+
 def _windows_physical_disks() -> list[DeviceInfo]:
     if sys.platform != "win32":
         return []
@@ -411,6 +502,8 @@ def discover_devices() -> tuple[list[DeviceInfo], list[str]]:
         ("Mounted volumes", _mounted_volumes),
         ("Windows logical volumes", _windows_logical_volumes),
         ("Windows physical disks", _windows_physical_disks),
+        ("Linux block devices", _linux_block_devices),
+        ("macOS disks", _macos_physical_disks),
         ("Android USB", _adb_devices),
         ("iOS USB", _ios_usb_devices),
         ("iOS backups", _ios_backups),
