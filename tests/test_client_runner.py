@@ -271,6 +271,13 @@ class MacSigningTests(unittest.TestCase):
             sign_macos._decode_certificate_b64("not base64!")
         self.assertIn("APPLE_DEVELOPER_ID_CERT_BASE64", str(ctx.exception))
 
+    def test_certificate_import_uses_explicit_pkcs12_format(self):
+        commands = []
+        with patch.object(sign_macos, "_run", side_effect=lambda args: commands.append(args) or ""):
+            sign_macos._import_certificate("cert.p12", "build.keychain", "pw-value")
+        self.assertIn("-f", commands[0])
+        self.assertIn("pkcs12", commands[0])
+
 
 if __name__ == "__main__":
     unittest.main()

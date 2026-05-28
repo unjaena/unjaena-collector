@@ -58,6 +58,24 @@ def _decode_certificate_b64(value: str) -> bytes:
         raise SystemExit("Invalid APPLE_DEVELOPER_ID_CERT_BASE64: expected base64-encoded .p12 data") from exc
 
 
+def _import_certificate(cert_decoded: str, keychain: str, cert_password: str) -> None:
+    _run([
+        "security",
+        "import",
+        cert_decoded,
+        "-f",
+        "pkcs12",
+        "-k",
+        keychain,
+        "-P",
+        cert_password,
+        "-T",
+        "/usr/bin/codesign",
+        "-T",
+        "/usr/bin/security",
+    ])
+
+
 def main() -> int:
     cert_b64 = "".join(os.environ.get("APPLE_DEVELOPER_ID_CERT_BASE64", "").split())
     cert_password = os.environ.get("APPLE_DEVELOPER_ID_CERT_PASSWORD", "")
@@ -78,7 +96,7 @@ def main() -> int:
         _run(["security", "create-keychain", "-p", keychain_password, keychain])
         _run(["security", "set-keychain-settings", "-lut", "21600", keychain])
         _run(["security", "unlock-keychain", "-p", keychain_password, keychain])
-        _run(["security", "import", cert_decoded, "-k", keychain, "-P", cert_password, "-T", "/usr/bin/codesign", "-T", "/usr/bin/security"] )
+        _import_certificate(cert_decoded, keychain, cert_password)
         _run(["security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", keychain_password, keychain])
         identity = _identity(keychain)
         _run(["codesign", "--force", "--timestamp", "--options", "runtime", "--deep", "--sign", identity, str(target)])
