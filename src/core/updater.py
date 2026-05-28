@@ -74,7 +74,7 @@ def check_for_update() -> Optional[dict]:
         {
             'current_version': '2.1.0',
             'latest_version': '2.2.0',
-            'release_name': 'Intelligence Collector v2.2.0',
+            'release_name': 'unJaena Collector v2.2.0',
             'release_notes': '...',
             'download_url': 'https://...',
             'release_page': 'https://...',

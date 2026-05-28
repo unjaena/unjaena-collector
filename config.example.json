@@ -3,7 +3,7 @@
   "_path_note": "User settings are stored at ~/.forensic-collector/config.json.",
   "server_url": "https://app.unjaena.com",
   "ws_url": "wss://app.unjaena.com",
-  "app_name": "unJaena Intelligence Collector",
+  "app_name": "unJaena Collector",
   "version": "2.6.6",
   "dev_mode": false
 }
