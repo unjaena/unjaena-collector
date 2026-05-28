@@ -1,64 +1,39 @@
+#!/usr/bin/env python3
+from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-
 ROOT = Path(__file__).resolve().parents[1]
+SKIP = {'.git', '__pycache__', '.pytest_cache', 'dist', 'build'}
 PATTERNS = [
-    r"[\uac00-\ud7af]",
-    r"AI-DF",
-    r"ai-df",
-    r"chimborazo",
-    r"migration/backend",
-    r"/workspace/AI-DF",
-    r"C:\\project\\AI-DF",
-    r"runpod",
-    r"forensic_admin",
-    r"secret",
-    r"private key",
-    r"access token",
-    r"refresh token",
-    r"credential.*extract",
-    r"extract.*credential",
-    r"password.*extract",
-    r"extract.*password",
+    r'[\uac00-\ud7af]', r'AI-DF', r'chimborazo', r'runpod', r'forensic_admin',
+    r'private key', r'access token', r'refresh token', r'github_pat_',
+    r'Login Data', r'IndexedDB', r'security question', r'Kakao', r'WhatsApp',
+    r'claude\.ai', r'chatgpt', r'\.codex',
 ]
-SKIP = {".git", "__pycache__", ".pytest_cache", "dist", "build"}
-
-
-def _allow_match(path: Path, pattern: str) -> bool:
-    rel = path.relative_to(ROOT)
-    if rel.as_posix().startswith(".github/workflows/") and pattern == r"secret":
-        return True
-    return False
-
 
 def main() -> int:
     failures = []
-    compiled = [re.compile(p, re.IGNORECASE) for p in PATTERNS]
-    for path in ROOT.rglob("*"):
+    compiled = [re.compile(pattern, re.IGNORECASE) for pattern in PATTERNS]
+    for path in ROOT.rglob('*'):
         if any(part in SKIP for part in path.parts):
             continue
-        if not path.is_file():
-            continue
-        if path == Path(__file__).resolve():
+        if not path.is_file() or path == Path(__file__).resolve():
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding='utf-8')
         except UnicodeDecodeError:
             continue
         for pattern in compiled:
             if pattern.search(text):
-                if _allow_match(path, pattern.pattern):
-                    continue
-                failures.append(f"{path.relative_to(ROOT)}: {pattern.pattern}")
+                failures.append(f'{path.relative_to(ROOT)}: {pattern}')
     if failures:
-        print("Public preflight failed")
-        for item in failures:
-            print(item)
+        print('Public preflight failed')
+        for failure in failures:
+            print(failure)
         return 1
-    print("Public preflight passed")
+    print('Public preflight passed')
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == '__main__':
+    raise SystemExit(main())

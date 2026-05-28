@@ -1,0 +1,5 @@
+# This directory will contain libimobiledevice binaries after running:
+#   python tools/download_libimobiledevice.py
+#
+# The binaries are not committed to the repository.
+# They are downloaded at build time or first run.

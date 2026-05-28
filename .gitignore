@@ -1,14 +1,192 @@
+# =============================================================================
+# Forensic Collector - Git Ignore
+# =============================================================================
+
+# Sensitive config files (API keys, server URLs, etc.)
+config.json
+config.local.json
+config.development.json
+config.production.json
+config.staging.json
+*.secret
+*.credentials
+
+# Collected artifacts (large files, personal data)
+collected_artifacts/
+artifacts/
+output/
+extracted/
+temp/
+tmp/
+
+# Log files
+logs/
+*.log
+
+# Forensic image files (large)
+*.E01
+*.e01
+*.Ex01
+*.L01
+*.raw
+*.dd
+*.img
+*.dmg
+*.iso
+
+# Mobile backups (personal data)
+**/MobileSync/
+**/Backup/
+*.ab
+*.ab.bak
+
+# iOS backup files
+Manifest.db
+Manifest.plist
+Info.plist
+Status.plist
+
+# Python
 __pycache__/
 *.py[cod]
-*.egg-info/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.venv/
-venv/
+*$py.class
+*.so
+.Python
+# ADB binaries (downloaded at build time, not committed)
+resources/adb/
+
 build/
+develop-eggs/
 dist/
-coverage/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Test outputs
+test_output/
+test_artifacts/
+.pytest_cache/
 .coverage
-*.log
+htmlcov/
+.tox/
+.nox/
+
+# Documentation build
+docs/_build/
+
+# Chain of custody logs
+custody_log*.json
+chain_of_custody/
+
+# Temporary files
 *.tmp
+*.bak
+*.backup
+*.old
+
+# Database files (may contain evidence)
+*.db
+*.sqlite
+*.sqlite3
+
+# Encryption keys (NEVER commit)
+*.key
+*.pem
+*.crt
+*.cer
+private/
+keys/
+.signing_key
+
+# Environment files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Deployment scripts (contain infrastructure references)
+upload_to_r2.py
+
+# =============================================================================
+# External Tools (downloaded at build time)
+# =============================================================================
+
+# libimobiledevice binaries (LGPL-2.1, downloaded via download_libimobiledevice.py)
+tools/libimobiledevice/*.exe
+tools/libimobiledevice/*.dll
+tools/libimobiledevice/LICENSE
+!tools/libimobiledevice/.gitkeep
+
+# Downloaded archives
+tools/*.zip
+tools/*.tar.gz
+
+# =============================================================================
+# Third-party binaries (downloaded separately, not redistributable)
+# =============================================================================
+
+# Memory acquisition tool (Apache 2.0 — https://github.com/Velocidex/WinPmem)
+resources/winpmem_mini_x64.exe
+
+# USB library binary (install via pip: libusb1)
+resources/libusb-1.0.dll
+
+# Android APK files (copyrighted third-party apps, not redistributable)
+resources/downgrade_apks/*.apk
+!resources/downgrade_apks/README.txt
+
+# NUL placeholder
+resources/downgrade_apks/NUL
+
+# Standalone operator tools (not part of public collector)
+flash_combination_extract.py
+heimdall_bin/
+heimdall.zip
+
+# Agent APK binary (built from agent-android/, not distributed via git)
+
+# Agent APK (built separately, distributed via GitHub Releases)
+resources/agent_apk/
+
+# Test output (personal device data)
+test_output_android/
+test_android_collection.py
+test_android_quick.py
+
+# Test files (not distributed in public releases)
+src/tests/
+tests/

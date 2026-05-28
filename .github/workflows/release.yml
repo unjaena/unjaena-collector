@@ -1,90 +1,439 @@
-name: release
+name: Build & Release Collector
 
 on:
-  workflow_dispatch:
   push:
     tags:
-      - "unjaena-collector-v*"
-      - "unJaena-collector-v*"
-      - "collector-v*"
-      - "thin-collector-v*"
-      - "collector-thin-v*"
+      - 'collector-v*'
 
+# 2026-04-20: default deny  -  each job opts into the permissions it needs.
+# Only the release-publishing job gets contents:write.
 permissions:
-  contents: write
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.11'
+  GITHUB_REPO: ${{ github.repository }}
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
+  # =========================================================================
+  # Windows x64  -  .exe (PyInstaller onefile)
+  # =========================================================================
+  build-windows:
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install .
-      - run: python tools/public_preflight.py
-      - run: python -m unittest discover -s tests -v
-      - run: python -m py_compile src/unjaena_collector/cli.py src/unjaena_collector/client.py src/unjaena_collector/runner.py src/unjaena_collector/gui.py src/unjaena_collector/models.py src/unjaena_collector/desktop.py src/unjaena_collector/device_discovery.py src/unjaena_collector/source_formats.py tools/build_desktop.py tools/package_desktop.py tools/checksums.py tools/sign_macos.py
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-  desktop:
-    needs: verify
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        # NOTE: For supply-chain safety, consider using requirements/base.lock.txt
+        # (generated via `pip freeze`) for deterministic, reproducible builds.
+        run: |
+          pip install -r requirements/base.txt
+          pip install -r requirements/windows.txt
+          pip install pyinstaller
+
+      - name: Prepare config with version
+        shell: bash
+        env:
+          SERVER_URL: ${{ secrets.PRODUCTION_SERVER_URL }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-v}"
+          python -c "
+          import json, os
+          server_url = os.environ.get('SERVER_URL', 'https://YOUR_SERVER_URL')
+          ws_url = server_url.replace('https://', 'wss://').replace('http://', 'ws://')
+          if os.path.exists('config.production.json'):
+              with open('config.production.json', encoding='utf-8') as f: c = json.load(f)
+              if server_url != 'https://YOUR_SERVER_URL':
+                  c['server_url'] = server_url
+                  c['ws_url'] = ws_url
+          else:
+              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'Digital Intelligence Collector'}
+          c['version'] = '${VERSION}'
+          with open('config.production.json', 'w', encoding='utf-8') as f: json.dump(c, f, indent=4)
+          print(f'[CONFIG] version={c[\"version\"]}, server_url={c.get(\"server_url\",\"N/A\")}')
+          "
+
+      - name: Download ADB platform-tools (Apache-2.0)
+        shell: bash
+        run: |
+          curl -sL -o /tmp/platform-tools.zip https://dl.google.com/android/repository/platform-tools-latest-windows.zip
+          unzip -o /tmp/platform-tools.zip -d /tmp/
+          mkdir -p resources/adb
+          cp /tmp/platform-tools/adb.exe resources/adb/
+          cp /tmp/platform-tools/AdbWinApi.dll resources/adb/
+          cp /tmp/platform-tools/AdbWinUsbApi.dll resources/adb/
+          echo "[ADB] Bundled $(resources/adb/adb.exe version 2>/dev/null | head -1)"
+
+      - name: Build EXE
+        run: python build.py --production --ci --skip-usb-check
+
+      - name: Rename with version
+        working-directory: dist
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-v}"
+          mv IntelligenceCollector.exe "IntelligenceCollector-${VERSION}-windows-x64.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: windows-x64
+          path: dist/IntelligenceCollector-*-windows-x64.exe
+
+  # =========================================================================
+  # Linux x64  -  .tar.gz (PyInstaller onefile)
+  # =========================================================================
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libusb-1.0-0-dev libxcb-cursor0 libxcb-xinerama0 libgl1
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements/base.txt
+          pip install -r requirements/linux.txt
+          pip install pyinstaller
+
+      - name: Prepare config with version
+        env:
+          SERVER_URL: ${{ secrets.PRODUCTION_SERVER_URL }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-v}"
+          python -c "
+          import json, os
+          server_url = os.environ.get('SERVER_URL', 'https://YOUR_SERVER_URL')
+          ws_url = server_url.replace('https://', 'wss://').replace('http://', 'ws://')
+          if os.path.exists('config.production.json'):
+              with open('config.production.json', encoding='utf-8') as f: c = json.load(f)
+              if server_url != 'https://YOUR_SERVER_URL':
+                  c['server_url'] = server_url
+                  c['ws_url'] = ws_url
+          else:
+              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'Digital Intelligence Collector'}
+          c['version'] = '${VERSION}'
+          with open('config.production.json', 'w', encoding='utf-8') as f: json.dump(c, f, indent=4)
+          print(f'[CONFIG] version={c[\"version\"]}, server_url={c.get(\"server_url\",\"N/A\")}')
+          "
+
+      - name: Build Linux binary
+        run: python build.py --production --ci --skip-usb-check
+
+      - name: Package tar.gz
+        working-directory: dist
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-v}"
+          chmod +x IntelligenceCollector
+          tar czf "IntelligenceCollector-${VERSION}-linux-x64.tar.gz" IntelligenceCollector
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: linux-x64
+          path: dist/IntelligenceCollector-*-linux-x64.tar.gz
+
+  # =========================================================================
+  # macOS dual-arch (Apple Silicon + Intel)  -  two .dmg per release
+  #
+  # Native per-arch runners avoid PyInstaller universal2 binary validation
+  # failures (any dep without a universal2 slice aborts the build) and
+  # Rosetta-emulation flakiness. macos-15-intel is GitHub's official x86_64
+  # runner available until Aug 2027; after that we re-evaluate whether to
+  # keep the Intel build at all.
+  # =========================================================================
+  build-macos:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-15-intel, macos-14]
-    runs-on: ${{ matrix.os }}
+        include:
+          - runner: macos-14          # Apple Silicon (arm64)
+            arch: arm64
+          - runner: macos-15-intel    # Intel (x86_64)
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install Linux desktop dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libdbus-1-3 \
-            libegl1 \
-            libgl1 \
-            libxkbcommon-x11-0 \
-            libxcb-cursor0 \
-            libxcb-icccm4 \
-            libxcb-image0 \
-            libxcb-keysyms1 \
-            libxcb-render-util0 \
-            libxcb-xinerama0 \
-            libxcb-xinput0
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install .[desktop]
-      - run: python tools/build_desktop.py
-      - name: Sign macOS app
-        if: runner.os == 'macOS'
-        env:
-          APPLE_DEVELOPER_ID_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_BASE64 }}
-          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
-          APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
-          UNJAENA_SIGNING_REQUIRED: "0"
-        run: python tools/sign_macos.py
-      - run: python tools/package_desktop.py
-      - run: python tools/checksums.py
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          fail_on_unmatched_files: true
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-  wheel:
-    needs: verify
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          brew install libusb create-dmg || true
+          pip install -r requirements/base.txt
+          pip install -r requirements/macos.txt
+          pip install pyinstaller
+
+      - name: Prepare config with version
+        env:
+          SERVER_URL: ${{ secrets.PRODUCTION_SERVER_URL }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-v}"
+          python3 -c "
+          import json, os
+          server_url = os.environ.get('SERVER_URL', 'https://YOUR_SERVER_URL')
+          ws_url = server_url.replace('https://', 'wss://').replace('http://', 'ws://')
+          if os.path.exists('config.production.json'):
+              with open('config.production.json', encoding='utf-8') as f: c = json.load(f)
+              if server_url != 'https://YOUR_SERVER_URL':
+                  c['server_url'] = server_url
+                  c['ws_url'] = ws_url
+          else:
+              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'Digital Intelligence Collector'}
+          c['version'] = '${VERSION}'
+          with open('config.production.json', 'w', encoding='utf-8') as f: json.dump(c, f, indent=4)
+          print(f'[CONFIG] version={c[\"version\"]}, server_url={c.get(\"server_url\",\"N/A\")}')
+          "
+
+      - name: Build macOS binary
+        run: python build.py --production --ci --skip-usb-check
+
+      # -----------------------------------------------------------------
+      # Code Signing + Notarization
+      # -----------------------------------------------------------------
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          echo -n "$MACOS_CERTIFICATE" | base64 --decode -o $CERT_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import $CERT_PATH -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Sign app bundle
+        working-directory: dist
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          if [ -d "IntelligenceCollector.app" ]; then
+            echo "[SIGN] Signing IntelligenceCollector.app..."
+            codesign --deep --force --options runtime \
+              --entitlements ../entitlements.plist \
+              --sign "$MACOS_SIGNING_IDENTITY" \
+              IntelligenceCollector.app
+
+            echo "[SIGN] Verifying signature..."
+            codesign --verify --deep --strict --verbose=2 IntelligenceCollector.app
+            echo "[SIGN] Done."
+          else
+            echo "[SIGN] No .app bundle found, skipping signing"
+          fi
+
+      - name: Create DMG
+        working-directory: dist
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#collector-v}"
+          DMG_NAME="IntelligenceCollector-${VERSION}-macos-${ARCH}.dmg"
+
+          if [ -d "IntelligenceCollector.app" ]; then
+            create-dmg \
+              --volname "Intelligence Collector" \
+              --window-size 600 400 \
+              --icon-size 100 \
+              --icon "IntelligenceCollector.app" 175 190 \
+              --app-drop-link 425 190 \
+              --no-internet-enable \
+              "${DMG_NAME}" \
+              "IntelligenceCollector.app" 2>/dev/null || \
+            hdiutil create -volname "IntelligenceCollector" \
+              -srcfolder IntelligenceCollector.app \
+              -ov -format UDZO \
+              "${DMG_NAME}"
+          else
+            chmod +x IntelligenceCollector
+            tar czf "IntelligenceCollector-${VERSION}-macos-${ARCH}.tar.gz" IntelligenceCollector
+          fi
+
+      # Split notarization into submit + poll + staple so the job survives
+      # a slow Apple queue (observed > 4h on 2026-04-13). If the poll loop
+      # does not see Accepted within the in-job budget, the submission id
+      # and the unstapled DMG are saved as a separate artifact so that
+      # notary-staple.yml can finish the work asynchronously.
+      - name: Notarize DMG (submit)
+        id: notarize_submit
+        working-directory: dist
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          DMG_FILE=$(ls IntelligenceCollector-*-macos-${ARCH}.dmg 2>/dev/null | head -1)
+          if [ -z "$DMG_FILE" ] || [ -z "$APPLE_ID" ]; then
+            echo "[NOTARIZE] Skipped (no DMG or credentials missing)"
+            echo "dmg_file=" >> "$GITHUB_OUTPUT"
+            echo "submission_id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "[NOTARIZE] Submitting $DMG_FILE..."
+          SUBMIT_OUTPUT=$(xcrun notarytool submit "$DMG_FILE" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --output-format json 2>&1)
+          echo "$SUBMIT_OUTPUT"
+
+          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('id',''))" 2>/dev/null || true)
+          if [ -z "$SUBMISSION_ID" ]; then
+            echo "[NOTARIZE] Submit failed  -  could not extract submission id"
+            exit 1
+          fi
+          echo "[NOTARIZE] Submission id: $SUBMISSION_ID"
+          echo "dmg_file=$DMG_FILE" >> "$GITHUB_OUTPUT"
+          echo "submission_id=$SUBMISSION_ID" >> "$GITHUB_OUTPUT"
+
+      # Poll for up to ~90 min (18 * 5min). If Accepted, staple inline.
+      # If still InProgress after the budget, leave accepted=false so the
+      # downstream split-upload logic routes this to the followup workflow.
+      - name: Notarize DMG (poll and staple)
+        id: notarize_poll
+        if: steps.notarize_submit.outputs.submission_id != ''
+        working-directory: dist
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SUBMISSION_ID: ${{ steps.notarize_submit.outputs.submission_id }}
+          DMG_FILE: ${{ steps.notarize_submit.outputs.dmg_file }}
+        run: |
+          ACCEPTED=false
+          for i in $(seq 1 18); do
+            STATUS=$(xcrun notarytool info "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" 2>&1 | awk -F': ' '/^  status:/{print $2; exit}')
+            echo "[NOTARIZE] poll $i/18 status=$STATUS"
+            case "$STATUS" in
+              Accepted)
+                ACCEPTED=true
+                break
+                ;;
+              Invalid|Rejected)
+                echo "[NOTARIZE] Apple rejected the submission"
+                xcrun notarytool log "$SUBMISSION_ID" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_APP_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" || true
+                echo "accepted=false" >> "$GITHUB_OUTPUT"
+                exit 1
+                ;;
+            esac
+            sleep 300
+          done
+
+          if [ "$ACCEPTED" = "true" ]; then
+            echo "[STAPLE] Stapling ticket..."
+            xcrun stapler staple "$DMG_FILE"
+            xcrun stapler validate "$DMG_FILE"
+            echo "[STAPLE] Done."
+            echo "accepted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "[NOTARIZE] Timed out waiting for Apple  -  release will ship Windows/Linux first; run notary-staple workflow once submission reaches Accepted."
+            echo "accepted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
+
+      # Stapled DMG  -  goes directly into the GitHub Release.
+      - name: Upload artifact (stapled DMG)
+        if: always() && steps.notarize_poll.outputs.accepted == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.dmg
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.tar.gz
+
+      # Unstapled DMG + submission id  -  consumed by notary-staple.yml.
+      # Kept out of the GitHub Release so users never download an unsigned
+      # artifact by mistake.
+      - name: Upload artifact (pending notarization)
+        if: always() && steps.notarize_submit.outputs.submission_id != '' && steps.notarize_poll.outputs.accepted != 'true'
+        working-directory: dist
+        run: |
+          echo "${{ steps.notarize_submit.outputs.submission_id }}" > submission_id.txt
+      - name: Upload pending artifact
+        if: always() && steps.notarize_submit.outputs.submission_id != '' && steps.notarize_poll.outputs.accepted != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: macos-${{ matrix.arch }}-pending
+          retention-days: 14
+          path: |
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.dmg
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.tar.gz
+            dist/submission_id.txt
+
+  # =========================================================================
+  # Release  -  SHA256 checksums + GitHub Release assembly
+  # =========================================================================
+  release:
+    # Wait for macOS too so the DMG (when notarization finishes in-job)
+    # lands in the release alongside the other assets. macOS is not
+    # gated  -  if notarize times out the DMG goes to a pending artifact
+    # and the release still ships with Windows + Linux.
+    needs: [build-windows, build-linux, build-macos]
+    if: always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
     runs-on: ubuntu-latest
+    # Only this job needs write access to create the GitHub Release.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
-          python-version: "3.11"
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip wheel --no-deps . -w release
-      - run: python tools/checksums.py
-      - uses: softprops/action-gh-release@v2
+          path: release-assets
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release-assets
+          find . -type f \( -name "*.exe" -o -name "*.tar.gz" -o -name "*.dmg" \) | while read f; do
+            sha256sum "$f" | sed "s|  \./[^/]*/|  |" >> ../SHA256SUMS.txt
+          done
+          cat ../SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          files: release/*
-          fail_on_unmatched_files: true
+          name: "Intelligence Collector ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: |
+            release-assets/**/*.exe
+            release-assets/**/*.tar.gz
+            release-assets/**/*.dmg
+            SHA256SUMS.txt

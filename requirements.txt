@@ -1,0 +1,12 @@
+# Forensic Collector - Windows dependencies (backward compatibility)
+# License: AGPL-3.0 (project license — see LICENSE)
+#
+# This file is kept for backward compatibility.
+# For cross-platform usage, see requirements/ directory:
+#   - requirements/windows.txt  (Windows)
+#   - requirements/linux.txt    (Linux)
+#   - requirements/macos.txt    (macOS)
+-r requirements/windows.txt
+
+# Build (optional)
+pyinstaller>=6.3.0

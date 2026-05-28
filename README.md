@@ -1,65 +1,22 @@
-# unjaena-collector
+# unJaena Collector
 
-Open unJaena desktop client for authorized forensic collection workflows.
+unJaena Collector is the open-source desktop acquisition client for authenticated unJaena forensic collection sessions.
 
-This repository contains the public client shell only: service authentication, signed profile validation, local file hashing, optional encrypted transport preparation, upload completion, and a desktop interface for local live collection, forensic image or bundle source upload, and server-profile driven artifact selection. The collection catalog, parsing, scoring, analysis, reporting, policy, and recovery logic are delivered or executed by the service.
+The public client contains acquisition, packaging, consent, device discovery, disk-image access, and upload transport code. Collection target policy is not embedded in this repository. After a user validates a session token, the service sends a signed collection profile that authorizes the exact sources for that case.
 
-## Install
+## Supported acquisition surfaces
 
-Use the latest release asset for your platform when available. Windows releases publish a direct `.exe`; macOS releases publish a signed `.dmg` when signing material is configured, with archive fallbacks for diagnostics. The Python package exposes both command line and desktop entry points.
+- Local logical volumes and live file systems when privileges allow access
+- Physical disks and forensic disk images through the bundled disk access layer
+- Raw and virtual disk container workflows supported by local runtime dependencies
+- Mobile USB collection paths when platform tooling is installed
+- Offline mobile filesystem extraction bundles through runtime profile specifications
+- Encrypted transport and signed API requests for upload records
 
-```bash
-python -m pip install unjaena_collector-0.3.3-py3-none-any.whl
-unjaena-collector-gui
-```
+## Security model
 
-The command line entry point is also available.
-
-```bash
-unjaena-collector --server https://app.unjaena.com --token CASE_SESSION_TOKEN
-```
-
-## Desktop Flow
-
-1. Open `unjaena-collector-gui`.
-2. Confirm the service address.
-3. Paste the case session token issued by the service.
-4. Review detected local systems, volumes, Android USB devices, iOS USB devices, and local iOS backups.
-5. Add evidence images, virtual disks, filesystem images, or mobile extraction bundles when needed.
-6. Use Auto detect for normal files, or pick a Source type for extensionless filesystem volume images.
-7. Review the server-signed collection profile targets.
-8. Start collection and keep the app open until the upload summary is complete.
-
-The desktop app shows detected devices, source type, source file size, server profile targets, scan count, upload count, skipped files, failed files, and a short event log. It does not embed local path catalogs or product-specific collection rules; profile targets are loaded after session authentication.
-
-## Supported Evidence Sources
-
-The public client can upload source files only when the authenticated server profile authorizes the matching source type. Supported source families include:
-
-- E01, Ex01, L01, Lx01, S01, and split EWF segments.
-- DD, RAW, IMG, BIN, and split raw segments such as 001/002.
-- AFF, AFF4, AFD, AFM, and AD1 forensic containers.
-- VMDK, VDI, VHD, VHDX, QCOW2, QED, HDD, and VPC virtual disks.
-- ISO, DMG, and CDR disk images.
-- NTFS, FAT, FAT12, FAT16, FAT32, exFAT, ext, ext2, ext3, ext4, XFS, Btrfs, HFS, HFSX, APFS, and UFS volume images.
-- Cellebrite UFDR/CLBX, ZIP, TAR, TGZ, GZ, and 7Z extraction bundles.
-
-## Device Discovery
-
-The desktop interface detects local live filesystems, Windows volumes and physical disks when available, Android USB devices through ADB/platform-tools, iOS USB devices through pymobiledevice3/usbmux, and local iOS backup directories. Device discovery is operator visibility and source selection; detailed target rules remain service-owned and are authorized by the signed profile.
-
-## Security Model
-
-- The client receives a signed collection profile at runtime.
-- The client verifies the profile signature when the service provides a signing key.
-- Upload requests are bound to the authenticated collection session.
-- File hashes are calculated locally before upload.
-- The service can require encrypted upload payloads through per-upload material.
-- Uploaded artifact types must match the issued profile.
-- The public client does not contain hardcoded collection targets, parser code, analysis code, scoring code, report generation code, or service policy rules.
-
-## Public Contribution Boundary
-
-Do not add platform artifact catalogs, product-specific target names, parser behavior, analysis prompts, report templates, account policy, billing policy, deployment paths, or operational infrastructure details to this repository.
-
-UI improvements, packaging improvements, transport hardening, profile verification, upload reliability, and tests are appropriate here when they keep service-side policy outside the public client.
+- No static product-specific target catalog is shipped in the public source tree
+- Session tokens are exchanged for scoped collection credentials
+- Server collection profiles are verified before local target registries are populated
+- Upload requests include the server profile identifier for backend enforcement
+- Consent records are signed and submitted before collection starts

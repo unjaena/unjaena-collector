@@ -1,0 +1,748 @@
+"""
+macOS Forensic Artifact Collector
+
+macOS system forensic artifact collection module.
+Collects artifacts from local systems or mounted APFS/HFS+ images.
+
+Collection Methods:
+1. Local collection: Current system artifacts (target_root='/')
+2. Mount collection: Collect after mounting APFS/HFS+ image (target_root='/Volumes/macOS')
+3. Time Machine backup collection
+
+For E01/RAW image analysis, use ForensicDiskAccessor (dissect-based) instead.
+
+Core Artifacts:
+- Unified Log (log show --predicate)
+- Launch Agents/Daemons (persistence)
+- TCC.db (permissions database)
+- KnowledgeC.db (user activity)
+- FSEvents (filesystem changes)
+
+MITRE ATT&CK Mapping:
+- T1070.002 (Clear Linux/Mac Logs): unified_log
+- T1543.001 (Launch Agent): launch_agents
+- T1059.004 (Unix Shell): zsh_history
+- T1548.004 (Elevated Execution with Prompt): tcc.db
+"""
+import os
+import glob
+import hashlib
+import plistlib
+import logging
+import platform
+import subprocess
+from pathlib import Path
+from datetime import datetime, timezone
+from typing import Generator, Dict, Any, Optional, List, Tuple
+from dataclasses import dataclass
+
+from collectors.macos_artifacts import MACOS_ARTIFACT_FILTERS
+from collectors.live_command import iter_live_command_outputs
+
+logger = logging.getLogger(__name__)
+
+
+# Check for biplist (binary plist support)
+try:
+    import biplist
+    BIPLIST_AVAILABLE = True
+except ImportError:
+    BIPLIST_AVAILABLE = False
+
+
+@dataclass
+class MacOSArtifactInfo:
+    """macOS artifact metadata"""
+    artifact_type: str
+    file_path: str
+    file_size: int
+    modified_time: datetime
+    content: bytes
+    hash_md5: str
+    hash_sha256: str
+    extra_metadata: Dict[str, Any]
+
+
+# macOS artifact type definitions
+MACOS_ARTIFACT_TYPES: Dict[str, Dict[str, Any]] = {}
+
+class macOSCollector:
+    """
+    macOS Forensic Artifact Collector
+
+    Collects forensic artifacts from local or mounted filesystems.
+
+    Collection Modes:
+    1. Local/Mount mode: Direct collection from target_root path (default)
+
+    For E01/RAW image analysis, use ForensicDiskAccessor (dissect-based) instead.
+    """
+
+    def __init__(
+        self,
+        output_dir: str,
+        target_root: str = '/',
+        e01_path: Optional[str] = None,
+        partition_offset: Optional[int] = None
+    ):
+        """
+        Initialize macOS collector.
+
+        Args:
+            output_dir: Directory to store collected artifacts
+            target_root: Root path for collection (default: '/' for local)
+                        Use mount point for mounted image analysis
+            e01_path: DEPRECATED - use ForensicDiskAccessor.from_e01() instead
+            partition_offset: DEPRECATED - use ForensicDiskAccessor instead
+        """
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        if e01_path:
+            raise NotImplementedError(
+                "E01 direct collection via pytsk3 has been removed. "
+                "Use ForensicDiskAccessor.from_e01() with dissect instead."
+            )
+
+        # Local/mount collection mode
+        self.target_root = Path(target_root)
+        if not self.target_root.exists():
+            raise FileNotFoundError(f"Target root not found: {target_root}")
+
+        logger.debug(f"[macOSCollector] Initialized: target_root={target_root}")
+
+    def close(self):
+        """Release resources (no-op for local/mount mode)"""
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def get_artifact_types(self) -> Dict[str, Dict[str, Any]]:
+        """Return supported artifact types"""
+        return MACOS_ARTIFACT_TYPES
+
+    def _is_live_local_target(self) -> bool:
+        return platform.system() == 'Darwin' and str(self.target_root) == '/'
+
+    def collect(
+        self,
+        artifact_type: str,
+        **kwargs
+    ) -> Generator[Tuple[str, bytes, Dict[str, Any]], None, None]:
+        """
+        Collect specified artifact type.
+
+        Args:
+            artifact_type: Type of artifact to collect (e.g., 'macos_launch_agent')
+
+        Yields:
+            Tuple of (relative_path, content_bytes, metadata)
+        """
+        if artifact_type not in MACOS_ARTIFACT_TYPES:
+            raise ValueError(f"Unknown artifact type: {artifact_type}")
+
+        config = MACOS_ARTIFACT_TYPES[artifact_type]
+        paths = config.get('paths', [])
+
+        logger.debug(f"[macOSCollector] Collecting {artifact_type} from {len(paths)} path patterns")
+
+        # Local/mount collection mode
+        for pattern in paths:
+            # Combine with target root
+            full_pattern = str(self.target_root) + pattern
+
+            # Expand glob pattern
+            for file_path in glob.glob(full_pattern, recursive=True):
+                try:
+                    yield from self._collect_file(file_path, artifact_type, config)
+                except Exception as e:
+                    logger.warning(f"[macOSCollector] Failed to collect {file_path}: {e}")
+
+        if self._is_live_local_target():
+            yield from iter_live_command_outputs(
+                config.get('live_commands', []),
+                artifact_type=artifact_type,
+                platform_tag='macos',
+            )
+
+    def _collect_file(
+        self,
+        file_path: str,
+        artifact_type: str,
+        config: Dict[str, Any]
+    ) -> Generator[Tuple[str, bytes, Dict[str, Any]], None, None]:
+        """
+        Collect a single file.
+
+        Args:
+            file_path: Full path to file
+            artifact_type: Artifact type identifier
+            config: Artifact type configuration
+
+        Yields:
+            Tuple of (relative_path, content_bytes, metadata)
+        """
+        path = Path(file_path)
+
+        if not path.exists():
+            return
+
+        if not path.is_file():
+            return
+
+        try:
+            stat_info = path.stat()
+
+            # Read file content (cap at 100MB to prevent OOM)
+            MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+            if stat_info.st_size > MAX_FILE_SIZE:
+                logger.warning(
+                    f"[macOSCollector] File too large ({stat_info.st_size / (1024**2):.0f}MB > 100MB), "
+                    f"truncating: {path}"
+                )
+            with open(path, 'rb') as f:
+                content = f.read(MAX_FILE_SIZE)
+
+            # Calculate hashes
+            hash_sha256 = hashlib.sha256(content).hexdigest()
+
+            # Extract username from path if applicable
+            username = self._extract_username(str(path))
+
+            # Build metadata
+            metadata = {
+                'artifact_type': artifact_type,
+                'original_path': str(path),
+                'file_size': stat_info.st_size,
+                'modified_time': datetime.fromtimestamp(stat_info.st_mtime, tz=timezone.utc).isoformat(),
+                'accessed_time': datetime.fromtimestamp(stat_info.st_atime, tz=timezone.utc).isoformat(),
+                'created_time': datetime.fromtimestamp(
+                    getattr(stat_info, 'st_birthtime', stat_info.st_ctime),
+                    tz=timezone.utc,
+                ).isoformat(),
+                'hash_sha256': hash_sha256,
+                'forensic_value': config.get('forensic_value', 'medium'),
+                'mitre_attack': config.get('mitre_attack', ''),
+                'kill_chain_phase': config.get('kill_chain_phase', ''),
+            }
+
+            if username:
+                metadata['username'] = username
+
+            # plist parsing is performed on server (removed from collector for security)
+            # Collector only collects raw files, parsing is done on server
+
+            # Relative path from target root
+            try:
+                relative_path = str(path.relative_to(self.target_root))
+            except ValueError:
+                relative_path = str(path)
+
+            yield (relative_path, content, metadata)
+
+            logger.debug(f"[macOSCollector] Collected: {relative_path} ({stat_info.st_size} bytes)")
+
+        except PermissionError:
+            logger.warning(f"[macOSCollector] Permission denied: {file_path}")
+        except Exception as e:
+            logger.error(f"[macOSCollector] Error collecting {file_path}: {e}")
+
+    def _parse_plist(self, path: Path) -> Optional[Dict[str, Any]]:
+        """
+        Parse a plist file (binary or XML).
+
+        Args:
+            path: Path to plist file
+
+        Returns:
+            Parsed plist as dictionary, or None on failure
+        """
+        try:
+            with open(path, 'rb') as f:
+                return plistlib.load(f)
+        except Exception:
+            # Try biplist for binary plists
+            if BIPLIST_AVAILABLE:
+                try:
+                    return biplist.readPlist(str(path))
+                except Exception:
+                    pass
+        return None
+
+    # _extract_launch_metadata removed; this collector only acquires source files.
+
+    def _extract_username(self, path: str) -> Optional[str]:
+        """
+        Extract username from file path.
+
+        Args:
+            path: File path string
+
+        Returns:
+            Username if found in path, None otherwise
+        """
+        # Match /Users/username/ pattern
+        if '/Users/' in path:
+            parts = path.split('/Users/')[1].split('/')
+            if parts and parts[0] != 'Shared':
+                return parts[0]
+
+        # Root user
+        if '/var/root/' in path or '/private/var/root/' in path:
+            return 'root'
+
+        return None
+
+    def collect_all(
+        self,
+        artifact_types: Optional[List[str]] = None,
+        priority_filter: Optional[str] = None
+    ) -> Generator[Tuple[str, bytes, Dict[str, Any]], None, None]:
+        """
+        Collect all specified artifact types.
+
+        Args:
+            artifact_types: List of artifact types to collect (None = all)
+            priority_filter: Only collect artifacts with this priority
+                           ('critical', 'high', 'medium')
+
+        Yields:
+            Tuple of (relative_path, content_bytes, metadata)
+        """
+        types_to_collect = artifact_types or list(MACOS_ARTIFACT_TYPES.keys())
+
+        for artifact_type in types_to_collect:
+            if artifact_type not in MACOS_ARTIFACT_TYPES:
+                logger.warning(f"[macOSCollector] Unknown type: {artifact_type}")
+                continue
+
+            config = MACOS_ARTIFACT_TYPES[artifact_type]
+
+            # Filter by priority if specified
+            if priority_filter:
+                if config.get('forensic_value') != priority_filter:
+                    continue
+
+            try:
+                yield from self.collect(artifact_type)
+            except Exception as e:
+                logger.error(f"[macOSCollector] Failed to collect {artifact_type}: {e}")
+
+        # Release scan cache after all artifact types collected
+        if hasattr(self, 'release_scan_cache'):
+            self.release_scan_cache()
+
+    def get_system_info(self) -> Dict[str, Any]:
+        """
+        Get macOS system information.
+
+        Returns:
+            Dictionary with system info
+        """
+        info = {
+            'target_root': str(self.target_root),
+            'is_local': str(self.target_root) == '/',
+            'hostname': None,
+            'macos_version': None,
+            'build_version': None,
+        }
+
+        # Local/mount mode
+        # Read SystemVersion.plist
+        version_plist = self.target_root / 'System' / 'Library' / 'CoreServices' / 'SystemVersion.plist'
+        if version_plist.exists():
+            plist_data = self._parse_plist(version_plist)
+            if plist_data:
+                info['macos_version'] = plist_data.get('ProductVersion')
+                info['build_version'] = plist_data.get('ProductBuildVersion')
+
+        # Read hostname
+        hostname_files = [
+            self.target_root / 'etc' / 'hostname',
+            self.target_root / 'private' / 'etc' / 'hostname',
+        ]
+        for hf in hostname_files:
+            if hf.exists():
+                try:
+                    info['hostname'] = hf.read_text().strip()
+                    break
+                except OSError:
+                    pass
+
+        return info
+
+    # ==================================================================
+    # Process Memory Dump
+    # ==================================================================
+    MEMDUMP_TARGET_PROCESSES = {
+        'WeChat': 'wechat',
+        'LINE': 'line',
+    }
+
+    def dump_process_memory(
+        self,
+        output_dir: Optional[str] = None,
+        target_processes: Optional[Dict[str, str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Dump process memory for specified running applications.
+
+        Uses macOS-native tools (vmmap + memory read via lldb) to create
+        memory dumps of running messenger processes. Requires root/sudo.
+
+        This method ONLY collects raw memory. No protected application-data
+        interpretation is performed here.
+
+        Args:
+            output_dir: Directory for dump files. Defaults to the platform temp directory.
+            target_processes: Dict of {process_name: output_label}
+                             (default: MEMDUMP_TARGET_PROCESSES)
+
+        Returns:
+            List of dicts with dump results (path, pid, size, success)
+        """
+        if platform.system() != 'Darwin':
+            logger.warning("[macOSCollector] Process memory dump is only supported on macOS")
+            return []
+
+        if target_processes is None:
+            target_processes = self.MEMDUMP_TARGET_PROCESSES
+
+        import tempfile
+        dump_dir = output_dir or tempfile.gettempdir()
+        results = []
+
+        for process_name, output_label in target_processes.items():
+            try:
+                result = self._dump_single_process(process_name, output_label, dump_dir)
+                if result:
+                    results.append(result)
+            except Exception as e:
+                logger.error(f"[macOSCollector] Failed to dump {process_name}: {e}")
+                results.append({
+                    'process_name': process_name,
+                    'success': False,
+                    'error': str(e),
+                })
+
+        return results
+
+    def _dump_single_process(
+        self,
+        process_name: str,
+        output_label: str,
+        dump_dir: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Dump memory of a single process using macOS native tools.
+
+        Strategy:
+        1. Find PID via pgrep
+        2. Use vmmap to identify writable heap/data regions
+        3. Read memory regions via lldb batch mode
+        4. Write concatenated regions to output file
+
+        Args:
+            process_name: Name of the process (e.g., 'WeChat')
+            output_label: Label for output file (e.g., 'wechat')
+            dump_dir: Output directory
+
+        Returns:
+            Dict with dump result or None if process not found
+        """
+        # Step 1: Find PID
+        pid = self._find_process_pid(process_name)
+        if pid is None:
+            logger.debug(f"[macOSCollector] Process not running: {process_name}")
+            return None
+
+        logger.info(f"[macOSCollector] Found {process_name} (PID: {pid}), starting memory dump")
+
+        output_path = os.path.join(dump_dir, f"forensic_memdump_{output_label}.bin")
+
+        # Step 2: Get writable memory regions via vmmap
+        regions = self._get_writable_regions(pid)
+        if not regions:
+            logger.warning(f"[macOSCollector] No writable regions found for {process_name} (PID: {pid})")
+            return {
+                'process_name': process_name,
+                'pid': pid,
+                'success': False,
+                'error': 'No writable memory regions found (may need root)',
+            }
+
+        # Step 3: Dump memory regions via lldb
+        total_bytes = self._dump_regions_lldb(pid, regions, output_path)
+
+        if total_bytes > 0:
+            logger.info(
+                f"[macOSCollector] Memory dump complete: {process_name} "
+                f"({total_bytes / (1024*1024):.1f} MB) -> {output_path}"
+            )
+            return {
+                'process_name': process_name,
+                'pid': pid,
+                'output_path': output_path,
+                'size_bytes': total_bytes,
+                'regions_dumped': len(regions),
+                'success': True,
+            }
+        else:
+            logger.warning(f"[macOSCollector] Empty dump for {process_name} (PID: {pid})")
+            return {
+                'process_name': process_name,
+                'pid': pid,
+                'success': False,
+                'error': 'Memory dump produced 0 bytes',
+            }
+
+    def _find_process_pid(self, process_name: str) -> Optional[int]:
+        """
+        Find PID of a running process by name.
+
+        Args:
+            process_name: Process name to search for
+
+        Returns:
+            PID as integer, or None if not found
+        """
+        try:
+            result = subprocess.run(
+                ['pgrep', '-i', '-x', process_name],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # Take the first PID if multiple instances
+                pid_str = result.stdout.strip().split('\n')[0]
+                return int(pid_str)
+        except (subprocess.TimeoutExpired, ValueError) as e:
+            logger.warning(f"[macOSCollector] pgrep failed for {process_name}: {e}")
+
+        # Fallback: try broader search with pgrep -f
+        try:
+            result = subprocess.run(
+                ['pgrep', '-i', '-f', process_name],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pid_str = result.stdout.strip().split('\n')[0]
+                return int(pid_str)
+        except (subprocess.TimeoutExpired, ValueError):
+            pass
+
+        return None
+
+    def _get_writable_regions(self, pid: int) -> List[Tuple[int, int]]:
+        """
+        Get writable memory regions of a process using vmmap.
+
+        Filters for MALLOC, __DATA, and heap regions that are likely
+        to contain forensically relevant data.
+
+        Args:
+            pid: Process ID
+
+        Returns:
+            List of (start_address, size_bytes) tuples
+        """
+        regions = []
+
+        try:
+            result = subprocess.run(
+                ['vmmap', '-wide', str(pid)],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    f"[macOSCollector] vmmap failed (PID: {pid}): {result.stderr[:200]}"
+                )
+                return regions
+
+            for line in result.stdout.split('\n'):
+                # Parse vmmap output lines like:
+                # MALLOC_TINY    00007f8000000000-00007f8000100000 [1024K ...] rw-/rwx
+                # __DATA         00007fff20000000-00007fff20001000 [  4K ...] rw-/rw-
+                line = line.strip()
+                if not line:
+                    continue
+
+                # Only capture writable regions (rw- permission)
+                if 'rw' not in line:
+                    continue
+
+                # Skip very large regions (>256MB) to avoid excessive dump size
+                # and system/shared library regions
+                if '__LINKEDIT' in line or 'shared memory' in line.lower():
+                    continue
+
+                # Extract address range: look for hex address pattern
+                parts = line.split()
+                for part in parts:
+                    if '-' in part and len(part) > 10:
+                        try:
+                            addr_parts = part.split('-')
+                            if len(addr_parts) == 2:
+                                start = int(addr_parts[0], 16)
+                                end = int(addr_parts[1], 16)
+                                size = end - start
+
+                                # Skip tiny (<4KB) and huge (>64MB) regions
+                                if 4096 <= size <= 64 * 1024 * 1024:
+                                    regions.append((start, size))
+                                break
+                        except ValueError:
+                            continue
+
+        except subprocess.TimeoutExpired:
+            logger.warning(f"[macOSCollector] vmmap timed out (PID: {pid})")
+        except FileNotFoundError:
+            logger.error("[macOSCollector] vmmap not found (requires Xcode Command Line Tools)")
+
+        logger.debug(f"[macOSCollector] Found {len(regions)} writable regions for PID {pid}")
+
+        # Cap total regions to prevent excessive dump time
+        # Sort by size descending, take top 200 regions
+        regions.sort(key=lambda r: r[1], reverse=True)
+        return regions[:200]
+
+    def _dump_regions_lldb(
+        self,
+        pid: int,
+        regions: List[Tuple[int, int]],
+        output_path: str,
+    ) -> int:
+        """
+        Dump memory regions using lldb batch mode.
+
+        Attaches to process, reads specified memory regions, and writes
+        concatenated output to a single binary file.
+
+        Args:
+            pid: Process ID to attach to
+            regions: List of (start_address, size_bytes) tuples
+            output_path: Path for output binary file
+
+        Returns:
+            Total bytes written
+        """
+        total_bytes = 0
+
+        # Build lldb command script
+        lldb_commands = []
+        lldb_commands.append(f'process attach --pid {pid}')
+
+        # Create a temporary script for lldb to dump each region
+        import tempfile
+        tmp_dir = tempfile.mkdtemp(prefix='forensic_lldb_')
+
+        region_files = []
+        for i, (start_addr, size) in enumerate(regions):
+            region_file = os.path.join(tmp_dir, f'region_{i:04d}.bin')
+            region_files.append(region_file)
+            lldb_commands.append(
+                f'memory read --binary --outfile {region_file} '
+                f'--count {size} {start_addr:#x}'
+            )
+
+        lldb_commands.append('process detach')
+        lldb_commands.append('quit')
+
+        # Write lldb command file
+        cmd_file = os.path.join(tmp_dir, 'dump_commands.lldb')
+        with open(cmd_file, 'w') as f:
+            f.write('\n'.join(lldb_commands) + '\n')
+
+        try:
+            # Run lldb in batch mode
+            result = subprocess.run(
+                ['lldb', '--batch', '--source', cmd_file],
+                capture_output=True, text=True,
+                timeout=120  # 2 minute timeout for memory dump
+            )
+
+            if result.returncode != 0:
+                logger.debug(f"[macOSCollector] lldb stderr: {result.stderr[:500]}")
+
+            # Concatenate all region dumps into single output file
+            with open(output_path, 'wb') as out_f:
+                for region_file in region_files:
+                    if os.path.exists(region_file):
+                        try:
+                            with open(region_file, 'rb') as rf:
+                                data = rf.read()
+                                out_f.write(data)
+                                total_bytes += len(data)
+                        except OSError:
+                            pass
+
+        except subprocess.TimeoutExpired:
+            logger.warning(f"[macOSCollector] lldb memory dump timed out (PID: {pid})")
+        except FileNotFoundError:
+            logger.error(
+                "[macOSCollector] lldb not found. "
+                "Install Xcode Command Line Tools: xcode-select --install"
+            )
+        finally:
+            # Cleanup temporary files
+            import shutil
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+        return total_bytes
+
+
+# Convenience function
+def check_macos_target(target_path: str) -> Dict[str, Any]:
+    """
+    Check if target path is a valid macOS root filesystem.
+
+    Args:
+        target_path: Path to check
+
+    Returns:
+        Dictionary with validity and details
+    """
+    path = Path(target_path)
+
+    result = {
+        'valid': False,
+        'reason': '',
+        'is_local': target_path == '/',
+        'has_system': False,
+        'has_library': False,
+        'has_users': False,
+        'macos_version': None,
+    }
+
+    if not path.exists():
+        result['reason'] = 'Path does not exist'
+        return result
+
+    # Check for key macOS directories
+    result['has_system'] = (path / 'System').is_dir()
+    result['has_library'] = (path / 'Library').is_dir()
+    result['has_users'] = (path / 'Users').is_dir()
+
+    # Check for SystemVersion.plist
+    version_plist = path / 'System' / 'Library' / 'CoreServices' / 'SystemVersion.plist'
+    if version_plist.exists():
+        try:
+            with open(version_plist, 'rb') as f:
+                data = plistlib.load(f)
+                result['macos_version'] = data.get('ProductVersion')
+        except Exception:
+            pass
+
+    if result['has_system'] and result['has_library']:
+        result['valid'] = True
+    else:
+        result['reason'] = 'Missing essential macOS directories (System, Library)'
+
+    return result
