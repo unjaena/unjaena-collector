@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unjaena-collector"
-version = "0.3.6"
+version = "0.3.7"
 description = "Open collection client"
 requires-python = ">=3.10"
 dependencies = ["requests>=2.31", "cryptography>=42"]
