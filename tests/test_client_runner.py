@@ -261,6 +261,16 @@ class MacSigningTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertFalse(sign_macos.signing_required())
 
+    def test_certificate_base64_decoder_accepts_missing_padding_and_whitespace(self):
+        encoded = " YWJjZA\n"
+        encoded = encoded.rstrip("=")
+        self.assertEqual(sign_macos._decode_certificate_b64(encoded), b"abcd")
+
+    def test_certificate_base64_decoder_rejects_invalid_value(self):
+        with self.assertRaises(SystemExit) as ctx:
+            sign_macos._decode_certificate_b64("not base64!")
+        self.assertIn("APPLE_DEVELOPER_ID_CERT_BASE64", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,5 @@
 import base64
+import binascii
 import os
 import re
 import uuid
@@ -44,6 +45,19 @@ def signing_required() -> bool:
     return value in {"1", "true", "yes", "required"}
 
 
+def _decode_certificate_b64(value: str) -> bytes:
+    normalized = "".join(value.split())
+    if not normalized:
+        return b""
+    padding = (-len(normalized)) % 4
+    if padding:
+        normalized += "=" * padding
+    try:
+        return base64.b64decode(normalized, validate=True)
+    except binascii.Error as exc:
+        raise SystemExit("Invalid APPLE_DEVELOPER_ID_CERT_BASE64: expected base64-encoded .p12 data") from exc
+
+
 def main() -> int:
     cert_b64 = "".join(os.environ.get("APPLE_DEVELOPER_ID_CERT_BASE64", "").split())
     cert_password = os.environ.get("APPLE_DEVELOPER_ID_CERT_PASSWORD", "")
@@ -59,7 +73,7 @@ def main() -> int:
     cert_path = Path(tempfile.gettempdir()) / "unjaena-developer-id.p12"
     try:
         cert_decoded_path = cert_path.with_suffix(".decoded.p12")
-        cert_decoded_path.write_bytes(base64.b64decode(cert_b64))
+        cert_decoded_path.write_bytes(_decode_certificate_b64(cert_b64))
         cert_decoded = str(cert_decoded_path)
         _run(["security", "create-keychain", "-p", keychain_password, keychain])
         _run(["security", "set-keychain-settings", "-lut", "21600", keychain])
