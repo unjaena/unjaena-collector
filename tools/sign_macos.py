@@ -76,6 +76,13 @@ def _import_certificate(cert_decoded: str, keychain: str, cert_password: str) ->
     ])
 
 
+def _handle_optional_signing_failure(exc: BaseException) -> int:
+    if signing_required():
+        raise exc
+    print(f"macOS signing skipped: {exc}")
+    return 0
+
+
 def main() -> int:
     cert_b64 = "".join(os.environ.get("APPLE_DEVELOPER_ID_CERT_BASE64", "").split())
     cert_password = os.environ.get("APPLE_DEVELOPER_ID_CERT_PASSWORD", "")
@@ -96,11 +103,14 @@ def main() -> int:
         _run(["security", "create-keychain", "-p", keychain_password, keychain])
         _run(["security", "set-keychain-settings", "-lut", "21600", keychain])
         _run(["security", "unlock-keychain", "-p", keychain_password, keychain])
-        _import_certificate(cert_decoded, keychain, cert_password)
-        _run(["security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", keychain_password, keychain])
-        identity = _identity(keychain)
-        _run(["codesign", "--force", "--timestamp", "--options", "runtime", "--deep", "--sign", identity, str(target)])
-        _run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(target)])
+        try:
+            _import_certificate(cert_decoded, keychain, cert_password)
+            _run(["security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", keychain_password, keychain])
+            identity = _identity(keychain)
+            _run(["codesign", "--force", "--timestamp", "--options", "runtime", "--deep", "--sign", identity, str(target)])
+            _run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(target)])
+        except SystemExit as exc:
+            return _handle_optional_signing_failure(exc)
         print("macOS signing complete")
         return 0
     finally:

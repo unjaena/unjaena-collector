@@ -278,6 +278,15 @@ class MacSigningTests(unittest.TestCase):
         self.assertIn("-f", commands[0])
         self.assertIn("pkcs12", commands[0])
 
+    def test_optional_signing_failure_is_skipped(self):
+        with patch.dict(os.environ, {"UNJAENA_SIGNING_REQUIRED": "0"}, clear=True):
+            self.assertEqual(sign_macos._handle_optional_signing_failure(SystemExit("bad p12")), 0)
+
+    def test_required_signing_failure_is_raised(self):
+        with patch.dict(os.environ, {"UNJAENA_SIGNING_REQUIRED": "1"}, clear=True):
+            with self.assertRaises(SystemExit):
+                sign_macos._handle_optional_signing_failure(SystemExit("bad p12"))
+
 
 if __name__ == "__main__":
     unittest.main()
