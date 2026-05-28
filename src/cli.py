@@ -327,6 +327,7 @@ def run_headless(args, config: dict) -> int:
         ARTIFACT_TYPES, ANDROID_ARTIFACT_TYPES, IOS_ARTIFACT_TYPES,
         LINUX_ARTIFACT_TYPES, MACOS_ARTIFACT_TYPES,
     )
+    from collectors.base_mft_collector import ARTIFACT_MFT_FILTERS
     from core.collection_profile import (
         apply_collection_profile_to_mobile_ffs,
         apply_collection_profile_to_registry,
@@ -335,7 +336,8 @@ def run_headless(args, config: dict) -> int:
     profile_artifacts = set()
     profile_targets = getattr(result, 'collection_profile_targets', None) or []
     for registry in (
-        ARTIFACT_TYPES, ANDROID_ARTIFACT_TYPES, IOS_ARTIFACT_TYPES,
+        ARTIFACT_TYPES, ARTIFACT_MFT_FILTERS,
+        ANDROID_ARTIFACT_TYPES, IOS_ARTIFACT_TYPES,
         LINUX_ARTIFACT_TYPES, MACOS_ARTIFACT_TYPES,
     ):
         profile_artifacts.update(apply_collection_profile_to_registry(profile_targets, registry))

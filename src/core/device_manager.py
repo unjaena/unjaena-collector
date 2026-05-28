@@ -385,6 +385,34 @@ class UnifiedDeviceManager(QObject):
             logger.error(f"Failed to add image file: {e}")
             return None
 
+    def refresh_mobile_ffs_bundles(self) -> int:
+        """Rescan registered mobile FFS bundles after profile updates."""
+        enumerator = self._enumerators.get('mobile_ffs')
+        if enumerator is None:
+            return 0
+
+        refreshed = 0
+        for device in list(self._devices.values()):
+            if not device.is_mobile_ffs_bundle:
+                continue
+            bundle_path = (device.metadata or {}).get('bundle_path')
+            if not bundle_path:
+                continue
+            try:
+                updated = enumerator.register_bundle(bundle_path)
+                updated.is_selected = device.is_selected
+                self._devices[updated.device_id] = updated
+                if updated.device_id != device.device_id:
+                    self._devices.pop(device.device_id, None)
+                    if device.device_id in self._selected_devices:
+                        self._selected_devices.discard(device.device_id)
+                        self._selected_devices.add(updated.device_id)
+                self.device_updated.emit(updated)
+                refreshed += 1
+            except Exception as e:
+                logger.warning(f"Failed to refresh FFS bundle {device.display_name}: {e}")
+        return refreshed
+
     def add_bundle_file(self, file_path: str) -> Optional[UnifiedDeviceInfo]:
         """Manually add a Cellebrite UFED FFS / CLBX zip bundle.
 

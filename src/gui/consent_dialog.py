@@ -398,15 +398,27 @@ class ConsentDialog(QDialog):
         # Horizontal rule (---)
         html = re.sub(r'^---+$', f'<hr style="border:none; border-top:1px solid {COLORS["border_subtle"]}; margin:12px 0;">', html, flags=re.MULTILINE)
 
-        # Header (displayed as number. title format)
+        # Header conversion. Server templates may use either generic
+        # Markdown headings (### Purpose) or numbered headings (### 1. Scope).
         html = re.sub(
             r'^### (\d+)\. (.+)$',
             rf'<h4 style="color:{COLORS["brand_primary"]}; margin:12px 0 6px 0; font-size:13px; font-weight:600;">\1. \2</h4>',
             html, flags=re.MULTILINE
         )
         html = re.sub(
+            r'^### (.+)$',
+            rf'<h4 style="color:{COLORS["brand_primary"]}; margin:12px 0 6px 0; font-size:13px; font-weight:600;">\1</h4>',
+            html, flags=re.MULTILINE
+        )
+        html = re.sub(
             r'^## (.+)$',
             rf'<h3 style="color:{COLORS["brand_primary"]}; margin:0 0 10px 0; padding-bottom:8px; border-bottom:2px solid {COLORS["brand_primary"]}; font-size:16px;">\1</h3>',
+            html, flags=re.MULTILINE
+        )
+
+        html = re.sub(
+            r'^\*\*(Version|Effective Date|Effective)\*\*: (.+)$',
+            rf'<div style="margin-top:6px; padding:6px 8px; background:{COLORS["bg_secondary"]}; border-radius:4px; font-size:11px; color:{COLORS["text_secondary"]};"><b>\1</b>: \2</div>',
             html, flags=re.MULTILINE
         )
 
@@ -424,11 +436,6 @@ class ConsentDialog(QDialog):
         html = re.sub(r'\n', ' ', html)  # Single line breaks become spaces
 
         # Version information style
-        html = re.sub(
-            r'\*\*\uBC84\uC804\*\*: (v[\d.]+) \| \*\*\uC2DC\uD589\uC77C\*\*: ([\d-]+)',
-            rf'<div style="margin-top:12px; padding:8px; background:{COLORS["bg_secondary"]}; border-radius:4px; font-size:11px; color:{COLORS["text_secondary"]};">Version: \1 | Effective: \2</div>',
-            html
-        )
         html = re.sub(
             r'\*\*Version\*\*: (v[\d.]+) \| \*\*Effective\*\*: ([\d-]+)',
             rf'<div style="margin-top:12px; padding:8px; background:{COLORS["bg_secondary"]}; border-radius:4px; font-size:11px; color:{COLORS["text_secondary"]};">Version: \1 | Effective: \2</div>',
@@ -464,8 +471,14 @@ class ConsentDialog(QDialog):
         try:
             url = f"{self.server_url}/api/v1/collector/consent/accept"
 
-            # List of agreed items
-            agreed_items = [cb.text() for cb in self.checkboxes if cb.isChecked()]
+            # List of agreed items. The visible text lives in a paired
+            # QLabel so the checkbox can wrap cleanly; keep the canonical
+            # statement on the checkbox as a property for audit payloads.
+            agreed_items = [
+                cb.property("consent_text") or cb.text()
+                for cb in self.checkboxes
+                if cb.isChecked()
+            ]
 
             # System information
             try:
@@ -797,6 +810,7 @@ class ConsentDialog(QDialog):
 
         cb = QCheckBox()
         cb.setObjectName("consentCheck")
+        cb.setProperty("consent_text", text)
         cb.setToolTip(text)
         cb.stateChanged.connect(self._update_button_state)
 

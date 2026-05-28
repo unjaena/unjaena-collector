@@ -948,6 +948,10 @@ class ForensicDiskAccessor:
         try:
             vbr = self._backend.read(partition_offset, 512)
 
+            # LUKS
+            if len(vbr) >= 6 and vbr[:6] == b'LUKS\xba\xbe':
+                return 'LUKS'
+
             # NTFS
             if vbr[3:11] == b'NTFS    ':
                 return 'NTFS'
@@ -1000,11 +1004,12 @@ class ForensicDiskAccessor:
                     compat_features = struct.unpack('<I', sb[92:96])[0] if len(sb) >= 96 else 0
                     incompat_features = struct.unpack('<I', sb[96:100])[0] if len(sb) >= 100 else 0
 
-                    # ext4 features: extents (0x40), flex_bg (0x200)
+                    # ext4 features: extents (0x40) live in incompat flags.
                     if incompat_features & 0x40:  # EXTENTS feature
                         return 'ext4'
-                    # ext3 features: journal (0x04)
-                    elif incompat_features & 0x04:  # JOURNAL feature
+                    # ext3 journal support is EXT3_FEATURE_COMPAT_HAS_JOURNAL
+                    # (compat bit 0x04), not an incompat feature.
+                    elif compat_features & 0x04:
                         return 'ext3'
                     else:
                         return 'ext2'

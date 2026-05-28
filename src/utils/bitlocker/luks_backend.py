@@ -18,6 +18,61 @@ logger = logging.getLogger(__name__)
 
 LUKS_SIGNATURE = b'LUKS\xba\xbe'  # 6 bytes at offset 0
 
+class _UnifiedDiskReaderAdapter:
+    """File-like adapter for UnifiedDiskReader implementations."""
+
+    def __init__(self, reader: UnifiedDiskReader):
+        self._reader = reader
+        self._position = 0
+        try:
+            self._size = int(reader.get_size())
+        except Exception:
+            try:
+                self._size = int(reader.get_disk_info().total_size)
+            except Exception:
+                self._size = 0
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = max(0, self._size - self._position)
+        if size <= 0:
+            return b''
+
+        data = self._reader.read(self._position, size)
+        self._position += len(data)
+        return data
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 0:
+            self._position = offset
+        elif whence == 1:
+            self._position += offset
+        elif whence == 2:
+            self._position = self._size + offset
+        else:
+            raise ValueError(f"Invalid whence: {whence}")
+
+        self._position = max(0, self._position)
+        if self._size:
+            self._position = min(self._position, self._size)
+        return self._position
+
+    def tell(self) -> int:
+        return self._position
+
+    @property
+    def size(self) -> int:
+        return self._size
+
+    def seekable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return False
+
 
 def is_luks_partition(data: bytes) -> bool:
     """Check if partition starts with LUKS signature"""
@@ -46,7 +101,9 @@ class LUKSBackend(UnifiedDiskReader):
 
         self._source = source
         self._luks = None
+        self._stream = None
         self._source_fh = None
+        self._source_adapter = None
         self._is_unlocked = False
         self._volume_info: Optional[LUKSVolumeInfo] = None
 
@@ -72,7 +129,15 @@ class LUKSBackend(UnifiedDiskReader):
                     raise
                 logger.info(f"Opened LUKS volume from path: {self._source}")
             else:
-                self._luks = LUKS(self._source)
+                source = self._source
+                if (
+                    not hasattr(source, 'tell')
+                    and hasattr(source, 'read')
+                    and (hasattr(source, 'get_size') or hasattr(source, 'get_disk_info'))
+                ):
+                    self._source_adapter = _UnifiedDiskReaderAdapter(source)
+                    source = self._source_adapter
+                self._luks = LUKS(source)
                 logger.info("Opened LUKS volume from file object")
 
             self._is_open = True
@@ -128,11 +193,15 @@ class LUKSBackend(UnifiedDiskReader):
 
         try:
             self._luks.unlock_with_passphrase(passphrase)
+            self._stream = self._luks.open()
+            if not self._stream:
+                raise DiskError("Failed to open decrypted LUKS stream")
+
             self._is_unlocked = True
             logger.info("LUKS volume unlocked with passphrase")
 
             try:
-                self._disk_size = self._luks.size
+                self._disk_size = int(getattr(self._stream, 'size', 0) or 0)
             except Exception:
                 pass
 
@@ -164,9 +233,12 @@ class LUKSBackend(UnifiedDiskReader):
                 "Volume is locked. Call unlock_with_passphrase() first."
             )
 
+        if not self._stream:
+            raise DiskError("Decrypted LUKS stream not available")
+
         try:
-            self._luks.seek(offset)
-            return self._luks.read(size)
+            self._stream.seek(offset)
+            return self._stream.read(size)
         except Exception as e:
             raise DiskError(f"Failed to read decrypted LUKS data: {e}")
 
@@ -186,6 +258,15 @@ class LUKSBackend(UnifiedDiskReader):
         )
 
     def close(self) -> None:
+        if self._stream:
+            try:
+                if hasattr(self._stream, 'close'):
+                    self._stream.close()
+            except Exception as e:
+                logger.warning(f"Error closing LUKS stream: {e}")
+            finally:
+                self._stream = None
+
         if self._luks:
             try:
                 if hasattr(self._luks, 'close'):
@@ -201,6 +282,8 @@ class LUKSBackend(UnifiedDiskReader):
             except Exception:
                 pass
             self._source_fh = None
+
+        self._source_adapter = None
 
         self._is_open = False
         self._is_unlocked = False

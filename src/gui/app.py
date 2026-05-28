@@ -33,6 +33,7 @@ from collectors.artifact_collector import (
     LocalMFTCollector, BASE_MFT_AVAILABLE,
     LocalSystemCollector,
 )
+from collectors.base_mft_collector import ARTIFACT_MFT_FILTERS
 
 # E01 collector requires pytsk3 — may be unavailable on Linux/macOS
 try:
@@ -956,22 +957,14 @@ class CollectorWindow(QMainWindow):
         return tab
 
     def _create_ai_activity_tab(self) -> QWidget:
-        """Create AI Agent Activity tab (cross-platform).
-
-        Lists artifact types that capture forensic evidence from AI tools
-        (Claude Code / Claude Desktop / supported desktop AI tools / Cursor / Copilot
-        / Continue.dev / Aider / Ollama / LM Studio / HuggingFace cache /
-        MCP server grants). Paths span macOS / Linux / Windows so a single
-        checkbox collects from whichever platform applies.
-        """
+        """Create server-authorized activity tab (cross-platform)."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
         info_label = QLabel(
-            "AI tool forensic traces -- conversation logs, tool-call records,"
-            " MCP server grants, model fingerprints. Cross-platform paths."
+            "Server-authorized activity targets are available after session authentication."
         )
         info_label.setWordWrap(True)
         info_label.setStyleSheet(
@@ -1591,7 +1584,8 @@ class CollectorWindow(QMainWindow):
             self.collection_profile_targets = getattr(result, 'collection_profile_targets', None) or []
             self.profile_artifact_types = set()
             for registry in (
-                ARTIFACT_TYPES, ANDROID_ARTIFACT_TYPES, IOS_ARTIFACT_TYPES,
+                ARTIFACT_TYPES, ARTIFACT_MFT_FILTERS,
+                ANDROID_ARTIFACT_TYPES, IOS_ARTIFACT_TYPES,
                 LINUX_ARTIFACT_TYPES, MACOS_ARTIFACT_TYPES,
             ):
                 self.profile_artifact_types.update(
@@ -1600,6 +1594,9 @@ class CollectorWindow(QMainWindow):
             android_ffs_count, ios_ffs_count = apply_collection_profile_to_mobile_ffs(
                 self.collection_profile_targets
             )
+            refreshed_ffs_bundles = 0
+            if android_ffs_count or ios_ffs_count:
+                refreshed_ffs_bundles = self.device_manager.refresh_mobile_ffs_bundles()
             self._build_artifact_tabs(preserve_index=True)
             # Wire server-issued consent signing key through to the consent
             # dialog. Without this, the dialog falls back to the
@@ -1642,10 +1639,13 @@ class CollectorWindow(QMainWindow):
                 if self.profile_artifact_types:
                     self._log(f"Runtime profile applied: {len(self.profile_artifact_types)} artifact type(s)")
                 if android_ffs_count or ios_ffs_count:
-                    self._log(
+                    message = (
                         f"Mobile FFS profile applied: {android_ffs_count} Android spec(s), "
                         f"{ios_ffs_count} iOS spec(s)"
                     )
+                    if refreshed_ffs_bundles:
+                        message += f"; refreshed {refreshed_ffs_bundles} loaded bundle(s)"
+                    self._log(message)
             else:
                 self._log("Server collection profile missing; uploads will be blocked", error=True)
 
@@ -4079,9 +4079,15 @@ class CollectionWorker(QThread):
 
             max_workers = min(5, max(total_upload, 1))
             if total_upload == 0:
-                self.log_message.emit("No files to upload.", False)
-            else:
-                pass  # proceed to upload
+                self.log_message.emit(
+                    "No files were collected. Verify the selected evidence source, "
+                    "authorized targets, and filesystem support before retrying.",
+                    True,
+                )
+                self.progress_updated.emit(3, 0, self._calculate_overall_progress(3, 0), "No files collected", "")
+                self.finished.emit(False, "No files were collected; nothing was uploaded or queued for analysis.")
+                return
+
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {}
                 for k, (file_path, artifact_type, metadata) in enumerate(encrypted_files):

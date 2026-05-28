@@ -12,6 +12,24 @@ from typing import Any, MutableMapping
 
 _SOURCE_FILE_KINDS = {"source_file", "source_upload"}
 _CONFIG_ONLY_KINDS = {"collector_config", "profile_config"}
+_MFT_CONFIG_KEYS = {
+    "base_path",
+    "exclude_extensions",
+    "exclude_path_patterns",
+    "extensions",
+    "files",
+    "full_disk_scan",
+    "include_deleted",
+    "max_file_size",
+    "name_pattern",
+    "path_optional",
+    "path_pattern",
+    "path_patterns",
+    "paths",
+    "pattern",
+    "special",
+    "user_path",
+}
 
 
 def _target_dict(target: Any) -> dict[str, Any]:
@@ -64,6 +82,19 @@ def apply_collection_profile_to_registry(
             merged["paths"] = patterns
         if target.get("max_bytes") is not None:
             merged["max_bytes"] = target.get("max_bytes")
+
+        # GUI ArtifactCollector routes forensic-disk collection through
+        # ARTIFACT_TYPES[*]["mft_config"], while E01/BaseMFT collectors read
+        # the MFT registry directly. Keep both registries effective so decrypted
+        # BitLocker/LUKS readers and ordinary disk images honor the same profile.
+        mft_config = dict(collector_config.get("mft_config") or {})
+        for key in _MFT_CONFIG_KEYS:
+            if key in collector_config and key not in mft_config:
+                mft_config[key] = collector_config[key]
+        if target.get("max_bytes") is not None and "max_file_size" not in mft_config:
+            mft_config["max_file_size"] = target.get("max_bytes")
+        if mft_config:
+            merged["mft_config"] = mft_config
 
         merged.setdefault("name", metadata.get("label") or artifact_type.replace("_", " ").title())
         merged.setdefault("description", metadata.get("description") or "Server-authorized collection target")
