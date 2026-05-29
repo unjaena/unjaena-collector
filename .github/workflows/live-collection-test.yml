@@ -8,6 +8,10 @@ on:
       - 'src/**'
       - 'requirements/**'
       - 'tools/public_preflight.py'
+      - 'tools/encase/**'
+      - 'README.md'
+      - 'SECURITY.md'
+      - 'LICENSES.md'
       - '.github/workflows/live-collection-test.yml'
 
 permissions:
@@ -40,3 +44,21 @@ jobs:
           from core.uploader import SyncUploader, R2DirectUploader
           print(SyncUploader.__name__, R2DirectUploader.__name__)
           PY
+
+  encase-bridge:
+    name: EnCase bridge build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Build EnCase .NET bridge
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe",
+            "${env:ProgramFiles}\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe",
+            "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe",
+            "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+          )
+          $msbuild = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $msbuild) { throw "MSBuild not found on runner" }
+          & $msbuild tools\encase\dotnet\UnjaenaEncaseBridge.csproj /p:Configuration=Release /p:Platform=AnyCPU
