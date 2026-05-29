@@ -61,4 +61,4 @@ jobs:
           )
           $msbuild = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $msbuild) { throw "MSBuild not found on runner" }
-          & $msbuild tools\encase\dotnet\UnjaenaEncaseBridge.csproj /p:Configuration=Release /p:Platform=AnyCPU
+          & $msbuild tools\encase\dotnet\UnjaenaEncaseBridge.csproj /restore /p:Configuration=Release /p:Platform=AnyCPU
