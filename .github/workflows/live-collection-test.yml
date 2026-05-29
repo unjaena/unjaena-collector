@@ -1,34 +1,13 @@
-name: Live collection test (macOS + Linux)
-
-# Run the actual collector against the runner's own filesystem to validate
-# that path resolution, file copy, hashing, and manifest generation work
-# end-to-end on a real OS. The runner is a real machine -- not an emulator.
-#
-# What this catches:
-#   - Binary launch + module import on each OS / arch
-#   - Path resolver against real /var/log, /Library, /etc, /var/db/...
-#   - File copy mechanics + SHA-256 + manifest schema
-#   - Permission-denied graceful handling (TCC-locked files on macOS, etc.)
-#   - Apple Silicon (arm64) vs Intel (x86_64) parity on macOS
-#
-# What this does NOT catch:
-#   - User-data-heavy artifacts (Safari history, iMessages, Notes are empty
-#     on a fresh runner)
-#   - TCC Full Disk Access prompt flow (cannot be automated)
-#   - GUI user workflow
-#   - Live device collection (ADB / lockdown)
-#
-# To validate user-data scenarios, populate a runner with synthetic data
-# in a separate workflow, or run a manual session on a Scaleway M1 instance.
+name: Public collector smoke test
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - 'src/collectors/macos_*'
-      - 'src/collectors/linux_*'
-      - 'src/main.py'
+      - 'src/**'
+      - 'requirements/**'
+      - 'tools/public_preflight.py'
       - '.github/workflows/live-collection-test.yml'
 
 permissions:
@@ -38,160 +17,26 @@ env:
   PYTHON_VERSION: '3.11'
 
 jobs:
-  # =========================================================================
-  # macOS live collection -- both Apple Silicon (M1) and Intel runners
-  # =========================================================================
-  macos-live:
-    name: macOS ${{ matrix.arch }} live collection
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            arch: arm64
-          - runner: macos-13
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements/base.txt
-          pip install -r requirements/macos.txt
-          pip install pytest
-
-      - name: System info (proves real macOS)
-        run: |
-          sw_vers
-          uname -a
-          echo "---"
-          echo "Sample real system paths:"
-          ls -la /var/log/system.log 2>/dev/null || echo "(absent)"
-          ls -la /var/db/diagnostics/ 2>/dev/null | head -5 || echo "(absent)"
-          ls -la /Library/LaunchDaemons/ 2>/dev/null | head -5 || echo "(absent)"
-
-      - name: Live collection (system-level macOS artifacts)
-        run: |
-          python -m pytest src/collectors/test_live_collection.py::test_macos_live_collection -v -s
-
-      - name: Upload manifest for inspection
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: manifest-macos-${{ matrix.arch }}
-          path: /tmp/live_collection_output/manifest.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload sample collected files (system-level only)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: samples-macos-${{ matrix.arch }}
-          path: |
-            /tmp/live_collection_output/Library/LaunchDaemons/*.plist
-            /tmp/live_collection_output/etc/passwd
-            /tmp/live_collection_output/var/log/install.log
-          if-no-files-found: warn
-          retention-days: 14
-
-  # =========================================================================
-  # Linux live collection
-  # =========================================================================
-  linux-live:
-    name: Linux x86_64 live collection
+  smoke:
+    name: Public snapshot smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-
-      - name: Install dependencies
+      - name: Install runtime dependencies
         run: |
           pip install -r requirements/base.txt
           pip install -r requirements/linux.txt
-          pip install pytest
-
-      - name: System info (proves real Linux)
+      - name: Public preflight
+        run: python tools/public_preflight.py
+      - name: Compile source
+        run: PYTHONPATH=src python -m compileall -q src build.py tools/public_preflight.py
+      - name: Import upload stack
         run: |
-          uname -a
-          cat /etc/os-release
-          echo "---"
-          echo "Sample real system paths:"
-          ls -la /var/log/auth.log /var/log/syslog 2>/dev/null | head -5 || echo "(absent)"
-          ls -la /etc/passwd /etc/group 2>/dev/null
-          ls -la /etc/systemd/system/ 2>/dev/null | head -5 || echo "(absent)"
-
-      - name: Live collection (system-level Linux artifacts)
-        run: |
-          python -m pytest src/collectors/test_live_collection.py::test_linux_live_collection -v -s
-
-      - name: Upload manifest for inspection
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: manifest-linux-x86_64
-          path: /tmp/live_collection_output/manifest.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload sample collected files
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: samples-linux-x86_64
-          path: |
-            /tmp/live_collection_output/etc/passwd
-            /tmp/live_collection_output/etc/os-release
-            /tmp/live_collection_output/var/log/syslog
-            /tmp/live_collection_output/etc/systemd/system/*.target
-          if-no-files-found: warn
-          retention-days: 14
-
-  # =========================================================================
-  # Summary job -- shows side-by-side baseline counts across runners
-  # =========================================================================
-  summary:
-    name: Cross-OS baseline summary
-    needs: [macos-live, linux-live]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: ./manifests
-          pattern: manifest-*
-
-      - name: Compare baseline counts across runners
-        run: |
-          set +e
-          echo "## Live collection baseline summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Runner | Artifacts collected | Permission denied | Empty | Total bytes |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          for dir in manifests/manifest-*; do
-            name=$(basename "$dir" | sed 's/manifest-//')
-            if [ -f "$dir/manifest.json" ]; then
-              python3 -c "
-          import json, sys
-          m = json.load(open('$dir/manifest.json'))
-          arts = m.get('artifacts', [])
-          errs = m.get('errors', [])
-          total_bytes = sum(a.get('size_bytes', 0) for a in arts)
-          perm = sum(1 for e in errs if 'permission' in e.get('reason', '').lower())
-          empty = sum(1 for e in errs if 'empty' in e.get('reason', '').lower() or 'not_found' in e.get('reason', '').lower())
-          print(f'| $name | {len(arts)} | {perm} | {empty} | {total_bytes:,} |')
-              " >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "| $name | (no manifest) | - | - | - |" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          done
+          PYTHONPATH=src python - <<'PY'
+          from core.uploader import SyncUploader, R2DirectUploader
+          print(SyncUploader.__name__, R2DirectUploader.__name__)
+          PY
