@@ -29,13 +29,13 @@ VSVersionInfo(
       [
       StringTable(
         u'040904B0',
-        [StringStruct(u'CompanyName', u'unJaena'),
-        StringStruct(u'FileDescription', u'unJaena Collector'),
+        [StringStruct(u'CompanyName', u'unjaena'),
+        StringStruct(u'FileDescription', u'unjaena Intelligence Collector'),
         StringStruct(u'FileVersion', u'2.5.0.0'),
-        StringStruct(u'InternalName', u'unJaenaCollector'),
-        StringStruct(u'LegalCopyright', u'Copyright 2026 unJaena. AGPL-3.0-or-later.'),
-        StringStruct(u'OriginalFilename', u'unJaenaCollector.exe'),
-        StringStruct(u'ProductName', u'unJaena Collector'),
+        StringStruct(u'InternalName', u'IntelligenceCollector'),
+        StringStruct(u'LegalCopyright', u'Copyright 2026 unjaena. AGPL-3.0.'),
+        StringStruct(u'OriginalFilename', u'IntelligenceCollector.exe'),
+        StringStruct(u'ProductName', u'unjaena Intelligence Collector'),
         StringStruct(u'ProductVersion', u'2.5.0.0')])
       ]),
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])

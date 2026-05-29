@@ -168,7 +168,7 @@ def download_libusb():
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Build unJaena Collector')
+    parser = argparse.ArgumentParser(description='Build Intelligence Collector')
     parser.add_argument(
         '--production', '-p',
         action='store_true',
@@ -323,11 +323,11 @@ def main():
         import platform as _platform
         target_os = args.platform or _platform.system().lower()
         if target_os == 'windows':
-            exe_path = dist_dir / 'unJaenaCollector.exe'
+            exe_path = dist_dir / 'IntelligenceCollector.exe'
         elif target_os == 'darwin' or target_os == 'macos':
-            exe_path = dist_dir / 'unJaenaCollector.app'
+            exe_path = dist_dir / 'IntelligenceCollector.app'
         else:
-            exe_path = dist_dir / 'unJaenaCollector'
+            exe_path = dist_dir / 'IntelligenceCollector'
 
         print(f"\n[SUCCESS] Build completed!")
         print(f"[SUCCESS] Output: {dist_dir}")

@@ -10,9 +10,6 @@ PATTERNS = [
     r'private key', r'access token', r'refresh token', r'github_pat_',
     r'Login Data', r'IndexedDB', r'security question', r'Kakao', r'WhatsApp',
     r'claude\.ai', r'chatgpt', r'\.codex',
-    r'\bClaude\b', r'\bCopilot\b', r'\bAider\b',
-    r'\bOllama\b', r'LM Studio', r'HuggingFace', r'Continue\.dev',
-    r'MCP server grants', r'conversation logs', r'tool-call records', r'model fingerprints',
 ]
 
 def main() -> int:

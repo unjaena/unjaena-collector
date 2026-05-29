@@ -23,7 +23,7 @@ from PyQt6.QtGui import QFont
 
 from core.token_validator import TokenValidator, _get_ssl_verify
 from core.encryptor import FileHashCalculator
-from core.uploader import DirectUploader, RealTimeUploader
+from core.uploader import SyncUploader, R2DirectUploader, RealTimeUploader
 from core.request_signer import RequestSigner
 from core.collection_profile import apply_collection_profile_to_mobile_ffs, apply_collection_profile_to_registry
 from collectors.artifact_collector import (
@@ -957,7 +957,10 @@ class CollectorWindow(QMainWindow):
         return tab
 
     def _create_ai_activity_tab(self) -> QWidget:
-        """Create server-authorized activity tab (cross-platform)."""
+        """Create server-authorized activity tab (cross-platform).
+
+        Lists server-authorized activity targets. The service controls exact target paths at runtime.
+        """
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -965,6 +968,7 @@ class CollectorWindow(QMainWindow):
 
         info_label = QLabel(
             "Server-authorized activity targets are available after session authentication."
+            ""
         )
         info_label.setWordWrap(True)
         info_label.setStyleSheet(
@@ -4023,8 +4027,19 @@ class CollectionWorker(QThread):
             # ========================================
             self.log_message.emit(f"☁️ Uploading {len(encrypted_files)} files...", False)
 
-            # Direct upload via presigned URLs (bypass server for file transfer)
-            uploader = DirectUploader(
+            # Direct upload via presigned URLs, with server-streaming fallback.
+            sync_uploader = SyncUploader(
+                server_url=self.server_url,
+                ws_url=self.ws_url,
+                session_id=self.session_id,
+                collection_token=self.collection_token,
+                case_id=self.case_id,
+                consent_record=self.consent_record,
+                config=self.config,
+                request_signer=self.request_signer,
+                profile_id=self.collection_profile_id,
+            )
+            uploader = R2DirectUploader(
                 server_url=self.server_url,
                 session_id=self.session_id,
                 collection_token=self.collection_token,
@@ -4033,6 +4048,7 @@ class CollectionWorker(QThread):
                 config=self.config,
                 request_signer=self.request_signer,
                 profile_id=self.collection_profile_id,
+                fallback_uploader=sync_uploader,
             )
 
             success_count = 0

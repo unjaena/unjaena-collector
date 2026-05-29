@@ -1,5 +1,5 @@
 """
-CLI / Headless Mode for unJaena Collector
+CLI / Headless Mode for Digital Forensics Collector
 
 Enables collection on Linux servers and other environments without GUI.
 
@@ -72,7 +72,7 @@ class HeadlessCollector:
     def run(self) -> bool:
         """Execute the full collection pipeline. Returns True on success."""
         logger.info("=" * 60)
-        logger.info("unJaena Collector - Headless Mode")
+        logger.info("Digital Forensics Collector — Headless Mode")
         logger.info("=" * 60)
         logger.info(f"Server: {self.server_url}")
         logger.info(f"Case ID: {self.case_id}")

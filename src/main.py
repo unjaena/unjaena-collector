@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-unJaena Collector - Main Entry Point
+Digital Forensics Collector - Main Entry Point
 
 This tool collects forensic artifacts from target systems
 and uploads them to the forensics server for analysis.
@@ -77,7 +77,7 @@ def get_secure_config(cli_server_url: str = None) -> dict:
         'server_url': server_url,
         'ws_url': ws_url,
         'version': _get_bundled_version(),
-        'app_name': 'unJaena Collector',
+        'app_name': 'Digital Forensics Collector',
         'dev_mode': dev_mode,
         'is_release': getattr(sys, 'frozen', False),
     }
@@ -91,7 +91,7 @@ def get_secure_config(cli_server_url: str = None) -> dict:
 def _parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="unJaena Collector",
+        description="Digital Forensics Collector",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

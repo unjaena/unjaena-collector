@@ -233,16 +233,7 @@ USER_FILE_EXTENSION_POLICY = {
     'source_code': SOURCE_CODE_EXTENSIONS,
 }
 
-ARTIFACT_MFT_FILTERS: Dict[str, Dict[str, Any]] = {
-    artifact_type: {
-        'extensions': set(extensions),
-        'full_disk_scan': True,
-        'path_optional': True,
-        'include_deleted': True,
-        'description': f'Generic {artifact_type.replace("_", " " )} file collection',
-    }
-    for artifact_type, extensions in USER_FILE_EXTENSION_POLICY.items()
-}
+ARTIFACT_MFT_FILTERS: Dict[str, Dict[str, Any]] = {}
 
 class BaseMFTCollector(ABC):
     """

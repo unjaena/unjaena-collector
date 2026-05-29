@@ -36,8 +36,27 @@ except ModuleNotFoundError:
     _src_dir = str(Path(__file__).resolve().parent.parent)
     if _src_dir not in sys.path:
         sys.path.insert(0, _src_dir)
-    from core.token_validator import _get_ssl_verify
-    from core.request_signer import canonical_json_bytes
+    try:
+        from core.token_validator import _get_ssl_verify
+        from core.request_signer import canonical_json_bytes
+    except ModuleNotFoundError:
+        import importlib.util
+
+        def _load_collector_core_module(module_name: str, file_name: str):
+            module_path = Path(__file__).resolve().parent / file_name
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        _token_validator = _load_collector_core_module(
+            "_unjaena_collector_token_validator", "token_validator.py"
+        )
+        _request_signer = _load_collector_core_module(
+            "_unjaena_collector_request_signer", "request_signer.py"
+        )
+        _get_ssl_verify = _token_validator._get_ssl_verify
+        canonical_json_bytes = _request_signer.canonical_json_bytes
 from typing import Callable, Optional
 from dataclasses import dataclass
 
@@ -659,6 +678,7 @@ class SyncUploader:
         self.max_file_size = max_file_size or self.DEFAULT_MAX_FILE_SIZE
         self._dev_mode = config.get('dev_mode', False) if config else False
         self.request_signer = request_signer
+        self.profile_id = profile_id
 
     def upload_file(
         self,
@@ -719,6 +739,8 @@ class SyncUploader:
                         data['case_id'] = self.case_id
                     if self.consent_record:
                         data['consent_record'] = json.dumps(self.consent_record)
+                    if self.profile_id:
+                        data['profile_id'] = self.profile_id
 
                     headers = {
                         'X-Session-ID': self.session_id,
@@ -853,6 +875,8 @@ class DirectUploader:
         config: dict = None,
         request_signer=None,
         profile_id: str = None,
+        fallback_uploader=None,
+        retry_count: int = None,
     ):
         """
         Args:
@@ -865,6 +889,8 @@ class DirectUploader:
             config: App settings (dev_mode, etc.)
             request_signer: RequestSigner instance (HMAC signing)
             profile_id: Short-lived collection profile authorizing uploads
+            fallback_uploader: Server-streaming uploader used if presigned upload fails
+            retry_count: Number of API retries for presigned/confirm requests
         """
         self.server_url = server_url.rstrip('/')
         self.session_id = session_id
@@ -875,6 +901,10 @@ class DirectUploader:
         self._dev_mode = config.get('dev_mode', False) if config else False
         self.request_signer = request_signer
         self.profile_id = profile_id
+        self.fallback_uploader = fallback_uploader
+        if retry_count is None:
+            retry_count = int(os.getenv('COLLECTOR_DIRECT_UPLOAD_RETRIES', '5'))
+        self.request_retries = max(1, int(retry_count))
 
     def _get_auth_headers(self, method: str = "POST", path: str = "", body=None) -> dict:
         """Build auth headers (session + token + HMAC signature)."""
@@ -911,7 +941,7 @@ class DirectUploader:
             "profile_id": self.profile_id,
         }
 
-        max_retries = 5
+        max_retries = self.request_retries
         for attempt in range(1, max_retries + 1):
             try:
                 body = canonical_json_bytes(payload)
@@ -1104,7 +1134,7 @@ class DirectUploader:
             "profile_id": self.profile_id,
         }
 
-        max_retries = 5
+        max_retries = self.request_retries
         for attempt in range(1, max_retries + 1):
             try:
                 body = canonical_json_bytes(payload)
@@ -1346,7 +1376,20 @@ class DirectUploader:
                     presigned_info['upload_id'],
                 )
 
-            return UploadResult.from_error(f"Direct upload failed: {e}")
+            if self.fallback_uploader:
+                logger.warning("[DIRECT] Falling back to server upload path after direct upload failure")
+                try:
+                    return self.fallback_uploader.upload_file(
+                        file_path, artifact_type, metadata, progress_callback=progress_callback
+                    )
+                except TypeError:
+                    return self.fallback_uploader.upload_file(file_path, artifact_type, metadata)
+                except Exception as fallback_error:
+                    return UploadResult.from_error(
+                        f"R2 upload failed and fallback failed: {fallback_error}"
+                    )
+
+            return UploadResult.from_error(f"R2 upload failed: {e}")
 
     def upload_batch(
         self,
@@ -1406,5 +1449,12 @@ class DirectUploader:
         return results
 
 
-# Backward compatibility for integrations that imported the pre-rename class.
-R2DirectUploader = DirectUploader
+class R2DirectUploader(DirectUploader):
+    """Compatibility name for the presigned R2 uploader.
+
+    GUI usage provides a SyncUploader fallback, so one presigned request attempt
+    is enough before the collector switches to the server-streaming path.
+    """
+
+    def __init__(self, *args, retry_count: int = 1, **kwargs):
+        super().__init__(*args, retry_count=retry_count, **kwargs)

@@ -314,14 +314,14 @@ all_hidden_imports = list(set(all_hidden_imports + extra_hiddenimports))
 # =============================================================================
 
 if current_os == 'windows':
-    exe_name = 'unJaenaCollector'
+    exe_name = 'IntelligenceCollector'
     use_console = False
 elif current_os == 'darwin':
-    exe_name = 'unJaenaCollector'
+    exe_name = 'IntelligenceCollector'
     use_console = False
 else:
     # Linux
-    exe_name = 'unJaenaCollector'
+    exe_name = 'IntelligenceCollector'
     use_console = True  # Linux headless environments need console
 
 # =============================================================================

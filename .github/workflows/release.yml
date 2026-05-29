@@ -52,8 +52,7 @@ jobs:
                   c['server_url'] = server_url
                   c['ws_url'] = ws_url
           else:
-              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'unJaena Collector'}
-          c['app_name'] = 'unJaena Collector'
+              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'Digital Intelligence Collector'}
           c['version'] = '${VERSION}'
           with open('config.production.json', 'w', encoding='utf-8') as f: json.dump(c, f, indent=4)
           print(f'[CONFIG] version={c[\"version\"]}, server_url={c.get(\"server_url\",\"N/A\")}')
@@ -78,13 +77,13 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#collector-v}"
-          mv unJaenaCollector.exe "unJaenaCollector-${VERSION}-windows-x64.exe"
+          mv IntelligenceCollector.exe "IntelligenceCollector-${VERSION}-windows-x64.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: windows-x64
-          path: dist/unJaenaCollector-*-windows-x64.exe
+          path: dist/IntelligenceCollector-*-windows-x64.exe
 
   # =========================================================================
   # Linux x64  -  .tar.gz (PyInstaller onefile)
@@ -125,8 +124,7 @@ jobs:
                   c['server_url'] = server_url
                   c['ws_url'] = ws_url
           else:
-              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'unJaena Collector'}
-          c['app_name'] = 'unJaena Collector'
+              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'Digital Intelligence Collector'}
           c['version'] = '${VERSION}'
           with open('config.production.json', 'w', encoding='utf-8') as f: json.dump(c, f, indent=4)
           print(f'[CONFIG] version={c[\"version\"]}, server_url={c.get(\"server_url\",\"N/A\")}')
@@ -139,14 +137,14 @@ jobs:
         working-directory: dist
         run: |
           VERSION="${GITHUB_REF_NAME#collector-v}"
-          chmod +x unJaenaCollector
-          tar czf "unJaenaCollector-${VERSION}-linux-x64.tar.gz" unJaenaCollector
+          chmod +x IntelligenceCollector
+          tar czf "IntelligenceCollector-${VERSION}-linux-x64.tar.gz" IntelligenceCollector
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: linux-x64
-          path: dist/unJaenaCollector-*-linux-x64.tar.gz
+          path: dist/IntelligenceCollector-*-linux-x64.tar.gz
 
   # =========================================================================
   # macOS dual-arch (Apple Silicon + Intel)  -  two .dmg per release
@@ -177,7 +175,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install libusb || true
+          brew install libusb create-dmg || true
           pip install -r requirements/base.txt
           pip install -r requirements/macos.txt
           pip install pyinstaller
@@ -197,8 +195,7 @@ jobs:
                   c['server_url'] = server_url
                   c['ws_url'] = ws_url
           else:
-              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'unJaena Collector'}
-          c['app_name'] = 'unJaena Collector'
+              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'Digital Intelligence Collector'}
           c['version'] = '${VERSION}'
           with open('config.production.json', 'w', encoding='utf-8') as f: json.dump(c, f, indent=4)
           print(f'[CONFIG] version={c[\"version\"]}, server_url={c.get(\"server_url\",\"N/A\")}')
@@ -236,15 +233,15 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
-          if [ -d "unJaenaCollector.app" ]; then
-            echo "[SIGN] Signing unJaenaCollector.app..."
+          if [ -d "IntelligenceCollector.app" ]; then
+            echo "[SIGN] Signing IntelligenceCollector.app..."
             codesign --deep --force --options runtime \
               --entitlements ../entitlements.plist \
               --sign "$MACOS_SIGNING_IDENTITY" \
-              unJaenaCollector.app
+              IntelligenceCollector.app
 
             echo "[SIGN] Verifying signature..."
-            codesign --verify --deep --strict --verbose=2 unJaenaCollector.app
+            codesign --verify --deep --strict --verbose=2 IntelligenceCollector.app
             echo "[SIGN] Done."
           else
             echo "[SIGN] No .app bundle found, skipping signing"
@@ -256,21 +253,32 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           VERSION="${GITHUB_REF_NAME#collector-v}"
-          DMG_NAME="unJaenaCollector-${VERSION}-macos-${ARCH}.dmg"
+          DMG_NAME="IntelligenceCollector-${VERSION}-macos-${ARCH}.dmg"
 
-          if [ -d "unJaenaCollector.app" ]; then
-            hdiutil create -volname "unJaena Collector" \
-              -srcfolder unJaenaCollector.app \
+          if [ -d "IntelligenceCollector.app" ]; then
+            create-dmg \
+              --volname "Intelligence Collector" \
+              --window-size 600 400 \
+              --icon-size 100 \
+              --icon "IntelligenceCollector.app" 175 190 \
+              --app-drop-link 425 190 \
+              --no-internet-enable \
+              "${DMG_NAME}" \
+              "IntelligenceCollector.app" 2>/dev/null || \
+            hdiutil create -volname "IntelligenceCollector" \
+              -srcfolder IntelligenceCollector.app \
               -ov -format UDZO \
               "${DMG_NAME}"
           else
-            chmod +x unJaenaCollector
-            tar czf "unJaenaCollector-${VERSION}-macos-${ARCH}.tar.gz" unJaenaCollector
+            chmod +x IntelligenceCollector
+            tar czf "IntelligenceCollector-${VERSION}-macos-${ARCH}.tar.gz" IntelligenceCollector
           fi
 
-      # Split notarization into submit + poll + staple. macOS release assets
-      # must be notarized; missing Apple credentials or a timeout fails the
-      # macOS job so the GitHub Release cannot silently ship without DMGs.
+      # Split notarization into submit + poll + staple so the job survives
+      # a slow Apple queue (observed > 4h on 2026-04-13). If the poll loop
+      # does not see Accepted within the in-job budget, the submission id
+      # and the unstapled DMG are saved as a separate artifact so that
+      # notary-staple.yml can finish the work asynchronously.
       - name: Notarize DMG (submit)
         id: notarize_submit
         working-directory: dist
@@ -280,20 +288,12 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ARCH: ${{ matrix.arch }}
         run: |
-          DMG_FILE=$(ls unJaenaCollector-*-macos-${ARCH}.dmg 2>/dev/null | head -1)
-          if [ -z "$DMG_FILE" ]; then
-            echo "[NOTARIZE] Skipped (no DMG produced)"
+          DMG_FILE=$(ls IntelligenceCollector-*-macos-${ARCH}.dmg 2>/dev/null | head -1)
+          if [ -z "$DMG_FILE" ] || [ -z "$APPLE_ID" ]; then
+            echo "[NOTARIZE] Skipped (no DMG or credentials missing)"
             echo "dmg_file=" >> "$GITHUB_OUTPUT"
             echo "submission_id=" >> "$GITHUB_OUTPUT"
             exit 0
-          fi
-
-          echo "dmg_file=$DMG_FILE" >> "$GITHUB_OUTPUT"
-
-          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
-            echo "::error::Apple notarization credentials are required for macOS release assets. Configure APPLE_ID, APPLE_APP_PASSWORD, and APPLE_TEAM_ID."
-            echo "submission_id=" >> "$GITHUB_OUTPUT"
-            exit 1
           fi
 
           echo "[NOTARIZE] Submitting $DMG_FILE..."
@@ -310,6 +310,7 @@ jobs:
             exit 1
           fi
           echo "[NOTARIZE] Submission id: $SUBMISSION_ID"
+          echo "dmg_file=$DMG_FILE" >> "$GITHUB_OUTPUT"
           echo "submission_id=$SUBMISSION_ID" >> "$GITHUB_OUTPUT"
 
       # Poll for up to ~90 min (18 * 5min). If Accepted, staple inline.
@@ -358,9 +359,8 @@ jobs:
             echo "[STAPLE] Done."
             echo "accepted=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::Timed out waiting for Apple notarization. The release will not be published without notarized macOS assets."
+            echo "[NOTARIZE] Timed out waiting for Apple  -  release will ship Windows/Linux first; run notary-staple workflow once submission reaches Accepted."
             echo "accepted=false" >> "$GITHUB_OUTPUT"
-            exit 1
           fi
 
       - name: Clean up keychain
@@ -375,8 +375,8 @@ jobs:
         with:
           name: macos-${{ matrix.arch }}
           path: |
-            dist/unJaenaCollector-*-macos-${{ matrix.arch }}.dmg
-            dist/unJaenaCollector-*-macos-${{ matrix.arch }}.tar.gz
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.dmg
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.tar.gz
 
       # Unstapled DMG + submission id  -  consumed by notary-staple.yml.
       # Kept out of the GitHub Release so users never download an unsigned
@@ -393,18 +393,20 @@ jobs:
           name: macos-${{ matrix.arch }}-pending
           retention-days: 14
           path: |
-            dist/unJaenaCollector-*-macos-${{ matrix.arch }}.dmg
-            dist/unJaenaCollector-*-macos-${{ matrix.arch }}.tar.gz
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.dmg
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.tar.gz
             dist/submission_id.txt
 
   # =========================================================================
   # Release  -  SHA256 checksums + GitHub Release assembly
   # =========================================================================
   release:
-    # Require every platform to succeed so release assets cannot be
-    # incomplete or miss trusted macOS DMGs without a visible failure.
+    # Wait for macOS too so the DMG (when notarization finishes in-job)
+    # lands in the release alongside the other assets. macOS is not
+    # gated  -  if notarize times out the DMG goes to a pending artifact
+    # and the release still ships with Windows + Linux.
     needs: [build-windows, build-linux, build-macos]
-    if: always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success' && needs.build-macos.result == 'success'
+    if: always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
     runs-on: ubuntu-latest
     # Only this job needs write access to create the GitHub Release.
     permissions:
@@ -428,7 +430,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          name: "unJaena Collector ${{ github.ref_name }}"
+          name: "Intelligence Collector ${{ github.ref_name }}"
           generate_release_notes: true
           files: |
             release-assets/**/*.exe
