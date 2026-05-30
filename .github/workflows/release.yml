@@ -175,7 +175,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install libusb create-dmg || true
+          brew install libusb || true
           pip install -r requirements/base.txt
           pip install -r requirements/macos.txt
           pip install pyinstaller
@@ -256,15 +256,8 @@ jobs:
           DMG_NAME="unJaena-Collector-${VERSION}-macos-${ARCH}.dmg"
 
           if [ -d "unJaena Collector.app" ]; then
-            create-dmg \
-              --volname "unJaena Collector" \
-              --window-size 600 400 \
-              --icon-size 100 \
-              --icon "unJaena Collector.app" 175 190 \
-              --app-drop-link 425 190 \
-              --no-internet-enable \
-              "${DMG_NAME}" \
-              "unJaena Collector.app" 2>/dev/null || \
+            # hdiutil is less decorative than create-dmg, but it is deterministic
+            # on both GitHub macOS ARM and Intel runners and avoids Finder/DS_Store hangs.
             hdiutil create -volname "unJaena Collector" \
               -srcfolder "unJaena Collector.app" \
               -ov -format UDZO \
