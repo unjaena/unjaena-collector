@@ -505,8 +505,8 @@ namespace UnjaenaEncaseBridge
                 return ErrorJson("invalid_init_response", "Upload init response did not include upload_url, complete_url, and upload_ticket.");
             }
 
-            string dataUrl = BuildUrl(host, port, useSsl, uploadUrl + "?ticket=" + Uri.EscapeDataString(ticket));
-            string dataResponse = PutStream(dataUrl, inputStream, fileSize);
+            string dataUrl = BuildUrl(host, port, useSsl, uploadUrl);
+            string dataResponse = PutStream(dataUrl, inputStream, fileSize, ticket);
             if (!LastSucceeded)
             {
                 return dataResponse;
@@ -519,8 +519,8 @@ namespace UnjaenaEncaseBridge
                 + "\"case_id\":\"" + JsonEscape(caseId) + "\""
                 + "}";
 
-            string finalUrl = BuildUrl(host, port, useSsl, completeUrl + "?ticket=" + Uri.EscapeDataString(ticket));
-            return PostJson(finalUrl, completeBody);
+            string finalUrl = BuildUrl(host, port, useSsl, completeUrl);
+            return PostJson(finalUrl, completeBody, ticket);
         }
 
         private static void ConfigureTls()
@@ -542,6 +542,11 @@ namespace UnjaenaEncaseBridge
             }
 
             return ReadResponse(request);
+        }
+
+        private string PostJson(string url, string json, string uploadTicket)
+        {
+            return PostJson(url, json, uploadTicket, null, null);
         }
 
         private string PostJson(string url, string json, string uploadTicket, string sessionId, string collectionToken)
@@ -580,9 +585,18 @@ namespace UnjaenaEncaseBridge
 
         private string PutStream(string url, Stream inputStream, long contentLength)
         {
+            return PutStream(url, inputStream, contentLength, null);
+        }
+
+        private string PutStream(string url, Stream inputStream, long contentLength, string uploadTicket)
+        {
             int timeoutMs = ComputeUploadTimeoutMilliseconds(contentLength);
             HttpWebRequest request = CreateRequest(url, "PUT", "application/octet-stream", timeoutMs);
             request.Accept = "application/json";
+            if (!IsBlank(uploadTicket))
+            {
+                request.Headers["X-EnCase-Upload-Ticket"] = uploadTicket;
+            }
             request.ContentLength = contentLength;
 
             using (Stream output = request.GetRequestStream())
@@ -698,7 +712,12 @@ namespace UnjaenaEncaseBridge
 
             using (StreamReader reader = new StreamReader(responseStream, Encoding.UTF8))
             {
-                return reader.ReadToEnd();
+                string body = reader.ReadToEnd();
+                if (!LastSucceeded)
+                {
+                    LastError = ResponseErrorSummary(body);
+                }
+                return body;
             }
         }
 
@@ -750,6 +769,20 @@ namespace UnjaenaEncaseBridge
             }
 
             return scheme + "://" + authority + pathAndQuery;
+        }
+
+        private static string ResponseErrorSummary(string body)
+        {
+            if (IsBlank(body))
+            {
+                return "HTTP request failed";
+            }
+            string compact = body.Replace("\r", " ").Replace("\n", " ").Replace("\t", " ").Trim();
+            while (compact.IndexOf("  ", StringComparison.Ordinal) >= 0)
+            {
+                compact = compact.Replace("  ", " ");
+            }
+            return compact.Length > 600 ? compact.Substring(0, 600) : compact;
         }
 
         private static string JsonEscape(string value)

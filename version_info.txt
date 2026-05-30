@@ -32,9 +32,9 @@ VSVersionInfo(
         [StringStruct(u'CompanyName', u'unjaena'),
         StringStruct(u'FileDescription', u'unjaena Intelligence Collector'),
         StringStruct(u'FileVersion', u'2.5.0.0'),
-        StringStruct(u'InternalName', u'IntelligenceCollector'),
+        StringStruct(u'InternalName', u'unJaena-Collector'),
         StringStruct(u'LegalCopyright', u'Copyright 2026 unjaena. AGPL-3.0.'),
-        StringStruct(u'OriginalFilename', u'IntelligenceCollector.exe'),
+        StringStruct(u'OriginalFilename', u'unJaena-Collector.exe'),
         StringStruct(u'ProductName', u'unjaena Intelligence Collector'),
         StringStruct(u'ProductVersion', u'2.5.0.0')])
       ]),

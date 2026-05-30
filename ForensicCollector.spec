@@ -88,12 +88,10 @@ common_hidden_imports = [
     # --- Android: adb-shell (Apache-2.0) ---
     'adb_shell',
     'adb_shell.adb_device',
-    'adb_shell.adb_device_usb',
     'adb_shell.auth',
     'adb_shell.auth.keygen',
     'adb_shell.auth.sign_pythonrsa',
     'adb_shell.exceptions',
-    'adb_shell.handle',
     'adb_shell.transport',
 
     # --- USB: libusb (LGPL-2.1) + PyUSB (BSD) ---
@@ -314,14 +312,14 @@ all_hidden_imports = list(set(all_hidden_imports + extra_hiddenimports))
 # =============================================================================
 
 if current_os == 'windows':
-    exe_name = 'IntelligenceCollector'
+    exe_name = 'unJaena-Collector'
     use_console = False
 elif current_os == 'darwin':
-    exe_name = 'IntelligenceCollector'
+    exe_name = 'unJaena Collector'
     use_console = False
 else:
     # Linux
-    exe_name = 'IntelligenceCollector'
+    exe_name = 'unjaena-collector'
     use_console = True  # Linux headless environments need console
 
 # =============================================================================

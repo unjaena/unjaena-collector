@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QFrame, QScrollArea, QWidget,
     QComboBox, QMessageBox, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QTimer
 
 from gui.styles import COLORS
 
@@ -202,21 +202,36 @@ class ConsentDialog(QDialog):
         # Load consent template from server
         self._load_consent_template()
 
+    def _target_screen(self):
+        from PyQt6.QtGui import QCursor, QGuiApplication
+
+        parent = self.parentWidget()
+        if parent is not None:
+            handle = parent.windowHandle()
+            if handle is not None and handle.screen() is not None:
+                return handle.screen()
+
+        screen = QGuiApplication.screenAt(QCursor.pos())
+        if screen is not None:
+            return screen
+
+        return self.screen() or QGuiApplication.primaryScreen()
+
     def _center_on_screen(self) -> None:
-        from PyQt6.QtGui import QGuiApplication
-        screen = self.screen() or QGuiApplication.primaryScreen()
+        screen = self._target_screen()
         if screen is None:
             return
-        geo = screen.availableGeometry()
+        self.adjustSize()
         frame = self.frameGeometry()
-        x = geo.x() + (geo.width() - frame.width()) // 2
-        y = geo.y() + (geo.height() - frame.height()) // 2
-        self.move(x, y)
+        frame.moveCenter(screen.availableGeometry().center())
+        self.move(frame.topLeft())
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.adjustSize()
         self._center_on_screen()
+        # Re-center after Qt/native window manager finalizes frame geometry.
+        QTimer.singleShot(0, self._center_on_screen)
+        QTimer.singleShot(100, self._center_on_screen)
 
     def _on_language_changed(self, index: int):
         """Reload consent when language changes"""

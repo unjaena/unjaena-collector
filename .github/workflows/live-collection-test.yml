@@ -8,6 +8,7 @@ on:
       - 'src/**'
       - 'requirements/**'
       - 'tools/public_preflight.py'
+      - 'tools/gui_workflow_smoke.py'
       - 'tools/encase/**'
       - 'README.md'
       - 'SECURITY.md'
@@ -37,7 +38,9 @@ jobs:
       - name: Public preflight
         run: python tools/public_preflight.py
       - name: Compile source
-        run: PYTHONPATH=src python -m compileall -q src build.py tools/public_preflight.py
+        run: PYTHONPATH=src python -m compileall -q src build.py tools/public_preflight.py tools/gui_workflow_smoke.py
+      - name: GUI workflow smoke
+        run: QT_QPA_PLATFORM=offscreen PYTHONPATH=src python tools/gui_workflow_smoke.py
       - name: Import upload stack
         run: |
           PYTHONPATH=src python - <<'PY'

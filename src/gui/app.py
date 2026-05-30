@@ -94,6 +94,8 @@ class CollectorWindow(QMainWindow):
         self.allowed_artifacts = []
         self._allow_all_artifacts = False
         self._mapped_allowed_artifacts = set()
+        self._collection_starting = False
+        self._collection_running = False
         self.request_signer = None
 
         # Unified device manager
@@ -195,6 +197,7 @@ class CollectorWindow(QMainWindow):
 
         # Step 0: Device Selection
         device_group = QGroupBox("0. Select Devices")
+        self.device_group = device_group
         device_layout = QVBoxLayout(device_group)
         device_layout.setContentsMargins(6, 14, 6, 6)
         device_layout.setSpacing(4)
@@ -208,6 +211,7 @@ class CollectorWindow(QMainWindow):
 
         # Step 1: Token
         token_group = QGroupBox("1. Session Token")
+        self.token_group = token_group
         token_layout = QVBoxLayout(token_group)
         token_layout.setContentsMargins(6, 14, 6, 6)
         token_layout.setSpacing(4)
@@ -235,6 +239,7 @@ class CollectorWindow(QMainWindow):
 
         # Step 2: Artifacts (tab-based)
         artifacts_group = QGroupBox("2. Select Artifacts")
+        self.artifacts_group = artifacts_group
         artifacts_outer_layout = QVBoxLayout(artifacts_group)
         artifacts_outer_layout.setContentsMargins(6, 14, 6, 6)
         artifacts_outer_layout.setSpacing(4)
@@ -271,6 +276,14 @@ class CollectorWindow(QMainWindow):
         self._build_artifact_tabs()
 
         artifacts_outer_layout.addWidget(self.artifacts_tab)
+
+        self.source_scope_label = QLabel("Select an evidence source to load the applicable collection scope.")
+        self.source_scope_label.setWordWrap(True)
+        self.source_scope_label.setStyleSheet(
+            f"background: {COLORS['bg_secondary']}; color: {COLORS['text_tertiary']}; "
+            f"font-size: 9px; border-radius: 4px; padding: 4px 8px;"
+        )
+        artifacts_outer_layout.addWidget(self.source_scope_label)
 
         # Select All + Include Deleted option
         select_all_layout = QHBoxLayout()
@@ -1086,6 +1099,256 @@ class CollectorWindow(QMainWindow):
 
         self._update_collect_button_state()
 
+    def _artifact_category(self, artifact_type: str) -> str:
+        """Return the platform category for an artifact type."""
+        info = ARTIFACT_TYPES.get(artifact_type, {})
+        category = str(info.get('category') or '').lower()
+        if category in ('windows', 'android', 'ios', 'linux', 'macos', 'ai_activity'):
+            return category
+        lowered = str(artifact_type or '').lower()
+        if lowered.startswith(('mobile_ios_', 'ios_')):
+            return 'ios'
+        if lowered.startswith(('mobile_android_', 'android_')):
+            return 'android'
+        if lowered.startswith('linux_'):
+            return 'linux'
+        if lowered.startswith('macos_'):
+            return 'macos'
+        return 'windows'
+
+    def _disk_image_device_types(self) -> tuple:
+        return (
+            DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
+            DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
+            DeviceType.VHDX_IMAGE, DeviceType.QCOW2_IMAGE,
+            DeviceType.VDI_IMAGE, DeviceType.DMG_IMAGE,
+        )
+
+    def _all_source_categories(self) -> set:
+        return {'windows', 'android', 'ios', 'linux', 'macos'}
+
+    def _source_categories_for_device(self, device) -> set:
+        """Return artifact categories that should run for one evidence source."""
+        device_type = getattr(device, 'device_type', None)
+        metadata = getattr(device, 'metadata', None) or {}
+        if device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
+            return {'windows'}
+        if device_type in (DeviceType.ANDROID_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_ANDROID):
+            return {'android'}
+        if device_type in (DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_IOS):
+            return {'ios'}
+        if device_type == DeviceType.LINUX_LOCAL_SYSTEM:
+            return {'linux'}
+        if device_type == DeviceType.MACOS_LOCAL_SYSTEM:
+            return {'macos'}
+        if device_type in self._disk_image_device_types():
+            detected_os = str(metadata.get('detected_os') or '').lower()
+            if detected_os in ('windows', 'linux', 'macos'):
+                return {detected_os}
+            # OS detection can be inconclusive for damaged, encrypted,
+            # virtualized, or mobile-origin images. Fail-open so collection
+            # does not miss evidence solely because the source OS is unknown.
+            return self._all_source_categories()
+        return set()
+
+    def _is_unknown_os_image_source(self, device) -> bool:
+        metadata = getattr(device, 'metadata', None) or {}
+        detected_os = str(metadata.get('detected_os') or '').lower()
+        return (
+            getattr(device, 'device_type', None) in self._disk_image_device_types()
+            and detected_os not in ('windows', 'linux', 'macos')
+        )
+
+    def _selected_source_categories(self, selected_devices: Optional[list] = None) -> set:
+        """Return artifact categories applicable to selected evidence sources."""
+        devices = selected_devices if selected_devices is not None else self.device_manager.get_selected_devices()
+        categories = set()
+        for device in devices:
+            categories.update(self._source_categories_for_device(device))
+        return categories
+
+    def _apply_selected_source_scope(self, selected_devices: Optional[list] = None, force: bool = False):
+        """Disable artifacts that cannot be emitted by the selected source type."""
+        if not force and (getattr(self, '_collection_starting', False) or getattr(self, '_collection_running', False)):
+            return
+        categories = self._selected_source_categories(selected_devices)
+        if not categories:
+            return
+        for artifact_type, cb in self.artifact_checks.items():
+            category = self._artifact_category(artifact_type)
+            if category == 'ai_activity':
+                continue
+            if category in categories and self._is_artifact_allowed(artifact_type):
+                info = ARTIFACT_TYPES.get(artifact_type, {})
+                cb.setEnabled(True)
+                if not cb.isChecked() and info.get('default_enabled') is not False:
+                    cb.setChecked(True)
+            if category not in categories:
+                cb.setChecked(False)
+                cb.setEnabled(False)
+                info = ARTIFACT_TYPES.get(artifact_type, {})
+                tooltip = info.get('description', '')
+                cb.setToolTip((tooltip + " | " if tooltip else "") + "Not applicable to the selected evidence source")
+
+    def _category_label(self, category: str) -> str:
+        labels = {
+            'windows': 'Windows',
+            'android': 'Android',
+            'ios': 'iOS',
+            'linux': 'Linux',
+            'macos': 'macOS',
+            'ai_activity': 'AI Activity',
+        }
+        return labels.get(category, category or 'Unknown')
+
+    def _format_category_scope(self, categories: set) -> str:
+        order = ['windows', 'android', 'ios', 'linux', 'macos']
+        return ', '.join(self._category_label(c) for c in order if c in categories) or 'Unspecified'
+
+    def _set_source_scope_label(self, text: str, tone: str = 'info') -> None:
+        if not hasattr(self, 'source_scope_label'):
+            return
+        color_key = {
+            'success': 'success',
+            'warning': 'warning',
+            'error': 'error',
+            'info': 'info',
+        }.get(tone, 'info')
+        bg_key = f'{color_key}_bg'
+        self.source_scope_label.setText(text)
+        self.source_scope_label.setStyleSheet(
+            f"background: {COLORS.get(bg_key, COLORS['bg_secondary'])}; "
+            f"color: {COLORS.get(color_key, COLORS['text_secondary'])}; "
+            f"font-size: 9px; border-radius: 4px; padding: 4px 8px;"
+        )
+
+    def _update_source_scope_status(self, selected_devices: Optional[list] = None) -> None:
+        devices = selected_devices if selected_devices is not None else self.device_manager.get_selected_devices()
+        if not devices:
+            self._set_source_scope_label(
+                'Select an evidence source to load the applicable collection scope.',
+                'info',
+            )
+            return
+
+        categories = self._selected_source_categories(devices)
+        unknown_images = [d for d in devices if self._is_unknown_os_image_source(d)]
+        if unknown_images:
+            names = ', '.join(d.display_name for d in unknown_images[:2])
+            suffix = '...' if len(unknown_images) > 2 else ''
+            self._set_source_scope_label(
+                f'OS not identified for {len(unknown_images)} image source(s): {names}{suffix}. '
+                f'Full collection scope is enabled: {self._format_category_scope(categories)}.',
+                'warning',
+            )
+            return
+
+        self._set_source_scope_label(
+            f'Collection scope: {self._format_category_scope(categories)}. '
+            f'{len(devices)} evidence source(s) selected.',
+            'success',
+        )
+
+    def _artifact_count_for_source(self, device, selected_artifacts: list) -> int:
+        categories = self._source_categories_for_device(device)
+        if not categories:
+            return len(selected_artifacts)
+        return sum(1 for artifact_type in selected_artifacts if self._artifact_category(artifact_type) in categories)
+
+    def _device_type_label(self, device) -> str:
+        device_type = getattr(device, 'device_type', None)
+        if device_type is None:
+            return 'Unknown source'
+        return device_type.name.replace('_', ' ').title()
+
+    def _detected_os_label(self, device) -> str:
+        metadata = getattr(device, 'metadata', None) or {}
+        detected_os = str(metadata.get('detected_os') or '').lower()
+        if detected_os in ('windows', 'linux', 'macos'):
+            return self._category_label(detected_os)
+        if self._is_unknown_os_image_source(device):
+            return 'Unknown - full scope'
+        return metadata.get('os_family') or metadata.get('platform') or 'N/A'
+
+    def _build_collection_plan_lines(self, selected_devices: list, selected_artifacts: list) -> list:
+        lines = []
+        for index, device in enumerate(selected_devices, 1):
+            categories = self._source_categories_for_device(device)
+            artifact_count = self._artifact_count_for_source(device, selected_artifacts)
+            size = getattr(device, 'size_display', '') or 'size unknown'
+            lines.append(
+                f"{index}. {device.display_name} | {self._device_type_label(device)} | "
+                f"OS: {self._detected_os_label(device)} | "
+                f"scope: {self._format_category_scope(categories)} | "
+                f"artifacts: {artifact_count} | {size}"
+            )
+        return lines
+
+    def _collection_preflight_warnings(self, selected_devices: list, selected_artifacts: list) -> list:
+        warnings = []
+        if len(selected_devices) > 1:
+            warnings.append('Multiple evidence sources will be collected into the same case. Confirm they belong to the same investigation scope.')
+
+        unknown_count = sum(1 for d in selected_devices if self._is_unknown_os_image_source(d))
+        if unknown_count:
+            warnings.append('One or more image sources have unknown OS. Full profile mode is enabled to avoid missed collection; it may take longer.')
+
+        requires_admin = any(getattr(d, 'requires_admin', False) for d in selected_devices)
+        if requires_admin:
+            try:
+                from utils.privilege import is_admin
+                admin_ok = is_admin()
+            except Exception:
+                admin_ok = None
+            if admin_ok is False:
+                warnings.append('Administrator/root privileges are not active. Physical disk and local filesystem collection may be incomplete.')
+            elif admin_ok is None:
+                warnings.append('Administrator/root privilege state could not be verified before collection.')
+
+        android_nonroot = [
+            d for d in selected_devices
+            if d.device_type == DeviceType.ANDROID_DEVICE and not (getattr(d, 'metadata', None) or {}).get('rooted')
+        ]
+        if android_nonroot:
+            warnings.append('Android non-root mode is selected. Root-only app databases will be skipped when unavailable.')
+
+        if any(d.device_type == DeviceType.IOS_DEVICE for d in selected_devices):
+            warnings.append('iOS USB collection uses backup-based extraction. Keep the device unlocked and trusted until preparation completes.')
+
+        if not selected_artifacts:
+            warnings.append('No artifacts are selected.')
+
+        return warnings
+
+    def _confirm_collection_plan(self, selected_devices: list, selected_artifacts: list) -> bool:
+        lines = self._build_collection_plan_lines(selected_devices, selected_artifacts)
+        warnings = self._collection_preflight_warnings(selected_devices, selected_artifacts)
+
+        body = 'Review the collection plan before starting.\n\n'
+        body += '\n'.join(lines[:12])
+        if len(lines) > 12:
+            body += f"\n... and {len(lines) - 12} more source(s)"
+        if warnings:
+            body += '\n\nPreflight notes:\n' + '\n'.join(f'- {w}' for w in warnings)
+        body += '\n\nContinue collection?'
+
+        confirm = QMessageBox.question(
+            self,
+            'Review Collection Plan',
+            body,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return confirm == QMessageBox.StandardButton.Yes
+
+    def _set_collection_inputs_locked(self, locked: bool) -> None:
+        for attr in ('device_group', 'token_group', 'artifacts_group'):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setEnabled(not locked)
+        if hasattr(self, 'collect_btn'):
+            self.collect_btn.setEnabled(False if locked else self.collect_btn.isEnabled())
+
     def _update_platform_tab_states(self):
         """
         Auto-navigate to relevant platform tab based on selected device
@@ -1175,6 +1438,12 @@ class CollectorWindow(QMainWindow):
 
         # Update iOS tab info label
         self._update_ios_info_label(ios_bundle, selected_devices)
+
+        # Keep the artifact list scoped to the selected evidence source.
+        # Example: iOS USB on a Windows PC must not leave Windows artifacts
+        # checked from the host profile.
+        self._apply_selected_source_scope(selected_devices)
+        self._update_source_scope_status(selected_devices)
 
         # Auto-navigate to detected tab (only if different from current)
         if target_tab is not None and self.artifacts_tab.currentIndex() != target_tab:
@@ -1351,6 +1620,9 @@ class CollectorWindow(QMainWindow):
 
     def _update_collect_button_state(self):
         """Update collect button state"""
+        if getattr(self, '_collection_starting', False) or getattr(self, '_collection_running', False):
+            self.collect_btn.setEnabled(False)
+            return
         has_token = self.collection_token is not None
         has_devices = len(self.device_manager.get_selected_devices()) > 0
         has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
@@ -1691,7 +1963,7 @@ class CollectorWindow(QMainWindow):
                         mapped_allowed.add(artifact_type)
 
             # Allow all artifacts if 'all' is included or allowed_artifacts is empty
-            allow_all = 'all' in self.allowed_artifacts or not result.allowed_artifacts
+            allow_all = 'all' in self.allowed_artifacts or '*' in self.allowed_artifacts or not result.allowed_artifacts
             self._allow_all_artifacts = allow_all
             self._mapped_allowed_artifacts = mapped_allowed
 
@@ -1742,6 +2014,38 @@ class CollectorWindow(QMainWindow):
         self.validate_btn.setEnabled(True)
 
     def _start_collection(self):
+        """Start collection with a guard against duplicate clicks."""
+        if getattr(self, '_collection_starting', False) or getattr(self, '_collection_running', False):
+            self._log("Collection is already starting or running; duplicate click ignored.")
+            return
+
+        self._collection_starting = True
+        self._set_collection_inputs_locked(True)
+        self.collect_btn.setEnabled(False)
+        self.validate_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        QApplication.processEvents()
+
+        worker_started = False
+        try:
+            worker_started = bool(self._start_collection_impl())
+        except Exception as exc:
+            self._log(f"Collection start failed: {exc}", error=True)
+            QMessageBox.critical(self, "Collection Start Failed", str(exc))
+            worker_started = False
+        finally:
+            if worker_started:
+                self._collection_starting = False
+                self._collection_running = True
+            else:
+                self._collection_starting = False
+                self._collection_running = False
+                self._set_collection_inputs_locked(False)
+                self.validate_btn.setEnabled(True)
+                self.cancel_btn.setEnabled(False)
+                self._update_collect_button_state()
+
+    def _start_collection_impl(self):
         """Start the collection process"""
         # === Session validation (required before collection start) ===
         # Detect cancelled cases, expired sessions, etc.
@@ -1789,37 +2093,20 @@ class CollectorWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Please select at least one device")
             return
 
+        self._apply_selected_source_scope(selected_devices, force=True)
         selected = [k for k, cb in self.artifact_checks.items() if cb.isChecked()]
         if not selected:
             QMessageBox.warning(self, "Error", "Please select at least one artifact type")
             return
 
         self._log_mobile_preflight(selected_devices, selected)
+        self._update_source_scope_status(selected_devices)
 
-        # Confirm selected devices (show clearly when multiple)
-        if len(selected_devices) > 1:
-            device_list = "\n".join([f"  • {d.display_name}" for d in selected_devices])
-            confirm = QMessageBox.question(
-                self,
-                "Confirm Collection Targets",
-                f"Collecting from {len(selected_devices)} device(s):\n\n{device_list}\n\n"
-                f"Selected artifacts: {len(selected)}\n\n"
-                "Evidence scope warning:\n"
-                "Only continue if all selected sources belong to the same "
-                "investigation scope.\n"
-                "Uncheck any unrelated device, disk image, or removable media "
-                "before starting collection.\n\n"
-                f"Continue?\n\n"
-                f"(To collect from specific devices only, select 'No'\n"
-                f"and uncheck unwanted devices)",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if confirm != QMessageBox.StandardButton.Yes:
-                self._log("Collection cancelled: User wants to reconfirm device selection")
-                return
+        if not self._confirm_collection_plan(selected_devices, selected):
+            self._log("Collection cancelled: User did not confirm the collection plan")
+            return
 
-        self._log(f"Starting collection from {len(selected_devices)} device(s)")
+        self._log(f"Starting collection from {len(selected_devices)} evidence source(s)")
 
         # Legal consent check (required) - server API integration
         from gui.consent_dialog import show_consent_dialog
@@ -2421,7 +2708,12 @@ class CollectorWindow(QMainWindow):
                 self._log("Collection cancelled: Android device info dialog cancelled.")
                 return
 
-        self._log(f"Starting collection for: {', '.join(selected)}")
+        categories = self._selected_source_categories(selected_devices)
+        category_text = ", ".join(sorted(categories)) if categories else "unspecified"
+        self._log(
+            f"Starting collection: {len(selected_devices)} source(s), "
+            f"{len(selected)} selected artifact type(s), source scope: {category_text}"
+        )
 
         # Disable controls
         self.collect_btn.setEnabled(False)
@@ -2499,6 +2791,8 @@ class CollectorWindow(QMainWindow):
                 "Preparing iOS backup...\n"
                 "Connecting to device and checking encryption status."
             )
+
+        return True
 
     def _check_for_updates(self):
         """Check for updates via GitHub Releases API (background)"""
@@ -2721,6 +3015,9 @@ class CollectorWindow(QMainWindow):
 
     def _collection_finished(self, success: bool, message: str):
         """Handle collection completion"""
+        self._collection_starting = False
+        self._collection_running = False
+
         # Stop heartbeat timer and show final elapsed time
         self._heartbeat_timer.stop()
         if self._collection_start_time is not None:
@@ -2745,6 +3042,7 @@ class CollectorWindow(QMainWindow):
             self._bitlocker_auto_decrypt_used = False
 
         # Re-enable controls
+        self._set_collection_inputs_locked(False)
         self.collect_btn.setEnabled(False)  # Disable after collection complete/cancelled (new token required)
         self.cancel_btn.setEnabled(False)
         self.validate_btn.setEnabled(True)
@@ -3366,6 +3664,63 @@ class CollectionWorker(QThread):
             minutes = int((remaining % 3600) / 60)
             return f"{hours}h {minutes}m"
 
+    def _artifact_category(self, artifact_type: str) -> str:
+        info = ARTIFACT_TYPES.get(artifact_type, {})
+        category = str(info.get('category') or '').lower()
+        if category in ('windows', 'android', 'ios', 'linux', 'macos', 'ai_activity'):
+            return category
+        lowered = str(artifact_type or '').lower()
+        if lowered.startswith(('mobile_ios_', 'ios_')):
+            return 'ios'
+        if lowered.startswith(('mobile_android_', 'android_')):
+            return 'android'
+        if lowered.startswith('linux_'):
+            return 'linux'
+        if lowered.startswith('macos_'):
+            return 'macos'
+        return 'windows'
+
+    def _device_artifact_categories(self, device) -> set:
+        device_type = device.device_type
+        if device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
+            return {'windows'}
+        if device_type in (DeviceType.ANDROID_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_ANDROID):
+            return {'android'}
+        if device_type in (DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_IOS):
+            return {'ios'}
+        if device_type == DeviceType.LINUX_LOCAL_SYSTEM:
+            return {'linux'}
+        if device_type == DeviceType.MACOS_LOCAL_SYSTEM:
+            return {'macos'}
+        if device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
+                           DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
+                           DeviceType.VHDX_IMAGE, DeviceType.QCOW2_IMAGE,
+                           DeviceType.VDI_IMAGE, DeviceType.DMG_IMAGE):
+            detected_os = str(device.metadata.get('detected_os') or '').lower()
+            if detected_os in ('windows', 'linux', 'macos'):
+                return {detected_os}
+            # Fail-open for unknown images so collection does not miss
+            # evidence because OS detection was inconclusive. Inapplicable
+            # artifacts are skipped by the concrete collector.
+            return {'windows', 'android', 'ios', 'linux', 'macos'}
+        return set()
+
+    def _artifacts_for_device(self, device) -> List[str]:
+        categories = self._device_artifact_categories(device)
+        if not categories:
+            return list(self.artifacts)
+        filtered = [
+            artifact_type for artifact_type in self.artifacts
+            if self._artifact_category(artifact_type) in categories
+        ]
+        skipped = len(self.artifacts) - len(filtered)
+        if skipped:
+            self.log_message.emit(
+                f"[{device.display_name}] Skipped {skipped} artifact(s) not applicable to this source type.",
+                False,
+            )
+        return filtered
+
     def _create_collector_for_device(self, device, output_dir: str):
         """
         Create appropriate collector for device type
@@ -3690,7 +4045,11 @@ class CollectionWorker(QThread):
 
             # If devices are selected, collect per device
             if self.selected_devices:
-                total_items = len(self.selected_devices) * len(self.artifacts)
+                per_device_artifacts = {
+                    device.device_id: self._artifacts_for_device(device)
+                    for device in self.selected_devices
+                }
+                total_items = sum(len(items) for items in per_device_artifacts.values())
                 item_index = 0
 
                 for device in self.selected_devices:
@@ -3731,7 +4090,11 @@ class CollectionWorker(QThread):
                         except Exception as e:
                             self.log_message.emit(f"[{device_name}] Index build skipped: {e}", True)
 
-                    for artifact_type in self.artifacts:
+                    device_artifacts = per_device_artifacts.get(device.device_id, [])
+                    if not device_artifacts:
+                        self.log_message.emit(f"[{device_name}] No applicable artifacts selected for this source.", False)
+
+                    for artifact_type in device_artifacts:
                         if self._cancelled:
                             break
 

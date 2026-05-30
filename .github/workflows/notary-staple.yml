@@ -119,7 +119,7 @@ jobs:
         if: steps.wait.outputs.accepted == 'true'
         working-directory: pending
         run: |
-          DMG=$(ls IntelligenceCollector-*-macos-${ARCH}.dmg | head -1)
+          DMG=$(ls unJaena-Collector-*-macos-${ARCH}.dmg | head -1)
           if [ -z "$DMG" ]; then
             echo "No DMG found in pending artifact"
             exit 1
@@ -135,7 +135,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: |
-          DMG=$(ls IntelligenceCollector-*-macos-${ARCH}.dmg | head -1)
+          DMG=$(ls unJaena-Collector-*-macos-${ARCH}.dmg | head -1)
           NEW_HASH=$(shasum -a 256 "$DMG" | awk '{print $1}')
           echo "New DMG sha256: $NEW_HASH"
 
@@ -155,7 +155,7 @@ jobs:
 
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             "$DMG" SHA256SUMS.txt
-          TAR=$(ls IntelligenceCollector-*-macos-${ARCH}.tar.gz 2>/dev/null | head -1)
+          TAR=$(ls unJaena-Collector-*-macos-${ARCH}.tar.gz 2>/dev/null | head -1)
           if [ -n "$TAR" ]; then
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$TAR"
           fi

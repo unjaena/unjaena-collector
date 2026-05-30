@@ -3,7 +3,7 @@ chcp 65001 >nul 2>&1
 setlocal enabledelayedexpansion
 
 echo ============================================
-echo   Digital Forensics Collector - Windows
+echo   unJaena Collector - Windows
 echo ============================================
 echo.
 
