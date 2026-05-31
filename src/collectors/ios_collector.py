@@ -14,15 +14,8 @@ Collectible Artifacts:
 - mobile_ios_location: Location history
 - mobile_ios_backup: Backup metadata
 
-Messenger Apps:
-- mobile_ios_*: server-authorized mobile artifacts
-- mobile_ios_*: server-authorized mobile artifacts
-- mobile_ios_messenger: Facebook Messenger messages
-- mobile_ios_telegram: Telegram messages
-- mobile_ios_line: LINE messages
-- mobile_ios_instagram: Instagram messages
-- mobile_ios_skype: Skype messages
-- mobile_ios_snapchat: Snapchat messages
+Mobile Application Artifacts:
+- mobile_ios_*: server-authorized mobile artifacts supplied by the collection profile
 
 [Direct Device Connection - pymobiledevice3]
 - mobile_ios_device_info: Device information

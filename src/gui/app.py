@@ -203,7 +203,7 @@ class CollectorWindow(QMainWindow):
         device_layout.setSpacing(4)
 
         self.device_panel = DeviceListPanel(self.device_manager)
-        self.device_panel.selection_changed.connect(self._on_device_selection_changed)
+        self.device_manager.selection_changed.connect(self._on_device_selection_changed)
         self.device_panel.image_file_requested.connect(self._on_image_file_added)
         device_layout.addWidget(self.device_panel)
 
@@ -502,6 +502,15 @@ class CollectorWindow(QMainWindow):
 
         if self.artifacts_tab.count():
             self.artifacts_tab.setCurrentIndex(min(current_index, self.artifacts_tab.count() - 1))
+
+        self._wire_artifact_checkbox_state_handlers()
+
+    def _wire_artifact_checkbox_state_handlers(self) -> None:
+        for cb in self.artifact_checks.values():
+            cb.stateChanged.connect(self._on_artifact_selection_changed)
+
+    def _on_artifact_selection_changed(self, _state: int = 0) -> None:
+        self._update_collect_button_state()
 
     def _create_windows_tab(self) -> QWidget:
         """Create Windows artifacts tab"""
@@ -1619,15 +1628,38 @@ class CollectorWindow(QMainWindow):
         self._disable_ios_artifacts_without_source()
 
     def _update_collect_button_state(self):
-        """Update collect button state"""
+        """Update collect button state and explain why it is disabled."""
         if getattr(self, '_collection_starting', False) or getattr(self, '_collection_running', False):
             self.collect_btn.setEnabled(False)
+            self.collect_btn.setToolTip("Collection is already starting or running")
             return
+
         has_token = self.collection_token is not None
         has_devices = len(self.device_manager.get_selected_devices()) > 0
-        has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
+        has_artifacts = bool(self._selected_artifact_types())
+        ready = has_token and has_devices and has_artifacts
 
-        self.collect_btn.setEnabled(has_token and has_devices and has_artifacts)
+        self.collect_btn.setEnabled(ready)
+        if ready:
+            self.collect_btn.setToolTip("Ready to start collection")
+            return
+
+        missing = []
+        if not has_token:
+            missing.append("authenticate the session token")
+        if not has_devices:
+            missing.append("select at least one evidence source")
+        if not has_artifacts:
+            missing.append("select at least one artifact")
+        self.collect_btn.setToolTip("Start Collection is disabled: " + ", ".join(missing))
+
+    def _selected_artifact_types(self) -> list:
+        """Return artifact types that are both enabled by policy/source and selected."""
+        return [
+            artifact_type
+            for artifact_type, cb in self.artifact_checks.items()
+            if cb.isEnabled() and cb.isChecked()
+        ]
 
     def _log_mobile_preflight(self, selected_devices: list, selected_artifacts: list):
         """Log mobile collection readiness without changing collection behavior."""
@@ -1811,15 +1843,79 @@ class CollectorWindow(QMainWindow):
 
             cb.setChecked(checked)
 
+        self._update_collect_button_state()
+
+    def _privacy_incident_candidates(self) -> set:
+        enabled_artifacts = {
+            artifact_type
+            for artifact_type, cb in self.artifact_checks.items()
+            if cb.isEnabled()
+        }
+        if not enabled_artifacts:
+            return set()
+
+        categories = self._selected_source_categories()
+        def in_selected_scope(artifact_type: str) -> bool:
+            if not categories:
+                return True
+            category = self._artifact_category(artifact_type)
+            return category in categories or category == 'ai_activity'
+
+        explicit = {
+            artifact_type for artifact_type in PRIVACY_INCIDENT_PRESET
+            if artifact_type in enabled_artifacts and in_selected_scope(artifact_type)
+        }
+        if explicit:
+            return explicit
+
+        subcategories = {
+            'system', 'filesystem', 'pc_messenger', 'pc_apps', 'basic',
+            'core', 'messenger', 'sns', 'email_browser', 'app_messenger',
+            'app_email_browser', 'productivity', 'korean', 'developer',
+        }
+        keywords = (
+            'account', 'browser', 'chat', 'cloud', 'contact', 'credential',
+            'document', 'download', 'email', 'event', 'file', 'history',
+            'login', 'media', 'message', 'network', 'profile', 'recent',
+            'timeline', 'transfer', 'usb', 'user', 'wifi',
+        )
+
+        candidates = set()
+        for artifact_type in enabled_artifacts:
+            if not in_selected_scope(artifact_type):
+                continue
+            info = ARTIFACT_TYPES.get(artifact_type, {})
+            subcategory = str(info.get('subcategory') or '').lower()
+            haystack = ' '.join((
+                artifact_type,
+                str(info.get('name') or ''),
+                str(info.get('description') or ''),
+                subcategory,
+            )).lower()
+            if subcategory in subcategories or any(keyword in haystack for keyword in keywords):
+                candidates.add(artifact_type)
+
+        if candidates:
+            return candidates
+
+        # Last-resort UX fallback: never let the preset clear the whole plan.
+        return {artifact_type for artifact_type in enabled_artifacts if in_selected_scope(artifact_type)}
+
     def _apply_privacy_incident_preset(self):
         """Select a focused set of artifacts for personal-data breach triage."""
+        candidates = self._privacy_incident_candidates()
         selected_count = 0
         skipped_count = 0
+
+        if not candidates:
+            self._log("Privacy incident preset unavailable: no enabled artifacts for the selected source", error=True)
+            self._update_collect_button_state()
+            return
 
         for artifact_type, cb in self.artifact_checks.items():
             if not cb.isEnabled():
                 continue
-            should_select = artifact_type in PRIVACY_INCIDENT_PRESET
+            should_select = artifact_type in candidates
             cb.setChecked(should_select)
             if should_select:
                 selected_count += 1
@@ -2094,7 +2190,7 @@ class CollectorWindow(QMainWindow):
             return
 
         self._apply_selected_source_scope(selected_devices, force=True)
-        selected = [k for k, cb in self.artifact_checks.items() if cb.isChecked()]
+        selected = self._selected_artifact_types()
         if not selected:
             QMessageBox.warning(self, "Error", "Please select at least one artifact type")
             return
