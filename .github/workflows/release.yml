@@ -256,12 +256,26 @@ jobs:
           DMG_NAME="unJaena-Collector-${VERSION}-macos-${ARCH}.dmg"
 
           if [ -d "unJaena Collector.app" ]; then
-            # hdiutil is less decorative than create-dmg, but it is deterministic
-            # on both GitHub macOS ARM and Intel runners and avoids Finder/DS_Store hangs.
-            hdiutil create -volname "unJaena Collector" \
-              -srcfolder "unJaena Collector.app" \
-              -ov -format UDZO \
-              "${DMG_NAME}"
+            # hdiutil can intermittently return "Resource busy" on hosted
+            # macOS Intel runners immediately after signing large PyQt apps.
+            # Retry after flushing and clearing stale diskimages-helper state
+            # instead of publishing a release without the Intel DMG.
+            rm -f "${DMG_NAME}"
+            for attempt in 1 2 3; do
+              echo "[DMG] Creating ${DMG_NAME} (attempt ${attempt}/3)"
+              if hdiutil create -volname "unJaena Collector" \
+                -srcfolder "unJaena Collector.app" \
+                -ov -format UDZO \
+                "${DMG_NAME}"; then
+                break
+              fi
+              echo "[DMG] hdiutil create failed; waiting before retry"
+              sync || true
+              pkill -f diskimages-helper || true
+              sleep $((attempt * 10))
+              rm -f "${DMG_NAME}"
+            done
+            test -f "${DMG_NAME}"
           else
             chmod +x unjaena-collector
             tar czf "unJaena-Collector-${VERSION}-macos-${ARCH}.tar.gz" unjaena-collector
