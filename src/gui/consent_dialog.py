@@ -17,72 +17,14 @@ import logging
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
-    QPushButton, QTextEdit, QFrame, QScrollArea, QWidget,
+    QPushButton, QFrame, QScrollArea, QWidget,
     QComboBox, QMessageBox, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QSize, QTimer, QRectF, QPointF
-from PyQt6.QtGui import QPainter, QPen, QBrush, QColor
+from PyQt6.QtCore import Qt, QSize, QTimer
 
 from gui.styles import COLORS
 
 logger = logging.getLogger(__name__)
-
-
-class ConsentCheckBox(QCheckBox):
-    """Checkbox with a guaranteed visible indicator on dark themed dialogs."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setText("")
-        self.setObjectName("consentCheck")
-        self.setFixedSize(30, 30)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setStyleSheet("background: transparent; border: none; padding: 0; margin: 0;")
-
-    def sizeHint(self) -> QSize:
-        return QSize(30, 30)
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        opacity = 1.0 if self.isEnabled() else 0.45
-        painter.setOpacity(opacity)
-
-        rect = QRectF(4.0, 4.0, 22.0, 22.0)
-        border_color = COLORS.get("border_default", "#484f58")
-        bg_color = COLORS.get("bg_primary", "#0d1117")
-        hover_color = COLORS.get("bg_tertiary", "#21262d")
-        fill_color = COLORS.get("brand_primary", "#d4a574")
-        accent_color = COLORS.get("brand_accent", "#e8c49a")
-
-        if self.isChecked():
-            painter.setBrush(QBrush(QColor(fill_color)))
-            painter.setPen(QPen(QColor(accent_color), 2.0))
-        else:
-            painter.setBrush(QBrush(QColor(hover_color if self.underMouse() else bg_color)))
-            painter.setPen(QPen(QColor(border_color), 2.0))
-        painter.drawRoundedRect(rect, 4.0, 4.0)
-
-        if self.isChecked():
-            painter.setPen(
-                QPen(
-                    QColor(COLORS.get("bg_primary", "#0d1117")),
-                    2.8,
-                    Qt.PenStyle.SolidLine,
-                    Qt.PenCapStyle.RoundCap,
-                    Qt.PenJoinStyle.RoundJoin,
-                )
-            )
-            painter.drawLine(QPointF(9.0, 15.2), QPointF(13.0, 19.0))
-            painter.drawLine(QPointF(13.0, 19.0), QPointF(21.0, 10.8))
-
-        if self.hasFocus():
-            focus_rect = QRectF(1.5, 1.5, 27.0, 27.0)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor(accent_color), 1.4))
-            painter.drawRoundedRect(focus_rect, 6.0, 6.0)
 
 
 class ConsentDialog(QDialog):
@@ -147,139 +89,132 @@ class ConsentDialog(QDialog):
         self.setup_ui()
 
     def setup_ui(self):
-        """Initialize UI (with server API integration)"""
-        self.setWindowTitle("AI Forensic Lab - Data Collection Consent")
-        self.setMinimumSize(QSize(860, 720))
-        self.setMaximumSize(QSize(1160, 920))
-        self.resize(QSize(920, 780))
+        """Initialize UI with a single scroll body and fixed footer."""
+        self.setWindowTitle("Digital Forensic Collection Consent")
+        self.setMinimumSize(QSize(760, 620))
+        self.resize(QSize(800, 680))
         self.setModal(True)
-        self.setSizeGripEnabled(False)
+        self.setSizeGripEnabled(True)
         self.setStyleSheet(self._get_stylesheet())
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        # Header + language selection
-        header_layout = QHBoxLayout()
+        self.header_frame = QFrame()
+        self.header_frame.setObjectName("consentHeaderFrame")
+        header_layout = QHBoxLayout(self.header_frame)
+        header_layout.setContentsMargins(20, 16, 20, 14)
+        header_layout.setSpacing(12)
 
-        self.header_label = QLabel("AI Forensic Lab - Data Collection Consent")
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(4)
+        self.header_label = QLabel("Digital Forensic Collection Consent")
         self.header_label.setObjectName("header")
         self.header_label.setWordWrap(True)
-        header_layout.addWidget(self.header_label)
+        self.header_subtitle = QLabel("Review and confirm the collection scope before starting.")
+        self.header_subtitle.setObjectName("headerSubtitle")
+        self.header_subtitle.setWordWrap(True)
+        title_box.addWidget(self.header_label)
+        title_box.addWidget(self.header_subtitle)
+        header_layout.addLayout(title_box, 1)
 
-        header_layout.addStretch()
-
-        # Language selection dropdown
-        lang_label = QLabel("Language:")
-        lang_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        header_layout.addWidget(lang_label)
+        lang_label = QLabel("Language")
+        lang_label.setObjectName("fieldLabel")
+        header_layout.addWidget(lang_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.lang_combo = QComboBox()
-        self.lang_combo.setMinimumWidth(100)
+        self.lang_combo.setMinimumWidth(120)
+        self.lang_combo.setFixedHeight(32)
         for code, name in self.LANGUAGES.items():
             self.lang_combo.addItem(name, code)
-        # Select current language
         idx = self.lang_combo.findData(self.language)
         if idx >= 0:
             self.lang_combo.setCurrentIndex(idx)
         self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
-        header_layout.addWidget(self.lang_combo)
+        header_layout.addWidget(self.lang_combo, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.header_frame, 0)
 
-        layout.addLayout(header_layout)
+        self.body_scroll = QScrollArea()
+        self.body_scroll.setObjectName("bodyScroll")
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.body_widget = QWidget()
+        self.body_widget.setObjectName("bodyWidget")
+        self.body_layout = QVBoxLayout(self.body_widget)
+        self.body_layout.setContentsMargins(20, 16, 20, 16)
+        self.body_layout.setSpacing(12)
+        self.body_scroll.setWidget(self.body_widget)
+        layout.addWidget(self.body_scroll, 1)
 
-        # Warning banner
         self.warning_frame = QFrame()
         self.warning_frame.setObjectName("warningFrame")
-        warning_layout = QHBoxLayout(self.warning_frame)
+        warning_layout = QVBoxLayout(self.warning_frame)
+        warning_layout.setContentsMargins(12, 10, 12, 10)
+        warning_layout.setSpacing(0)
         self.warning_label = QLabel(
-            "Warning: This tool collects analysis data from your system.\n"
-            "Please read and agree to the terms below before proceeding."
+            "This tool collects and uploads selected forensic data. "
+            "Confirm that you have authority before proceeding."
         )
         self.warning_label.setObjectName("warningText")
         self.warning_label.setWordWrap(True)
         warning_layout.addWidget(self.warning_label)
-        layout.addWidget(self.warning_frame)
+        self.body_layout.addWidget(self.warning_frame)
 
-        self.consent_text = QTextEdit()
-        self.consent_text.setObjectName("consentDocument")
-        self.consent_text.setReadOnly(True)
-        self.consent_text.setMinimumHeight(160)
-        self.consent_text.setMaximumHeight(260)
-        self.consent_text.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        layout.addWidget(self.consent_text, 1)
-
-        # ------------------------------------------------------------------
-        # Operator role + legal basis + international transfer acknowledgment
-        # ------------------------------------------------------------------
-        # [2026-04-20] Forensic-legal integrity. The consent record MUST
-        # capture WHO is performing the collection and UNDER WHAT AUTHORITY,
-        # so that later review (court, opposing counsel, DPO) can determine
-        # whether the operator had standing to collect from this device.
-        # Previous builds stored `operator_role="unspecified"` silently;
-        # this block binds the fields at collection time.
-        self._build_operator_section(layout)
-
-        # Checkbox area (dynamically generated from server items)
-        # [2026-04-27 Round 6.6] Each consent item can be a full sentence
-        # (e.g. "I consent to the international transfer of my collected
-        # data to the United States in accordance with PIPA Article 28
-        # and GDPR Article 49(1)(a) ..."). QCheckBox does not natively
-        # word-wrap its label, so long items were truncated to a single
-        # line and the operator could not see what they were agreeing
-        # to. We wrap the entire panel in a ScrollArea (so adding new
-        # items doesn't push the buttons off-screen) and the checkbox
-        # itself is paired with a wrapping QLabel in _add_consent_item().
-        self.checkbox_scroll = QScrollArea()
-        self.checkbox_scroll.setObjectName("checkboxScroll")
-        self.checkbox_scroll.setWidgetResizable(True)
-        self.checkbox_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.checkbox_scroll.setMinimumHeight(170)
-        self.checkbox_scroll.setMaximumHeight(240)
-        self.checkbox_scroll.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self._build_operator_section(self.body_layout)
 
         self.checkbox_frame = QFrame()
         self.checkbox_frame.setObjectName("checkboxFrame")
         self.checkbox_layout = QVBoxLayout(self.checkbox_frame)
-        self.checkbox_layout.setContentsMargins(10, 10, 10, 10)
+        self.checkbox_layout.setContentsMargins(12, 12, 12, 12)
         self.checkbox_layout.setSpacing(8)
-        self.checkbox_frame.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
-        )
-        self.checkbox_scroll.setWidget(self.checkbox_frame)
-        layout.addWidget(self.checkbox_scroll, 0)
+        self.body_layout.addWidget(self.checkbox_frame)
 
-        # Buttons
+        self.document_frame = QFrame()
+        self.document_frame.setObjectName("documentFrame")
+        document_layout = QVBoxLayout(self.document_frame)
+        document_layout.setContentsMargins(14, 12, 14, 12)
+        document_layout.setSpacing(8)
+        self.document_title = QLabel("Consent details")
+        self.document_title.setObjectName("sectionTitle")
+        document_layout.addWidget(self.document_title)
+        self.consent_text = QLabel()
+        self.consent_text.setObjectName("consentDocument")
+        self.consent_text.setTextFormat(Qt.TextFormat.RichText)
+        self.consent_text.setWordWrap(True)
+        self.consent_text.setOpenExternalLinks(False)
+        self.consent_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.consent_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        document_layout.addWidget(self.consent_text)
+        self.body_layout.addWidget(self.document_frame)
+        self.body_layout.addStretch(1)
+
         self.footer_frame = QFrame()
         self.footer_frame.setObjectName("footerFrame")
+        self.footer_frame.setFixedHeight(64)
         button_layout = QHBoxLayout(self.footer_frame)
-        button_layout.setContentsMargins(0, 8, 0, 0)
+        button_layout.setContentsMargins(20, 12, 20, 12)
         button_layout.setSpacing(10)
         button_layout.addStretch(1)
 
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
-        self.cancel_btn.setMinimumWidth(120)
-        self.cancel_btn.setFixedHeight(36)
-        self.cancel_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.cancel_btn.setFixedSize(120, 40)
         button_layout.addWidget(self.cancel_btn)
 
-        self.agree_btn = QPushButton("Agree and Start Collection")
+        self.agree_btn = QPushButton("Agree and Start")
         self.agree_btn.setObjectName("agreeButton")
         self.agree_btn.setEnabled(False)
         self.agree_btn.clicked.connect(self._on_agree)
-        self.agree_btn.setMinimumWidth(240)
-        self.agree_btn.setFixedHeight(36)
-        self.agree_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.agree_btn.setFixedSize(220, 40)
         button_layout.addWidget(self.agree_btn)
-
         layout.addWidget(self.footer_frame, 0)
 
-        # Load consent template from server
+        # Backward-compatible alias used by older smoke checks.
+        self.checkbox_scroll = self.body_scroll
+
         self._load_consent_template()
 
     def _target_screen(self):
@@ -322,10 +257,7 @@ class ConsentDialog(QDialog):
 
     def _load_consent_template(self):
         """Load consent template from server"""
-        # Remove existing checkboxes
-        for cb in self.checkboxes:
-            cb.deleteLater()
-        self.checkboxes.clear()
+        # The target template path resets checkbox rows atomically.
 
         if self.server_url:
             try:
@@ -357,6 +289,20 @@ class ConsentDialog(QDialog):
             logger.error(f"Failed to fetch consent template: {e}")
             return None
 
+    def _reset_checkbox_layout(self) -> None:
+        while self.checkbox_layout.count() > 0:
+            item = self.checkbox_layout.takeAt(0)
+            if item is None:
+                break
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self.checkboxes.clear()
+        title = QLabel("Required confirmations")
+        title.setObjectName("sectionTitle")
+        self.checkbox_layout.addWidget(title)
+
     def _apply_template(self, template: dict):
         """Apply server template"""
         self.template_id = template.get("id")
@@ -365,36 +311,27 @@ class ConsentDialog(QDialog):
         self.required_checkboxes = template.get("required_checkboxes", [])
 
         # Update header
-        self.header_label.setText(template.get("title", "AI Forensic Lab - Data Collection Consent"))
-        self.setWindowTitle(template.get("title", "Consent"))
+        template_title = template.get("title", "Digital Forensic Collection Consent")
+        self.header_label.setText("Digital Forensic Collection Consent")
+        if hasattr(self, "header_subtitle"):
+            self.header_subtitle.setText(template_title)
+        self.setWindowTitle(template_title)
 
         # Display consent content (Markdown to HTML)
         content = template.get("content", "")
         html_content = self._markdown_to_html(content)
-        self.consent_text.setHtml(html_content)
+        self.consent_text.setText(html_content)
 
-        # Generate dynamic checkboxes (full-text wrapping via _add_consent_item)
-        # [2026-04-27 Round 6.6] Drop existing widgets before re-rendering
-        # so language switches don't accumulate stale rows.
-        while self.checkbox_layout.count() > 0:
-            item = self.checkbox_layout.takeAt(0)
-            if item is None:
-                break
-            w = item.widget()
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
-        self.checkboxes.clear()
-
+        self._reset_checkbox_layout()
         for item_text in self.required_checkboxes:
             self._add_consent_item(item_text)
 
         # Button text (by language)
         btn_texts = {
-            "ko": ("Cancel", "Agree and Start Collection"),
-            "ja": ("キャンセル", "同意して収集を開始"),
-            "zh": ("取消", "同意并开始收集"),
-            "en": ("Cancel", "Agree and Start Collection")
+            "ko": ("Cancel", "Agree and Start"),
+            "ja": ("キャンセル", "同意して開始"),
+            "zh": ("取消", "同意并开始"),
+            "en": ("Cancel", "Agree and Start")
         }
         cancel_text, agree_text = btn_texts.get(self.language, btn_texts["en"])
         self.cancel_btn.setText(cancel_text)
@@ -425,15 +362,18 @@ class ConsentDialog(QDialog):
         }
         msg = fallback_msgs.get(self.language, fallback_msgs['en'])
 
-        self.header_label.setText("AI Forensic Lab - Data Collection Consent")
-        self.setWindowTitle("AI Forensic Lab - Data Collection Consent")
-        self.consent_text.setHtml(
+        self.header_label.setText("Digital Forensic Collection Consent")
+        if hasattr(self, "header_subtitle"):
+            self.header_subtitle.setText("Consent template unavailable")
+        self.setWindowTitle("Digital Forensic Collection Consent")
+        self.consent_text.setText(
             f'<div style="text-align:center;padding:40px;color:#ff6b6b;font-size:14px;">{msg}</div>'
         )
+        self._reset_checkbox_layout()
 
         # Disable agree button -- user must connect to server
         self.agree_btn.setEnabled(False)
-        self.agree_btn.setText("Agree and Start Collection")
+        self.agree_btn.setText("Agree and Start")
         self.cancel_btn.setText("Cancel")
 
     @staticmethod
@@ -745,97 +685,82 @@ class ConsentDialog(QDialog):
 
     def _build_operator_section(self, parent_layout) -> None:
         """Render the operator-authorization section of the dialog."""
-        from PyQt6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QComboBox
-
         frame = QFrame()
         frame.setObjectName("operatorFrame")
-        frame.setStyleSheet(
-            f"""
-            QFrame#operatorFrame {{
-                background-color: {COLORS.get('bg_secondary', '#161b22')};
-                border: 1px solid {COLORS.get('border_subtle', '#30363d')};
-                border-radius: 8px;
-            }}
-            """
-        )
         vbox = QVBoxLayout(frame)
-        vbox.setContentsMargins(12, 10, 12, 10)
-        vbox.setSpacing(8)
+        vbox.setContentsMargins(12, 12, 12, 12)
+        vbox.setSpacing(10)
 
         self._operator_section_title = QLabel(self._OPERATOR_LABELS["section_title"][self.language])
-        self._operator_section_title.setStyleSheet(
-            f"color: {COLORS.get('brand_primary', '#d4a574')}; font-weight: 600; font-size: 13px;"
-        )
+        self._operator_section_title.setObjectName("sectionTitle")
         vbox.addWidget(self._operator_section_title)
 
         self._role_label_widget = QLabel(self._OPERATOR_LABELS["role_label"][self.language])
-        self._role_label_widget.setStyleSheet(f"color: {COLORS.get('text_secondary', '#8b949e')}; font-size: 12px;")
-        self._role_label_widget.setMinimumWidth(190)
-        self._role_label_widget.setWordWrap(True)
-
+        self._role_label_widget.setObjectName("fieldLabel")
         self.role_combo = QComboBox()
-        self.role_combo.setMinimumHeight(30)
+        self.role_combo.setFixedHeight(32)
         for value, key, _ in self._ROLE_OPTIONS:
             label = self._ROLE_LABELS_LOCALIZED[self.language].get(key, value)
             self.role_combo.addItem(label, value)
         self.role_combo.currentIndexChanged.connect(self._on_role_changed)
-
-        role_row = QHBoxLayout()
-        role_row.setContentsMargins(0, 0, 0, 0)
-        role_row.setSpacing(10)
-        role_row.addWidget(self._role_label_widget, 0)
-        role_row.addWidget(self.role_combo, 1)
-        vbox.addLayout(role_row)
+        vbox.addLayout(self._form_row(self._role_label_widget, self.role_combo))
 
         self._basis_label_widget = QLabel(self._OPERATOR_LABELS["basis_label"][self.language])
-        self._basis_label_widget.setStyleSheet(f"color: {COLORS.get('text_secondary', '#8b949e')}; font-size: 12px;")
-        self._basis_label_widget.setMinimumWidth(190)
-        self._basis_label_widget.setWordWrap(True)
-
+        self._basis_label_widget.setObjectName("fieldLabel")
         self.basis_combo = QComboBox()
-        self.basis_combo.setMinimumHeight(30)
+        self.basis_combo.setFixedHeight(32)
         for value, key, _ in self._BASIS_OPTIONS:
             label = self._BASIS_LABELS_LOCALIZED[self.language].get(key, value)
             self.basis_combo.addItem(label, value)
         self.basis_combo.currentIndexChanged.connect(self._on_basis_changed)
-
-        basis_row = QHBoxLayout()
-        basis_row.setContentsMargins(0, 0, 0, 0)
-        basis_row.setSpacing(10)
-        basis_row.addWidget(self._basis_label_widget, 0)
-        basis_row.addWidget(self.basis_combo, 1)
-        vbox.addLayout(basis_row)
+        vbox.addLayout(self._form_row(self._basis_label_widget, self.basis_combo))
 
         transfer_text = self._OPERATOR_LABELS["transfer_label"][self.language]
-        self.transfer_checkbox = ConsentCheckBox()
-        self.transfer_checkbox.setToolTip(transfer_text)
+        transfer_row, self.transfer_checkbox, self._transfer_label_widget = self._make_check_row(transfer_text)
         self.transfer_checkbox.stateChanged.connect(self._on_transfer_changed)
-
-        self._transfer_label_widget = QLabel(transfer_text)
-        self._transfer_label_widget.setObjectName("consentLabel")
-        self._transfer_label_widget.setWordWrap(True)
-        self._transfer_label_widget.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        transfer_policy = QSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
-        )
-        transfer_policy.setHeightForWidth(True)
-        self._transfer_label_widget.setSizePolicy(transfer_policy)
-        self._transfer_label_widget.setMinimumWidth(1)
-        self._transfer_label_widget.mousePressEvent = (
-            lambda _e, _cb=self.transfer_checkbox: _cb.toggle()
-        )
-        self._transfer_label_widget.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        transfer_row = QHBoxLayout()
-        transfer_row.setContentsMargins(0, 2, 0, 0)
-        transfer_row.setSpacing(10)
-        transfer_row.addWidget(self.transfer_checkbox, 0, Qt.AlignmentFlag.AlignTop)
-        transfer_row.addWidget(self._transfer_label_widget, 1)
-        vbox.addLayout(transfer_row)
+        vbox.addWidget(transfer_row)
 
         parent_layout.addWidget(frame)
+
+    def _form_row(self, label: QLabel, field: QWidget) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        label.setMinimumWidth(190)
+        label.setWordWrap(True)
+        row.addWidget(label, 0)
+        row.addWidget(field, 1)
+        return row
+
+    def _make_check_row(self, text: str):
+        row = QFrame()
+        row.setObjectName("consentRow")
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(10, 8, 10, 8)
+        row_layout.setSpacing(10)
+
+        cb = QCheckBox()
+        cb.setObjectName("visibleConsentCheck")
+        cb.setFixedSize(22, 22)
+        cb.setCursor(Qt.CursorShape.PointingHandCursor)
+        cb.setToolTip(text)
+
+        label = QLabel(text)
+        label.setObjectName("consentLabel")
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse
+        )
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        label.setMinimumWidth(1)
+        label.setCursor(Qt.CursorShape.PointingHandCursor)
+        label.mousePressEvent = lambda _e, _cb=cb: _cb.toggle()
+
+        row_layout.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
+        row_layout.addWidget(label, 1)
+        return row, cb, label
 
     def _on_role_changed(self, idx: int) -> None:
         if self.role_combo is not None:
@@ -889,39 +814,10 @@ class ConsentDialog(QDialog):
             logger.debug(f"operator section relocalize failed: {e}")
 
     def _add_consent_item(self, text: str) -> None:
-        """Add a single visible checkbox row with full word-wrapped text."""
-        row = QFrame()
-        row.setObjectName("consentRow")
-        row.setMinimumHeight(42)
-        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(8, 7, 8, 7)
-        row_layout.setSpacing(10)
-
-        cb = ConsentCheckBox()
+        """Add a consent checkbox row."""
+        row, cb, _label = self._make_check_row(text)
         cb.setProperty("consent_text", text)
-        cb.setToolTip(text)
         cb.stateChanged.connect(self._update_button_state)
-
-        label = QLabel(text)
-        label.setObjectName("consentLabel")
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-            | Qt.TextInteractionFlag.LinksAccessibleByMouse
-        )
-        label_policy = QSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
-        )
-        label_policy.setHeightForWidth(True)
-        label.setSizePolicy(label_policy)
-        label.setMinimumWidth(1)
-        label.mousePressEvent = lambda _e, _cb=cb: _cb.toggle()
-        label.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        row_layout.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
-        row_layout.addWidget(label, 1)
-
         self.checkbox_layout.addWidget(row)
         self.checkboxes.append(cb)
 
@@ -1155,75 +1051,106 @@ class ConsentDialog(QDialog):
         return self.consent_record if self.consent_given else None
 
     def _get_stylesheet(self) -> str:
-        """Stylesheet - platform unified theme"""
+        """Dialog-local stylesheet with no custom-painted widgets."""
         return f"""
             QDialog {{
                 background-color: {COLORS['bg_primary']};
             }}
+            #consentHeaderFrame {{
+                background-color: {COLORS['bg_secondary']};
+                border-bottom: 1px solid {COLORS['border_subtle']};
+            }}
             #header {{
-                font-size: 20px;
-                font-weight: bold;
                 color: {COLORS['brand_primary']};
-                padding: 8px;
+                font-size: 18px;
+                font-weight: 700;
+                background: transparent;
+            }}
+            #headerSubtitle {{
+                color: {COLORS['text_secondary']};
+                font-size: 12px;
+                background: transparent;
+            }}
+            #bodyScroll, #bodyWidget {{
+                background-color: {COLORS['bg_primary']};
+                border: none;
             }}
             #warningFrame {{
-                background-color: rgba(248, 81, 73, 0.15);
+                background-color: rgba(248, 81, 73, 0.12);
                 border: 1px solid {COLORS['error']};
-                border-radius: 8px;
-                padding: 12px;
+                border-radius: 6px;
             }}
             #warningText {{
-                color: {COLORS['error']};
-                font-size: 13px;
-                background-color: transparent;
+                color: {COLORS['text_primary']};
+                background: transparent;
+                font-size: 12px;
             }}
-            #footerFrame {{
-                background-color: transparent;
-                border: none;
-            }}
-            #checkboxFrame {{
+            #documentFrame, #operatorFrame, #checkboxFrame {{
                 background-color: {COLORS['bg_secondary']};
-                border: 1px solid {COLORS.get('border', '#374151')};
-                border-radius: 8px;
-                padding: 8px;
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 6px;
             }}
-            #checkboxScroll {{
-                background-color: transparent;
-                border: none;
+            #consentDocument {{
+                color: {COLORS['text_primary']};
+                background: transparent;
+                font-size: 12px;
+                line-height: 1.45;
+            }}
+            #sectionTitle {{
+                color: {COLORS['brand_primary']};
+                background: transparent;
+                font-weight: 700;
+                font-size: 13px;
+            }}
+            #fieldLabel {{
+                color: {COLORS['text_secondary']};
+                background: transparent;
+                font-size: 12px;
             }}
             #consentRow {{
                 background-color: {COLORS['bg_tertiary']};
                 border: 1px solid {COLORS['border_subtle']};
-                border-radius: 6px;
+                border-radius: 5px;
             }}
             #consentLabel {{
                 color: {COLORS['text_primary']};
-                background-color: transparent;
+                background: transparent;
                 font-size: 12px;
-                line-height: 1.4;
+                line-height: 1.35;
             }}
-            #consentCheck {{
-                background-color: transparent;
+            QCheckBox#visibleConsentCheck {{
+                background: transparent;
                 border: none;
                 padding: 0;
                 margin: 0;
+                spacing: 0;
             }}
-            QTextEdit {{
+            QCheckBox#visibleConsentCheck::indicator {{
+                width: 16px;
+                height: 16px;
+                border: 1px solid {COLORS['border_default']};
+                border-radius: 3px;
+                background-color: {COLORS['bg_primary']};
+            }}
+            QCheckBox#visibleConsentCheck::indicator:hover {{
+                border-color: {COLORS['brand_primary']};
+            }}
+            QCheckBox#visibleConsentCheck::indicator:checked {{
+                background-color: {COLORS['brand_primary']};
+                border-color: {COLORS['brand_primary']};
+            }}
+            #footerFrame {{
                 background-color: {COLORS['bg_secondary']};
-                border: 1px solid {COLORS.get('border', '#374151')};
-                border-radius: 8px;
-                color: {COLORS['text_primary']};
-                padding: 12px;
-                font-size: 13px;
+                border-top: 1px solid {COLORS['border_subtle']};
             }}
             QPushButton {{
                 background-color: {COLORS['bg_tertiary']};
                 border: 1px solid {COLORS['border_subtle']};
-                border-radius: 6px;
+                border-radius: 5px;
                 color: {COLORS['text_primary']};
-                padding: 0 16px;
+                padding: 0 14px;
                 font-size: 12px;
-                min-height: 34px;
+                font-weight: 500;
             }}
             QPushButton:hover {{
                 background-color: {COLORS['bg_hover']};
@@ -1232,22 +1159,42 @@ class ConsentDialog(QDialog):
             QPushButton:disabled {{
                 background-color: {COLORS['bg_tertiary']};
                 color: {COLORS['text_tertiary']};
+                border-color: {COLORS['border_muted']};
             }}
             #agreeButton {{
                 background-color: {COLORS['brand_primary']};
-                border: none;
+                border-color: {COLORS['brand_primary']};
                 color: {COLORS['bg_primary']};
-                font-weight: bold;
+                font-weight: 700;
             }}
             #agreeButton:hover {{
                 background-color: {COLORS['brand_accent']};
+                border-color: {COLORS['brand_accent']};
             }}
-            #agreeButton:disabled {{
+            QComboBox {{
                 background-color: {COLORS['bg_tertiary']};
-                color: {COLORS['text_tertiary']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 12px;
             }}
-            QScrollArea {{
-                background-color: transparent;
+            QComboBox:hover {{
+                border-color: {COLORS['border_default']};
+            }}
+            QScrollBar:vertical {{
+                background: {COLORS['bg_primary']};
+                width: 10px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {COLORS['border_default']};
+                border-radius: 4px;
+                min-height: 28px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0;
+                width: 0;
             }}
         """
 

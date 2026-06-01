@@ -364,7 +364,8 @@ def _assert_worker_filtering() -> None:
 def _assert_checkbox_widget_visible(dialog: ConsentDialog, checkbox, name: str) -> None:
     assert checkbox is not None, f"{name} checkbox missing"
     assert checkbox.isVisible(), f"{name} checkbox widget is hidden"
-    assert checkbox.width() >= 30 and checkbox.height() >= 30, f"{name} checkbox is too small"
+    assert 20 <= checkbox.width() <= 24, f"{name} checkbox width is unstable: {checkbox.width()}"
+    assert 20 <= checkbox.height() <= 24, f"{name} checkbox height is unstable: {checkbox.height()}"
 
     parent = checkbox.parentWidget()
     assert parent is not None, f"{name} checkbox has no parent row"
@@ -388,6 +389,25 @@ def _assert_checkbox_pixels_visible(dialog: ConsentDialog, checkbox, name: str) 
     assert len(colors) >= 3, f"{name} checkbox did not render visible border/fill pixels"
 
 
+def _assert_footer_is_stable(dialog: ConsentDialog) -> None:
+    header_geo = dialog.header_frame.geometry()
+    body_geo = dialog.body_scroll.geometry()
+    footer_geo = dialog.footer_frame.geometry()
+    assert header_geo.bottom() < body_geo.top(), "header overlaps consent body"
+    assert body_geo.bottom() < footer_geo.top(), "consent body overlaps fixed footer"
+    assert footer_geo.bottom() <= dialog.rect().bottom(), "footer extends outside dialog"
+
+    cancel_geo = dialog.cancel_btn.geometry()
+    agree_geo = dialog.agree_btn.geometry()
+    assert abs(cancel_geo.y() - agree_geo.y()) <= 1, "footer buttons are not on one row"
+    assert not cancel_geo.intersects(agree_geo), "footer buttons overlap"
+    assert 36 <= cancel_geo.height() <= 44
+    assert 36 <= agree_geo.height() <= 44
+    assert agree_geo.width() >= 200
+    assert cancel_geo.bottom() <= dialog.footer_frame.rect().bottom()
+    assert agree_geo.bottom() <= dialog.footer_frame.rect().bottom()
+
+
 def _assert_consent_dialog(window: CollectorWindow) -> None:
     dialog = ConsentDialog(parent=window, server_url=None, session_id="session", case_id="case", language="ko")
     dialog._apply_template({
@@ -409,18 +429,18 @@ def _assert_consent_dialog(window: CollectorWindow) -> None:
     QApplication.processEvents()
 
     assert dialog.windowTitle()
-    assert hasattr(dialog, "checkbox_scroll")
-    assert dialog.checkbox_scroll.maximumHeight() <= 240
-    assert dialog.checkbox_scroll.minimumHeight() >= 170
-    assert dialog.checkbox_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert hasattr(dialog, "body_scroll")
+    assert dialog.body_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert dialog.footer_frame.height() == 64
+    _assert_footer_is_stable(dialog)
 
     assert len(dialog.checkboxes) == 5, "required consent checkbox rows were not created"
     _assert_checkbox_widget_visible(dialog, dialog.transfer_checkbox, "transfer")
     _assert_checkbox_widget_visible(dialog, dialog.checkboxes[0], "first consent")
 
-    viewport_rect = dialog.checkbox_scroll.viewport().rect()
-    first_center = dialog.checkboxes[0].mapTo(dialog.checkbox_scroll.viewport(), dialog.checkboxes[0].rect().center())
-    assert viewport_rect.contains(first_center), "first consent checkbox is outside visible scroll viewport"
+    viewport_rect = dialog.body_scroll.viewport().rect()
+    first_center = dialog.checkboxes[0].mapTo(dialog.body_scroll.viewport(), dialog.checkboxes[0].rect().center())
+    assert viewport_rect.contains(first_center), "first consent checkbox is not visible in the initial modal viewport"
 
     _assert_checkbox_pixels_visible(dialog, dialog.transfer_checkbox, "transfer")
     _assert_checkbox_pixels_visible(dialog, dialog.checkboxes[0], "first consent")
@@ -430,13 +450,8 @@ def _assert_consent_dialog(window: CollectorWindow) -> None:
     dialog.transfer_checkbox.setChecked(True)
     QApplication.processEvents()
     assert dialog.agree_btn.isEnabled(), "agree button did not enable after visible consent checks"
+    _assert_footer_is_stable(dialog)
 
-    cancel_geo = dialog.cancel_btn.geometry()
-    agree_geo = dialog.agree_btn.geometry()
-    assert abs(cancel_geo.y() - agree_geo.y()) <= 2, "consent footer buttons wrapped into multiple rows"
-    assert dialog.cancel_btn.height() == dialog.agree_btn.height() == 36
-    assert agree_geo.width() >= 240
-    assert dialog.footer_frame.geometry().bottom() <= dialog.contentsRect().bottom()
     assert dialog.grab().save("/tmp/unjaena_consent_dialog_smoke.png")
     dialog.close()
 
