@@ -523,6 +523,11 @@ class AndroidHardwareEnumerator(BaseDeviceEnumerator):
                             device_type=DeviceType.ANDROID_EDL,
                             display_name="Qualcomm EDL Device",
                             status=DeviceStatus.READY,
+                            is_selectable=False,
+                            selection_disabled_reason=(
+                                'Hardware-level Android acquisition is detected but not supported by this collector build. '
+                                'Use Android USB debugging or a supported mobile extraction bundle.'
+                            ),
                             metadata={
                                 'vid': vid, 'pid': pid,
                                 'bus': dev.getBusNumber(),
@@ -539,6 +544,11 @@ class AndroidHardwareEnumerator(BaseDeviceEnumerator):
                             device_type=DeviceType.ANDROID_MTK_BROM,
                             display_name=f"MediaTek BROM Device ({mode})",
                             status=DeviceStatus.READY,
+                            is_selectable=False,
+                            selection_disabled_reason=(
+                                'Hardware-level Android acquisition is detected but not supported by this collector build. '
+                                'Use Android USB debugging or a supported mobile extraction bundle.'
+                            ),
                             metadata={
                                 'vid': vid, 'pid': pid,
                                 'bus': dev.getBusNumber(),

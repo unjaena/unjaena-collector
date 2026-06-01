@@ -1174,6 +1174,8 @@ class CollectorWindow(QMainWindow):
         categories = set()
         for device in devices:
             categories.update(self._source_categories_for_device(device))
+        if devices and not categories:
+            return self._all_source_categories()
         return categories
 
     def _apply_selected_source_scope(self, selected_devices: Optional[list] = None, force: bool = False):
@@ -1653,12 +1655,22 @@ class CollectorWindow(QMainWindow):
             missing.append("select at least one artifact")
         self.collect_btn.setToolTip("Start Collection is disabled: " + ", ".join(missing))
 
+    def _artifact_checkbox_enabled_for_collection(self, cb) -> bool:
+        """Return checkbox state ignoring temporary parent locks during start."""
+        artifacts_group = getattr(self, 'artifacts_group', None)
+        if artifacts_group is not None:
+            try:
+                return cb.isEnabledTo(artifacts_group)
+            except Exception:
+                pass
+        return cb.isEnabled()
+
     def _selected_artifact_types(self) -> list:
         """Return artifact types that are both enabled by policy/source and selected."""
         return [
             artifact_type
             for artifact_type, cb in self.artifact_checks.items()
-            if cb.isEnabled() and cb.isChecked()
+            if self._artifact_checkbox_enabled_for_collection(cb) and cb.isChecked()
         ]
 
     def _log_mobile_preflight(self, selected_devices: list, selected_artifacts: list):
@@ -1823,7 +1835,7 @@ class CollectorWindow(QMainWindow):
         current_category = category_map.get(current_tab, 'windows')
 
         for artifact_type, cb in self.artifact_checks.items():
-            if not cb.isEnabled():
+            if not self._artifact_checkbox_enabled_for_collection(cb):
                 continue
 
             # Check artifact category
@@ -1849,7 +1861,7 @@ class CollectorWindow(QMainWindow):
         enabled_artifacts = {
             artifact_type
             for artifact_type, cb in self.artifact_checks.items()
-            if cb.isEnabled()
+            if self._artifact_checkbox_enabled_for_collection(cb)
         }
         if not enabled_artifacts:
             return set()
@@ -1903,6 +1915,10 @@ class CollectorWindow(QMainWindow):
 
     def _apply_privacy_incident_preset(self):
         """Select a focused set of artifacts for personal-data breach triage."""
+        selected_devices = self.device_manager.get_selected_devices()
+        if selected_devices:
+            self._apply_selected_source_scope(selected_devices, force=True)
+
         candidates = self._privacy_incident_candidates()
         selected_count = 0
         skipped_count = 0
@@ -1913,7 +1929,7 @@ class CollectorWindow(QMainWindow):
             return
 
         for artifact_type, cb in self.artifact_checks.items():
-            if not cb.isEnabled():
+            if not self._artifact_checkbox_enabled_for_collection(cb):
                 continue
             should_select = artifact_type in candidates
             cb.setChecked(should_select)
@@ -1922,7 +1938,7 @@ class CollectorWindow(QMainWindow):
 
         for artifact_type in PRIVACY_INCIDENT_PRESET:
             cb = self.artifact_checks.get(artifact_type)
-            if not cb or not cb.isEnabled():
+            if not cb or not self._artifact_checkbox_enabled_for_collection(cb):
                 skipped_count += 1
 
         self.include_deleted_cb.setChecked(True)
@@ -2192,6 +2208,21 @@ class CollectorWindow(QMainWindow):
         self._apply_selected_source_scope(selected_devices, force=True)
         selected = self._selected_artifact_types()
         if not selected:
+            checked = [
+                artifact_type
+                for artifact_type, cb in self.artifact_checks.items()
+                if cb.isChecked()
+            ]
+            blocked_checked = [
+                artifact_type
+                for artifact_type, cb in self.artifact_checks.items()
+                if cb.isChecked() and not self._artifact_checkbox_enabled_for_collection(cb)
+            ]
+            self._log(
+                f"No collectable artifacts selected at start "
+                f"(checked={len(checked)}, blocked_by_source_or_policy={len(blocked_checked)})",
+                error=True,
+            )
             QMessageBox.warning(self, "Error", "Please select at least one artifact type")
             return
 

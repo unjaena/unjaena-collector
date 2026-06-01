@@ -103,6 +103,13 @@ def _assert_source_scope(window: CollectorWindow) -> None:
         assert not cb.isChecked(), f"{artifact_type} still checked for iOS-only source"
         assert not cb.isEnabled(), f"{artifact_type} still enabled for iOS-only source"
 
+    unsupported = _device(None, "unsupported-source")
+    window._apply_selected_source_scope([unsupported], force=True)
+    for artifact_type, _, _ in PROFILE_ARTIFACTS:
+        cb = window.artifact_checks[artifact_type]
+        assert cb.isEnabled(), f"{artifact_type} disabled for unsupported source"
+        assert cb.isChecked(), f"{artifact_type} unchecked for unsupported source"
+
 
 def _assert_artifact_actions_update_start_button(window: CollectorWindow) -> None:
     window.collection_token = "collection-token"
@@ -163,7 +170,9 @@ def _assert_device_selection_signal_updates_start_button(window: CollectorWindow
 
 
 def _assert_privacy_preset_keeps_collection_startable(window: CollectorWindow) -> None:
+    window.session_id = "session-id"
     window.collection_token = "collection-token"
+    window.case_id = "case-id"
     window.device_manager.get_selected_devices = lambda: [
         _device(DeviceType.E01_IMAGE, "windows.E01", "windows")
     ]
@@ -174,6 +183,103 @@ def _assert_privacy_preset_keeps_collection_startable(window: CollectorWindow) -
     window._apply_privacy_incident_preset()
     assert window.artifact_checks["windows_smoke"].isChecked()
     assert window.collect_btn.isEnabled(), "privacy preset cleared all artifacts or did not refresh Start Collection"
+
+    window._set_collection_inputs_locked(True)
+    try:
+        assert "windows_smoke" in window._selected_artifact_types(), (
+            "locked parent UI hid checked artifacts from collection start"
+        )
+    finally:
+        window._set_collection_inputs_locked(False)
+
+    original_validator = app_module.TokenValidator
+    original_warning = QMessageBox.warning
+    original_confirm = window._confirm_collection_plan
+    warnings = []
+    confirmed_artifacts = []
+
+    def fake_warning(parent, title, body, *args, **kwargs):
+        warnings.append((str(title), str(body)))
+        return QMessageBox.StandardButton.Ok
+
+    def fake_confirm(devices, artifacts):
+        confirmed_artifacts.extend(artifacts)
+        return False
+
+    app_module.TokenValidator = lambda server_url: SimpleNamespace(
+        validate_session=lambda session_id, token: SimpleNamespace(
+            can_proceed=True,
+            case_id="case-id",
+            case_status="active",
+            reason=None,
+        )
+    )
+    QMessageBox.warning = fake_warning
+    window._confirm_collection_plan = fake_confirm
+    try:
+        window._start_collection()
+    finally:
+        app_module.TokenValidator = original_validator
+        QMessageBox.warning = original_warning
+        window._confirm_collection_plan = original_confirm
+        window._collection_starting = False
+        window._collection_running = False
+        window._set_collection_inputs_locked(False)
+        window._update_collect_button_state()
+
+    assert not any(
+        body == "Please select at least one artifact type" for _, body in warnings
+    ), "start path rejected checked privacy preset artifacts"
+    assert "windows_smoke" in confirmed_artifacts, "start path did not carry selected artifacts into plan review"
+
+
+def _assert_privacy_preset_resyncs_selected_source(window: CollectorWindow) -> None:
+    window.collection_token = "collection-token"
+    window.device_manager.get_selected_devices = lambda: [
+        _device(DeviceType.IOS_DEVICE, "ios-usb")
+    ]
+    for cb in window.artifact_checks.values():
+        cb.setEnabled(False)
+        cb.setChecked(False)
+
+    window._apply_privacy_incident_preset()
+    assert window.artifact_checks["ios_smoke"].isEnabled(), "privacy preset did not resync iOS source scope"
+    assert window.artifact_checks["ios_smoke"].isChecked(), "privacy preset did not select iOS artifacts"
+    assert window.collect_btn.isEnabled(), "privacy preset did not make iOS source startable"
+
+
+def _assert_start_preflight_for_supported_sources(window: CollectorWindow) -> None:
+    sources = [
+        (DeviceType.WINDOWS_PHYSICAL_DISK, "windows-disk", "windows_smoke"),
+        (DeviceType.ANDROID_DEVICE, "android-usb", "android_smoke"),
+        (DeviceType.IOS_DEVICE, "ios-usb", "ios_smoke"),
+        (DeviceType.IOS_BACKUP, "ios-backup", "ios_smoke"),
+        (DeviceType.MOBILE_FFS_BUNDLE_IOS, "ios-ffs", "ios_smoke"),
+        (DeviceType.MOBILE_FFS_BUNDLE_ANDROID, "android-ffs", "android_smoke"),
+        (DeviceType.LINUX_LOCAL_SYSTEM, "linux-live", "linux_smoke"),
+        (DeviceType.MACOS_LOCAL_SYSTEM, "macos-live", "macos_smoke"),
+        (DeviceType.E01_IMAGE, "unknown.E01", "windows_smoke"),
+    ]
+    for device_type, name, expected_artifact in sources:
+        detected_os = "unknown" if device_type == DeviceType.E01_IMAGE else None
+        window.session_id = "session-id"
+        window.collection_token = "collection-token"
+        window.case_id = "case-id"
+        window.device_manager.get_selected_devices = lambda d=_device(device_type, name, detected_os): [d]
+        for cb in window.artifact_checks.values():
+            cb.setEnabled(True)
+            cb.setChecked(False)
+        window._apply_privacy_incident_preset()
+        assert expected_artifact in window._selected_artifact_types(), (
+            f"{device_type} did not leave a collectable artifact selected"
+        )
+        window._set_collection_inputs_locked(True)
+        try:
+            assert expected_artifact in window._selected_artifact_types(), (
+                f"locked start state hid selected artifact for {device_type}"
+            )
+        finally:
+            window._set_collection_inputs_locked(False)
 
 
 def _assert_plan_dialog(window: CollectorWindow) -> None:
@@ -282,6 +388,8 @@ def main() -> int:
     _assert_artifact_actions_update_start_button(window)
     _assert_device_selection_signal_updates_start_button(window)
     _assert_privacy_preset_keeps_collection_startable(window)
+    _assert_privacy_preset_resyncs_selected_source(window)
+    _assert_start_preflight_for_supported_sources(window)
     _assert_plan_dialog(window)
     _assert_start_locking(window)
     _assert_worker_filtering()
