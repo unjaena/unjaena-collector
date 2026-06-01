@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 from types import SimpleNamespace
 
@@ -549,7 +550,8 @@ def _assert_consent_dialog(window: CollectorWindow) -> None:
     assert dialog.agree_btn.isEnabled(), "agree button did not enable after visible consent checks"
     _assert_footer_is_stable(dialog)
 
-    assert dialog.grab().save("/tmp/unjaena_consent_dialog_smoke.png")
+    screenshot_path = os.path.join(tempfile.gettempdir(), "unjaena_consent_dialog_smoke.png")
+    assert dialog.grab().save(screenshot_path), f"failed to save consent smoke screenshot: {screenshot_path}"
     dialog.close()
 
 
