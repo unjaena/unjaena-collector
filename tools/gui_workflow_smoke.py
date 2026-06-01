@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEventLoop, QTimer
+from PyQt6.QtCore import QEventLoop, QTimer, Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 import gui.app as app_module
@@ -132,6 +132,7 @@ def _assert_artifact_actions_update_start_button(window: CollectorWindow) -> Non
     window.artifacts_tab.setCurrentIndex(0)
 
     window.collect_btn.setEnabled(False)
+    window.select_all_cb.setEnabled(True)
     window.select_all_cb.setChecked(False)
     window.select_all_cb.setChecked(True)
     assert windows_cb.isChecked()
@@ -169,7 +170,42 @@ def _assert_device_selection_signal_updates_start_button(window: CollectorWindow
     assert not window.collect_btn.isEnabled(), "removed selected device left Start Collection enabled"
 
 
-def _assert_privacy_preset_keeps_collection_startable(window: CollectorWindow) -> None:
+def _assert_token_profile_waits_for_evidence_source(window: CollectorWindow) -> None:
+    window.session_id = "session-id"
+    window.collection_token = "collection-token"
+    window.case_id = "case-id"
+    window._allow_all_artifacts = True
+    window._mapped_allowed_artifacts = set(ARTIFACT_TYPES)
+    window.device_manager.get_selected_devices = lambda: []
+
+    for cb in window.artifact_checks.values():
+        cb.setEnabled(True)
+        cb.setChecked(True)
+    window.select_all_cb.setEnabled(True)
+    window.include_deleted_cb.setEnabled(True)
+
+    window._update_platform_tab_states()
+    assert "Authorized profile loaded" in window.source_scope_label.text()
+    assert not window.select_all_cb.isEnabled(), "Select All should wait for an evidence source"
+    assert not window.include_deleted_cb.isEnabled(), "Include deleted should wait for an evidence source"
+    assert not window.collect_btn.isEnabled(), "Start Collection enabled without evidence source"
+    for artifact_type, cb in window.artifact_checks.items():
+        assert not cb.isEnabled(), f"{artifact_type} enabled before evidence source selection"
+        assert not cb.isChecked(), f"{artifact_type} checked before evidence source selection"
+
+    window.device_manager.get_selected_devices = lambda: [
+        _device(DeviceType.E01_IMAGE, "windows.E01", "windows")
+    ]
+    window._update_platform_tab_states()
+    window._update_collect_button_state()
+    assert window.artifact_checks["windows_smoke"].isEnabled()
+    assert window.artifact_checks["windows_smoke"].isChecked()
+    assert window.select_all_cb.isEnabled()
+    assert window.include_deleted_cb.isEnabled()
+    assert window.collect_btn.isEnabled(), "Start Collection did not enable after source scope was applied"
+
+
+def _assert_start_path_keeps_selected_artifacts_while_locked(window: CollectorWindow) -> None:
     window.session_id = "session-id"
     window.collection_token = "collection-token"
     window.case_id = "case-id"
@@ -177,12 +213,10 @@ def _assert_privacy_preset_keeps_collection_startable(window: CollectorWindow) -
         _device(DeviceType.E01_IMAGE, "windows.E01", "windows")
     ]
     for cb in window.artifact_checks.values():
-        cb.setEnabled(True)
+        cb.setEnabled(False)
         cb.setChecked(False)
-
-    window._apply_privacy_incident_preset()
-    assert window.artifact_checks["windows_smoke"].isChecked()
-    assert window.collect_btn.isEnabled(), "privacy preset cleared all artifacts or did not refresh Start Collection"
+    window.artifact_checks["windows_smoke"].setEnabled(True)
+    window.artifact_checks["windows_smoke"].setChecked(True)
 
     window._set_collection_inputs_locked(True)
     try:
@@ -229,47 +263,33 @@ def _assert_privacy_preset_keeps_collection_startable(window: CollectorWindow) -
 
     assert not any(
         body == "Please select at least one artifact type" for _, body in warnings
-    ), "start path rejected checked privacy preset artifacts"
+    ), "start path rejected checked artifacts while inputs were locked"
     assert "windows_smoke" in confirmed_artifacts, "start path did not carry selected artifacts into plan review"
-
-
-def _assert_privacy_preset_resyncs_selected_source(window: CollectorWindow) -> None:
-    window.collection_token = "collection-token"
-    window.device_manager.get_selected_devices = lambda: [
-        _device(DeviceType.IOS_DEVICE, "ios-usb")
-    ]
-    for cb in window.artifact_checks.values():
-        cb.setEnabled(False)
-        cb.setChecked(False)
-
-    window._apply_privacy_incident_preset()
-    assert window.artifact_checks["ios_smoke"].isEnabled(), "privacy preset did not resync iOS source scope"
-    assert window.artifact_checks["ios_smoke"].isChecked(), "privacy preset did not select iOS artifacts"
-    assert window.collect_btn.isEnabled(), "privacy preset did not make iOS source startable"
 
 
 def _assert_start_preflight_for_supported_sources(window: CollectorWindow) -> None:
     sources = [
-        (DeviceType.WINDOWS_PHYSICAL_DISK, "windows-disk", "windows_smoke"),
-        (DeviceType.ANDROID_DEVICE, "android-usb", "android_smoke"),
-        (DeviceType.IOS_DEVICE, "ios-usb", "ios_smoke"),
-        (DeviceType.IOS_BACKUP, "ios-backup", "ios_smoke"),
-        (DeviceType.MOBILE_FFS_BUNDLE_IOS, "ios-ffs", "ios_smoke"),
-        (DeviceType.MOBILE_FFS_BUNDLE_ANDROID, "android-ffs", "android_smoke"),
-        (DeviceType.LINUX_LOCAL_SYSTEM, "linux-live", "linux_smoke"),
-        (DeviceType.MACOS_LOCAL_SYSTEM, "macos-live", "macos_smoke"),
-        (DeviceType.E01_IMAGE, "unknown.E01", "windows_smoke"),
+        (DeviceType.WINDOWS_PHYSICAL_DISK, "windows-disk", "windows_smoke", None),
+        (DeviceType.ANDROID_DEVICE, "android-usb", "android_smoke", None),
+        (DeviceType.IOS_DEVICE, "ios-usb", "ios_smoke", None),
+        (DeviceType.IOS_BACKUP, "ios-backup", "ios_smoke", None),
+        (DeviceType.MOBILE_FFS_BUNDLE_IOS, "ios-ffs", "ios_smoke", None),
+        (DeviceType.MOBILE_FFS_BUNDLE_ANDROID, "android-ffs", "android_smoke", None),
+        (DeviceType.LINUX_LOCAL_SYSTEM, "linux-live", "linux_smoke", None),
+        (DeviceType.MACOS_LOCAL_SYSTEM, "macos-live", "macos_smoke", None),
+        (DeviceType.E01_IMAGE, "unknown.E01", "windows_smoke", "unknown"),
     ]
-    for device_type, name, expected_artifact in sources:
-        detected_os = "unknown" if device_type == DeviceType.E01_IMAGE else None
+    for device_type, name, expected_artifact, detected_os in sources:
         window.session_id = "session-id"
         window.collection_token = "collection-token"
         window.case_id = "case-id"
+        window._allow_all_artifacts = True
+        window._mapped_allowed_artifacts = set(ARTIFACT_TYPES)
         window.device_manager.get_selected_devices = lambda d=_device(device_type, name, detected_os): [d]
         for cb in window.artifact_checks.values():
-            cb.setEnabled(True)
+            cb.setEnabled(False)
             cb.setChecked(False)
-        window._apply_privacy_incident_preset()
+        window._update_platform_tab_states()
         assert expected_artifact in window._selected_artifact_types(), (
             f"{device_type} did not leave a collectable artifact selected"
         )
@@ -343,8 +363,35 @@ def _assert_worker_filtering() -> None:
 
 def _assert_consent_dialog(window: CollectorWindow) -> None:
     dialog = ConsentDialog(parent=window, server_url=None, session_id="session", case_id="case", language="en")
+    dialog._apply_template({
+        "id": "smoke-template",
+        "version": "smoke",
+        "title": "AI Forensic Lab - Data Collection Consent",
+        "content": "## Digital Forensic Collection Consent\n\n### Purpose\nThis confirms the scope before collection.",
+        "required_checkboxes": [
+            "I confirm that I have authority to perform this collection.",
+            "I understand that selected evidence sources will be collected and uploaded for analysis.",
+            "I understand that collection may include system, file-system, application, event-log, and network artifacts according to the selected profile.",
+            "I acknowledge that the collected data will be processed according to the case retention policy.",
+            "I agree to start collection for the selected evidence sources.",
+        ],
+    })
+    dialog.show()
+    QApplication.processEvents()
     dialog._center_on_screen()
+    QApplication.processEvents()
+
     assert dialog.windowTitle()
+    assert hasattr(dialog, "checkbox_scroll")
+    assert dialog.checkbox_scroll.maximumHeight() <= 190
+    assert dialog.checkbox_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+
+    cancel_geo = dialog.cancel_btn.geometry()
+    agree_geo = dialog.agree_btn.geometry()
+    assert abs(cancel_geo.y() - agree_geo.y()) <= 2, "consent footer buttons wrapped into multiple rows"
+    assert dialog.cancel_btn.height() == dialog.agree_btn.height() == 36
+    assert agree_geo.width() >= 240
+    assert dialog.footer_frame.geometry().bottom() <= dialog.contentsRect().bottom()
     dialog.close()
 
 
@@ -387,8 +434,8 @@ def main() -> int:
     _assert_source_scope(window)
     _assert_artifact_actions_update_start_button(window)
     _assert_device_selection_signal_updates_start_button(window)
-    _assert_privacy_preset_keeps_collection_startable(window)
-    _assert_privacy_preset_resyncs_selected_source(window)
+    _assert_token_profile_waits_for_evidence_source(window)
+    _assert_start_path_keeps_selected_artifacts_while_locked(window)
     _assert_start_preflight_for_supported_sources(window)
     _assert_plan_dialog(window)
     _assert_start_locking(window)

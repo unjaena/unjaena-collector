@@ -91,9 +91,9 @@ class ConsentDialog(QDialog):
     def setup_ui(self):
         """Initialize UI (with server API integration)"""
         self.setWindowTitle("AI Forensic Lab - Data Collection Consent")
-        self.setMinimumSize(QSize(780, 720))
-        self.setMaximumSize(QSize(960, 920))
-        self.resize(QSize(820, 780))
+        self.setMinimumSize(QSize(860, 760))
+        self.setMaximumSize(QSize(1120, 980))
+        self.resize(QSize(900, 820))
         self.setModal(True)
         self.setSizeGripEnabled(False)
         self.setStyleSheet(self._get_stylesheet())
@@ -107,6 +107,7 @@ class ConsentDialog(QDialog):
 
         self.header_label = QLabel("AI Forensic Lab - Data Collection Consent")
         self.header_label.setObjectName("header")
+        self.header_label.setWordWrap(True)
         header_layout.addWidget(self.header_label)
 
         header_layout.addStretch()
@@ -138,13 +139,15 @@ class ConsentDialog(QDialog):
             "Please read and agree to the terms below before proceeding."
         )
         self.warning_label.setObjectName("warningText")
+        self.warning_label.setWordWrap(True)
         warning_layout.addWidget(self.warning_label)
         layout.addWidget(self.warning_frame)
 
         self.consent_text = QTextEdit()
         self.consent_text.setObjectName("consentDocument")
         self.consent_text.setReadOnly(True)
-        self.consent_text.setMinimumHeight(160)
+        self.consent_text.setMinimumHeight(220)
+        self.consent_text.setMaximumHeight(340)
         self.consent_text.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -171,6 +174,16 @@ class ConsentDialog(QDialog):
         # to. We wrap the entire panel in a ScrollArea (so adding new
         # items doesn't push the buttons off-screen) and the checkbox
         # itself is paired with a wrapping QLabel in _add_consent_item().
+        self.checkbox_scroll = QScrollArea()
+        self.checkbox_scroll.setObjectName("checkboxScroll")
+        self.checkbox_scroll.setWidgetResizable(True)
+        self.checkbox_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.checkbox_scroll.setMinimumHeight(120)
+        self.checkbox_scroll.setMaximumHeight(190)
+        self.checkbox_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+
         self.checkbox_frame = QFrame()
         self.checkbox_frame.setObjectName("checkboxFrame")
         self.checkbox_layout = QVBoxLayout(self.checkbox_frame)
@@ -179,25 +192,34 @@ class ConsentDialog(QDialog):
         self.checkbox_frame.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
         )
-        layout.addWidget(self.checkbox_frame)
+        self.checkbox_scroll.setWidget(self.checkbox_frame)
+        layout.addWidget(self.checkbox_scroll, 0)
 
         # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
+        self.footer_frame = QFrame()
+        self.footer_frame.setObjectName("footerFrame")
+        button_layout = QHBoxLayout(self.footer_frame)
+        button_layout.setContentsMargins(0, 8, 0, 0)
+        button_layout.setSpacing(10)
+        button_layout.addStretch(1)
 
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
-        self.cancel_btn.setMinimumWidth(100)
+        self.cancel_btn.setMinimumWidth(120)
+        self.cancel_btn.setFixedHeight(36)
+        self.cancel_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         button_layout.addWidget(self.cancel_btn)
 
         self.agree_btn = QPushButton("Agree and Start Collection")
         self.agree_btn.setObjectName("agreeButton")
         self.agree_btn.setEnabled(False)
         self.agree_btn.clicked.connect(self._on_agree)
-        self.agree_btn.setMinimumWidth(180)
+        self.agree_btn.setMinimumWidth(240)
+        self.agree_btn.setFixedHeight(36)
+        self.agree_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         button_layout.addWidget(self.agree_btn)
 
-        layout.addLayout(button_layout)
+        layout.addWidget(self.footer_frame, 0)
 
         # Load consent template from server
         self._load_consent_template()
@@ -973,7 +995,11 @@ class ConsentDialog(QDialog):
         ip_hash = hashlib.sha256(ip_address.encode()).hexdigest()[:16]
 
         # List of agreed items (from dynamic checkboxes)
-        agreed_items = [cb.text() for cb in self.checkboxes if cb.isChecked()]
+        agreed_items = [
+            cb.property("consent_text") or cb.text()
+            for cb in self.checkboxes
+            if cb.isChecked()
+        ]
 
         record = {
             "consent_timestamp": timestamp,
@@ -1100,6 +1126,11 @@ class ConsentDialog(QDialog):
             #warningText {{
                 color: {COLORS['error']};
                 font-size: 13px;
+                background-color: transparent;
+            }}
+            #footerFrame {{
+                background-color: transparent;
+                border: none;
             }}
             #checkboxFrame {{
                 background-color: {COLORS['bg_secondary']};
@@ -1152,8 +1183,9 @@ class ConsentDialog(QDialog):
                 border: 1px solid {COLORS['border_subtle']};
                 border-radius: 6px;
                 color: {COLORS['text_primary']};
-                padding: 10px 20px;
-                font-size: 13px;
+                padding: 0 16px;
+                font-size: 12px;
+                min-height: 34px;
             }}
             QPushButton:hover {{
                 background-color: {COLORS['bg_hover']};

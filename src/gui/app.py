@@ -72,9 +72,6 @@ SERVER_TO_COLLECTOR_MAPPING = {}
 
 
 
-PRIVACY_INCIDENT_PRESET = set()
-
-
 
 class CollectorWindow(QMainWindow):
     """Main application window with unified device management"""
@@ -288,30 +285,17 @@ class CollectorWindow(QMainWindow):
         # Select All + Include Deleted option
         select_all_layout = QHBoxLayout()
         self.select_all_cb = QCheckBox("Select All (current tab)")
+        self.select_all_cb.setEnabled(False)
+        self.select_all_cb.setToolTip("Authenticate a token and select an evidence source first")
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
         select_all_layout.addWidget(self.select_all_cb)
         select_all_layout.addStretch()
         self.include_deleted_cb = QCheckBox("Include deleted files")
         self.include_deleted_cb.setChecked(True)
-        self.include_deleted_cb.setToolTip("Recover and collect deleted files from MFT (slower but more thorough)")
+        self.include_deleted_cb.setEnabled(False)
+        self.include_deleted_cb.setToolTip("Recover and collect deleted files from MFT after an evidence source is selected")
         select_all_layout.addWidget(self.include_deleted_cb)
         artifacts_outer_layout.addLayout(select_all_layout)
-
-        preset_layout = QHBoxLayout()
-        self.privacy_preset_btn = QPushButton("Privacy Incident Preset")
-        self.privacy_preset_btn.setEnabled(False)
-        self.privacy_preset_btn.setFixedHeight(28)
-        self.privacy_preset_btn.setToolTip(
-            "Select artifacts useful for personal-data breach triage: identity, "
-            "communications, browser/downloads, USB/cloud transfer, and timeline evidence."
-        )
-        self.privacy_preset_btn.clicked.connect(self._apply_privacy_incident_preset)
-        preset_layout.addWidget(self.privacy_preset_btn)
-        preset_hint = QLabel("Use this for CPO / 72-hour breach triage instead of collecting everything.")
-        preset_hint.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
-        preset_hint.setWordWrap(True)
-        preset_layout.addWidget(preset_hint, 1)
-        artifacts_outer_layout.addLayout(preset_layout)
 
         layout.addWidget(artifacts_group)
 
@@ -1185,20 +1169,46 @@ class CollectorWindow(QMainWindow):
         categories = self._selected_source_categories(selected_devices)
         if not categories:
             return
+        controls_enabled = self.collection_token is not None
+        if hasattr(self, 'select_all_cb'):
+            self.select_all_cb.setEnabled(controls_enabled)
+            self.select_all_cb.setToolTip(
+                'Select or clear all artifacts in the current tab'
+                if controls_enabled else 'Authenticate a session token first'
+            )
+        if hasattr(self, 'include_deleted_cb'):
+            self.include_deleted_cb.setEnabled(controls_enabled)
+            self.include_deleted_cb.setToolTip(
+                'Recover and collect deleted files from MFT (slower but more thorough)'
+                if controls_enabled else 'Authenticate a session token first'
+            )
         for artifact_type, cb in self.artifact_checks.items():
             category = self._artifact_category(artifact_type)
+            info = ARTIFACT_TYPES.get(artifact_type, {})
+            tooltip = info.get('description', '')
+
             if category == 'ai_activity':
+                if controls_enabled and self._is_artifact_allowed(artifact_type):
+                    cb.setEnabled(True)
+                    if not cb.isChecked() and info.get('default_enabled') is not False:
+                        cb.setChecked(True)
+                else:
+                    cb.setChecked(False)
+                    cb.setEnabled(False)
+                    cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
                 continue
+
             if category in categories and self._is_artifact_allowed(artifact_type):
-                info = ARTIFACT_TYPES.get(artifact_type, {})
                 cb.setEnabled(True)
                 if not cb.isChecked() and info.get('default_enabled') is not False:
                     cb.setChecked(True)
-            if category not in categories:
+            elif category in categories:
                 cb.setChecked(False)
                 cb.setEnabled(False)
-                info = ARTIFACT_TYPES.get(artifact_type, {})
-                tooltip = info.get('description', '')
+                cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
+            else:
+                cb.setChecked(False)
+                cb.setEnabled(False)
                 cb.setToolTip((tooltip + " | " if tooltip else "") + "Not applicable to the selected evidence source")
 
     def _category_label(self, category: str) -> str:
@@ -1233,13 +1243,48 @@ class CollectorWindow(QMainWindow):
             f"font-size: 9px; border-radius: 4px; padding: 4px 8px;"
         )
 
+    def _set_artifacts_waiting_for_source(self) -> None:
+        has_token = self.collection_token is not None
+        if has_token:
+            message = 'Authorized profile loaded. Select an evidence source to apply collection scope.'
+            tooltip_suffix = 'Select an evidence source to apply the authorized collection profile'
+        else:
+            message = 'Authenticate a session token, then select an evidence source to load collection scope.'
+            tooltip_suffix = 'Authenticate a session token and select an evidence source first'
+
+        self._set_source_scope_label(message, 'info')
+
+        if hasattr(self, 'select_all_cb'):
+            self.select_all_cb.blockSignals(True)
+            self.select_all_cb.setChecked(False)
+            self.select_all_cb.blockSignals(False)
+            self.select_all_cb.setEnabled(False)
+            self.select_all_cb.setToolTip(tooltip_suffix)
+        if hasattr(self, 'include_deleted_cb'):
+            self.include_deleted_cb.setEnabled(False)
+            self.include_deleted_cb.setToolTip(
+                'Recover deleted files after an evidence source is selected'
+            )
+
+        for artifact_type, cb in self.artifact_checks.items():
+            cb.setChecked(False)
+            cb.setEnabled(False)
+            tooltip = ARTIFACT_TYPES.get(artifact_type, {}).get('description', '')
+            cb.setToolTip((tooltip + ' | ' if tooltip else '') + tooltip_suffix)
+
     def _update_source_scope_status(self, selected_devices: Optional[list] = None) -> None:
         devices = selected_devices if selected_devices is not None else self.device_manager.get_selected_devices()
         if not devices:
-            self._set_source_scope_label(
-                'Select an evidence source to load the applicable collection scope.',
-                'info',
-            )
+            if self.collection_token is not None:
+                self._set_source_scope_label(
+                    'Authorized profile loaded. Select an evidence source to apply collection scope.',
+                    'info',
+                )
+            else:
+                self._set_source_scope_label(
+                    'Authenticate a session token, then select an evidence source to load collection scope.',
+                    'info',
+                )
             return
 
         categories = self._selected_source_categories(devices)
@@ -1368,6 +1413,13 @@ class CollectorWindow(QMainWindow):
         - Auto-focus to appropriate tab based on detected OS
         """
         selected_devices = self.device_manager.get_selected_devices()
+
+        if not selected_devices:
+            self._update_linux_macos_info_labels([])
+            self._update_android_root_status(is_rooted=False, connected=False)
+            self._update_ios_info_label(None, [])
+            self._set_artifacts_waiting_for_source()
+            return
 
         # Determine tab for auto-focus (priority: first selected device)
         tab_map = {'windows': 0, 'android': 1, 'ios': 2, 'linux': 3, 'macos': 4}
@@ -1857,97 +1909,6 @@ class CollectorWindow(QMainWindow):
 
         self._update_collect_button_state()
 
-    def _privacy_incident_candidates(self) -> set:
-        enabled_artifacts = {
-            artifact_type
-            for artifact_type, cb in self.artifact_checks.items()
-            if self._artifact_checkbox_enabled_for_collection(cb)
-        }
-        if not enabled_artifacts:
-            return set()
-
-        categories = self._selected_source_categories()
-        def in_selected_scope(artifact_type: str) -> bool:
-            if not categories:
-                return True
-            category = self._artifact_category(artifact_type)
-            return category in categories or category == 'ai_activity'
-
-        explicit = {
-            artifact_type for artifact_type in PRIVACY_INCIDENT_PRESET
-            if artifact_type in enabled_artifacts and in_selected_scope(artifact_type)
-        }
-        if explicit:
-            return explicit
-
-        subcategories = {
-            'system', 'filesystem', 'pc_messenger', 'pc_apps', 'basic',
-            'core', 'messenger', 'sns', 'email_browser', 'app_messenger',
-            'app_email_browser', 'productivity', 'korean', 'developer',
-        }
-        keywords = (
-            'account', 'browser', 'chat', 'cloud', 'contact', 'credential',
-            'document', 'download', 'email', 'event', 'file', 'history',
-            'login', 'media', 'message', 'network', 'profile', 'recent',
-            'timeline', 'transfer', 'usb', 'user', 'wifi',
-        )
-
-        candidates = set()
-        for artifact_type in enabled_artifacts:
-            if not in_selected_scope(artifact_type):
-                continue
-            info = ARTIFACT_TYPES.get(artifact_type, {})
-            subcategory = str(info.get('subcategory') or '').lower()
-            haystack = ' '.join((
-                artifact_type,
-                str(info.get('name') or ''),
-                str(info.get('description') or ''),
-                subcategory,
-            )).lower()
-            if subcategory in subcategories or any(keyword in haystack for keyword in keywords):
-                candidates.add(artifact_type)
-
-        if candidates:
-            return candidates
-
-        # Last-resort UX fallback: never let the preset clear the whole plan.
-        return {artifact_type for artifact_type in enabled_artifacts if in_selected_scope(artifact_type)}
-
-    def _apply_privacy_incident_preset(self):
-        """Select a focused set of artifacts for personal-data breach triage."""
-        selected_devices = self.device_manager.get_selected_devices()
-        if selected_devices:
-            self._apply_selected_source_scope(selected_devices, force=True)
-
-        candidates = self._privacy_incident_candidates()
-        selected_count = 0
-        skipped_count = 0
-
-        if not candidates:
-            self._log("Privacy incident preset unavailable: no enabled artifacts for the selected source", error=True)
-            self._update_collect_button_state()
-            return
-
-        for artifact_type, cb in self.artifact_checks.items():
-            if not self._artifact_checkbox_enabled_for_collection(cb):
-                continue
-            should_select = artifact_type in candidates
-            cb.setChecked(should_select)
-            if should_select:
-                selected_count += 1
-
-        for artifact_type in PRIVACY_INCIDENT_PRESET:
-            cb = self.artifact_checks.get(artifact_type)
-            if not cb or not self._artifact_checkbox_enabled_for_collection(cb):
-                skipped_count += 1
-
-        self.include_deleted_cb.setChecked(True)
-        self._update_collect_button_state()
-        self._log(
-            f"Privacy incident preset applied: {selected_count} artifacts selected"
-            + (f", {skipped_count} unavailable/not allowed" if skipped_count else "")
-        )
-
     def _validate_token(self):
         """Validate the session token"""
         token = self.token_input.text().strip()
@@ -2081,7 +2042,7 @@ class CollectorWindow(QMainWindow):
 
             self._log(f"Mapped artifacts for GUI: {', '.join(sorted(mapped_allowed))}")
             if allow_all:
-                self._log("All artifacts are allowed - selecting all by default")
+                self._log("All artifacts are authorized by the collection token")
 
             enabled_count = 0
             for artifact_type, cb in self.artifact_checks.items():
@@ -2099,10 +2060,7 @@ class CollectorWindow(QMainWindow):
                     tooltip = info.get('description', '')
                     cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
 
-            self._log(f"[DEBUG] Enabled and checked {enabled_count}/{len(self.artifact_checks)} checkboxes")
-            if hasattr(self, 'privacy_preset_btn'):
-                self.privacy_preset_btn.setEnabled(enabled_count > 0)
-
+            self._log(f"Authorized artifact types loaded: {enabled_count}/{len(self.artifact_checks)}")
             self._update_platform_tab_states()
 
             # Update collect button state including device selection status
@@ -2120,9 +2078,6 @@ class CollectorWindow(QMainWindow):
                 f"⚠️ {friendly_error.title}",
                 f"{friendly_error.message}\n\nSolution:\n{friendly_error.solution}"
             )
-            if hasattr(self, 'privacy_preset_btn'):
-                self.privacy_preset_btn.setEnabled(False)
-
         self.validate_btn.setEnabled(True)
 
     def _start_collection(self):
@@ -3173,14 +3128,10 @@ class CollectorWindow(QMainWindow):
         self.collect_btn.setEnabled(False)  # Disable after collection complete/cancelled (new token required)
         self.cancel_btn.setEnabled(False)
         self.validate_btn.setEnabled(True)
-        self.select_all_cb.setEnabled(True)
-        self.include_deleted_cb.setEnabled(True)
-        for cb in self.artifact_checks.values():
-            cb.setEnabled(True)
-
         # [Security] Clear session data - prevent token reuse
         # After collection complete/cancelled, must re-authenticate with new token
         self._clear_session_data()
+        self._set_artifacts_waiting_for_source()
 
         if success:
             self._collection_completed = True
