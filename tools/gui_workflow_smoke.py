@@ -460,6 +460,52 @@ def _assert_worker_filtering() -> None:
     assert "windows_discord" not in label
 
 
+def _assert_upload_queue_deduplication() -> None:
+    worker = CollectionWorker("", "", "", "", "", [])
+
+    encrypted_files = []
+    dedupe_index = {}
+    first_meta = {
+        "original_path": "ProgramData/Microsoft/Windows Defender/Support/MPScanSkip.log",
+        "hash_sha256": "a" * 64,
+    }
+    second_meta = {
+        "original_path": "ProgramData\\Microsoft\\Windows Defender\\Support\\MPScanSkip.log",
+        "hash_sha256": "a" * 64,
+    }
+
+    assert worker._queue_prepared_upload(
+        encrypted_files, dedupe_index, "/tmp/MPScanSkip.log", "defender_detection", first_meta, "a" * 64
+    ) is True
+    assert worker._queue_prepared_upload(
+        encrypted_files, dedupe_index, "/tmp/MPScanSkip_copy.tmp", "defender_operational_log", second_meta, "a" * 64
+    ) is False
+    assert len(encrypted_files) == 1, "same source/hash was queued twice"
+    assert encrypted_files[0][2]["matched_artifact_types"] == [
+        "defender_detection",
+        "defender_operational_log",
+    ]
+    assert encrypted_files[0][2]["duplicate_artifact_types"] == ["defender_operational_log"]
+
+    encrypted_files = []
+    dedupe_index = {}
+    docx_meta = {
+        "original_path": "Users/user/Downloads/freelancer_contract.docx",
+        "hash_sha256": "b" * 64,
+    }
+    hwp_meta = {
+        "original_path": "Users/user/Downloads/freelancer_contract.hwp",
+        "hash_sha256": "c" * 64,
+    }
+    assert worker._queue_prepared_upload(
+        encrypted_files, dedupe_index, "/tmp/freelancer_contract.docx", "document", docx_meta, "b" * 64
+    ) is True
+    assert worker._queue_prepared_upload(
+        encrypted_files, dedupe_index, "/tmp/freelancer_contract.hwp", "document", hwp_meta, "c" * 64
+    ) is True
+    assert len(encrypted_files) == 2, "different documents were incorrectly deduplicated"
+
+
 def _assert_checkbox_widget_visible(dialog: ConsentDialog, checkbox, name: str) -> None:
     assert checkbox is not None, f"{name} checkbox missing"
     assert checkbox.isVisible(), f"{name} checkbox widget is hidden"
@@ -521,6 +567,23 @@ def _assert_consent_dialog(window: CollectorWindow) -> None:
             "I acknowledge that the collected data will be processed according to the case retention policy and deleted when the retention window expires unless the case is extended.",
             "I agree to start collection for the selected evidence sources.",
         ],
+        "operator_authorization": {
+            "version": "smoke",
+            "required": True,
+            "require_transfer_ack": True,
+            "labels": {
+                "section_title": "Server Authorization",
+                "role_label": "Server role label",
+                "basis_label": "Server basis label",
+                "transfer_label": "Server transfer acknowledgement",
+            },
+            "roles": [
+                {"value": "authorized_agent", "label": "Server authorized agent"},
+            ],
+            "legal_bases": [
+                {"value": "legal_obligation", "label": "Server legal obligation"},
+            ],
+        },
     })
     dialog.show()
     QApplication.processEvents()
@@ -534,6 +597,12 @@ def _assert_consent_dialog(window: CollectorWindow) -> None:
     _assert_footer_is_stable(dialog)
 
     assert len(dialog.checkboxes) == 5, "required consent checkbox rows were not created"
+    assert dialog._operator_section_title.text() == "Server Authorization"
+    assert dialog._role_label_widget.text() == "Server role label"
+    assert dialog._basis_label_widget.text() == "Server basis label"
+    assert dialog.transfer_checkbox.toolTip() == "Server transfer acknowledgement"
+    assert dialog.role_combo.currentData() == "authorized_agent"
+    assert dialog.basis_combo.currentData() == "legal_obligation"
     _assert_checkbox_widget_visible(dialog, dialog.transfer_checkbox, "transfer")
     _assert_checkbox_widget_visible(dialog, dialog.checkboxes[0], "first consent")
 
@@ -602,6 +671,7 @@ def main() -> int:
     _assert_plan_dialog(window)
     _assert_start_locking(window)
     _assert_worker_filtering()
+    _assert_upload_queue_deduplication()
     _assert_consent_dialog(window)
     _assert_device_polling_is_async()
     window.close()

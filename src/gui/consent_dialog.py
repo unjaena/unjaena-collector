@@ -34,8 +34,8 @@ class ConsentDialog(QDialog):
     LANGUAGES = {
         "en": "English",
         "ko": "Korean",
-        "ja": "日本語",
-        "zh": "中文"
+        "ja": "Japanese",
+        "zh": "Chinese"
     }
 
     def __init__(
@@ -73,6 +73,7 @@ class ConsentDialog(QDialog):
         self.template_content = None
         self.required_checkboxes: List[str] = []
         self.checkboxes: List[QCheckBox] = []
+        self.operator_authorization = self._default_operator_authorization()
 
         # Operator role + legal basis captured via the dialog widgets;
         # consumed by _create_consent_record. Default values are the
@@ -313,6 +314,10 @@ class ConsentDialog(QDialog):
         self.template_version = template.get("version")
         self.template_content = template.get("content", "")
         self.required_checkboxes = template.get("required_checkboxes", [])
+        self.operator_authorization = self._normalize_operator_authorization(
+            template.get("operator_authorization")
+        )
+        self._relocalize_operator_section()
 
         # Update header
         template_title = template.get("title", "Digital Forensic Collection Consent")
@@ -330,25 +335,12 @@ class ConsentDialog(QDialog):
         for item_text in self.required_checkboxes:
             self._add_consent_item(item_text)
 
-        # Button text (by language)
-        btn_texts = {
-            "ko": ("Cancel", "Agree and Start"),
-            "ja": ("キャンセル", "同意して開始"),
-            "zh": ("取消", "同意并开始"),
-            "en": ("Cancel", "Agree and Start")
-        }
-        cancel_text, agree_text = btn_texts.get(self.language, btn_texts["en"])
-        self.cancel_btn.setText(cancel_text)
-        self.agree_btn.setText(agree_text)
-
-        # Warning text (by language)
-        warning_texts = {
-            "ko": "Warning: This tool collects analysis data from your system.\nPlease read and agree to the terms below before proceeding.",
-            "ja": "警告：このツールはシステムから分析データを収集します。\n以下の内容をお読みになり、同意の上お進みください。",
-            "zh": "警告：此工具将从您的系统中收集分析数据。\n请阅读以下内容并同意后再继续。",
-            "en": "Warning: This tool collects analysis data from your system.\nPlease read and agree to the terms below before proceeding."
-        }
-        self.warning_label.setText(warning_texts.get(self.language, warning_texts["en"]))
+        self.cancel_btn.setText("Cancel")
+        self.agree_btn.setText("Agree and Start")
+        self.warning_label.setText(
+            "Warning: This tool collects analysis data from your system.\n"
+            "Please read and agree to the terms below before proceeding."
+        )
 
         self._update_button_state()
 
@@ -358,13 +350,10 @@ class ConsentDialog(QDialog):
         self.template_version = None
         self.template_content = None
 
-        fallback_msgs = {
-            'ko': 'Consent information could not be loaded. Internet connection is required.',
-            'en': 'Consent information could not be loaded. Internet connection is required.',
-            'ja': '同意書を読み込めませんでした。インターネット接続が必要です。',
-            'zh': '无法加载同意书。需要互联网连接。',
-        }
-        msg = fallback_msgs.get(self.language, fallback_msgs['en'])
+        self.operator_authorization = self._default_operator_authorization()
+        self._relocalize_operator_section()
+
+        msg = "Consent information could not be loaded. Internet connection is required."
 
         self.header_label.setText("Digital Forensic Collection Consent")
         if hasattr(self, "header_subtitle"):
@@ -486,7 +475,7 @@ class ConsentDialog(QDialog):
     def _submit_consent_to_server(self) -> bool:
         """Submit consent record to server.
 
-        Fail-closed semantics — returns False if server submission cannot be
+        Fail-closed semantics - returns False if server submission cannot be
         confirmed, blocking the operator from proceeding until the consent
         record is safely transmitted. This is required for GDPR/PIPA audit
         integrity: a scan without a verified consent record is not defensible.
@@ -497,13 +486,13 @@ class ConsentDialog(QDialog):
         truth and must be manually submitted later.
         """
         if not self.server_url:
-            logger.warning("No server URL configured — using offline mode. "
+            logger.warning("No server URL configured - using offline mode. "
                            "Consent stored locally only; manual upload required.")
             # Local-only mode is an explicit operator choice; allow it.
             return True
 
         if not self.session_id:
-            logger.error("session_id missing — cannot verify consent on server. "
+            logger.error("session_id missing - cannot verify consent on server. "
                          "Blocking collection until a valid session is established.")
             return False
 
@@ -525,7 +514,7 @@ class ConsentDialog(QDialog):
             except Exception:
                 hostname = "unknown"
 
-            # Operator role + legal basis — required for downstream accountability
+            # Operator role + legal basis - required for downstream accountability
             # and to support Art. 17 erasure requests against the correct controller.
             payload = {
                 "session_id": self.session_id,
@@ -578,149 +567,126 @@ class ConsentDialog(QDialog):
     # Operator role / legal basis / cross-border transfer ack UI
     # ------------------------------------------------------------------
 
-    _ROLE_OPTIONS = [
-        # (internal_value, i18n_key, english_label)
-        ("device_owner",      "role_device_owner",      "I am the owner of this device"),
-        ("authorized_agent",  "role_authorized_agent",  "I am authorized in writing by the device owner"),
-        ("employer",          "role_employer",          "This is a company-owned device under my supervision"),
-        ("court_order",       "role_court_order",       "I have a court order / warrant for this device"),
-        ("law_enforcement",   "role_law_enforcement",   "I am a law-enforcement officer acting under lawful authority"),
-    ]
+    def _default_operator_authorization(self) -> dict:
+        return {
+            "version": "local-fallback",
+            "required": True,
+            "require_transfer_ack": True,
+            "labels": {
+                "section_title": "Operator Authorization",
+                "role_label": "Your role in this collection:",
+                "basis_label": "Legal basis for processing:",
+                "transfer_label": (
+                    "I acknowledge that the collected data may be transmitted to and processed by the "
+                    "configured analysis service and its approved service providers. Standard Contractual "
+                    "Clauses may apply."
+                ),
+            },
+            "roles": [
+                {"value": "device_owner", "label": "I am the owner of this device"},
+                {"value": "authorized_agent", "label": "I am authorized in writing by the device owner"},
+                {"value": "employer", "label": "Company-owned device under my supervision"},
+                {"value": "court_order", "label": "I have a court order or warrant"},
+                {"value": "law_enforcement", "label": "Law-enforcement officer under lawful authority"},
+            ],
+            "legal_bases": [
+                {"value": "data_subject_consent", "label": "Explicit consent of the data subject"},
+                {"value": "legitimate_interest", "label": "Legitimate interest with balancing test documented"},
+                {"value": "legal_obligation", "label": "Legal obligation or regulatory requirement"},
+                {"value": "public_task", "label": "Public task or official authority"},
+                {"value": "vital_interest", "label": "Vital interest or life safety"},
+            ],
+        }
 
-    _BASIS_OPTIONS = [
-        ("data_subject_consent",   "basis_consent",              "Explicit consent of the data subject"),
-        ("legitimate_interest",    "basis_legitimate_interest",  "Legitimate interest (balancing test documented)"),
-        ("legal_obligation",       "basis_legal_obligation",     "Legal obligation / regulatory requirement"),
-        ("public_task",            "basis_public_task",          "Public task / official authority"),
-        ("vital_interest",         "basis_vital_interest",       "Vital interest / life safety"),
-    ]
+    @staticmethod
+    def _normalize_authorization_options(value, fallback):
+        if not isinstance(value, list):
+            return list(fallback)
+        normalized = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            option_value = str(item.get("value") or "").strip()
+            option_label = str(item.get("label") or option_value).strip()
+            if option_value and option_label:
+                normalized.append({"value": option_value, "label": option_label})
+        return normalized or list(fallback)
 
-    # Labels shown above the selectors; kept in-dialog (no server round-trip)
-    # so the operator can see them even if the consent template fetch fails.
-    _OPERATOR_LABELS = {
-        "section_title": {
-            "en": "Operator Authorization",
-            "ko": "Operator Authorization",
-            "ja": "実施者の権限",
-            "zh": "操作员授权",
-        },
-        "role_label": {
-            "en": "Your role in this collection:",
-            "ko": "Your role in this collection:",
-            "ja": "本収集におけるあなたの役割:",
-            "zh": "您在本次采集中的角色:",
-        },
-        "basis_label": {
-            "en": "Legal basis for processing:",
-            "ko": "Legal basis for processing:",
-            "ja": "処理の法的根拠:",
-            "zh": "处理的法律依据:",
-        },
-        "transfer_label": {
-            "en": "I acknowledge that the collected data may be transmitted to and processed by the configured analysis service and its approved service providers. Standard Contractual Clauses may apply.",
-            "ko": "I acknowledge that the collected data may be transmitted to and processed by the configured analysis service and its approved service providers. Standard Contractual Clauses may apply.",
-            "ja": "収集されたデータは、設定済みの分析サービスおよび承認済みサービスプロバイダーに送信・処理される場合があります。標準契約条項が適用される場合があります。",
-            "zh": "本人确认所采集数据可能会传输至已配置的分析服务及其授权服务提供商进行处理,并可能适用标准合同条款。",
-        },
-    }
+    def _normalize_operator_authorization(self, value) -> dict:
+        fallback = self._default_operator_authorization()
+        if not isinstance(value, dict):
+            return fallback
 
-    # Localized labels for the combo entries.
-    _ROLE_LABELS_LOCALIZED = {
-        "en": {
-            "role_device_owner":     "I am the owner of this device",
-            "role_authorized_agent": "I am authorized in writing by the device owner",
-            "role_employer":         "Company-owned device under my supervision",
-            "role_court_order":      "I have a court order / warrant",
-            "role_law_enforcement":  "Law-enforcement officer under lawful authority",
-        },
-        "ko": {
-            "role_device_owner":     "I am the owner of this device",
-            "role_authorized_agent": "I am authorized in writing by the device owner",
-            "role_employer":         "Company-owned device under my supervision",
-            "role_court_order":      "I have a court order / warrant",
-            "role_law_enforcement":  "Law-enforcement officer under lawful authority",
-        },
-        "ja": {
-            "role_device_owner":     "私はこの端末の所有者です",
-            "role_authorized_agent": "所有者から書面で委任を受けました",
-            "role_employer":         "会社所有の端末で、私が管理責任者です",
-            "role_court_order":      "裁判所命令/令状を有しています",
-            "role_law_enforcement":  "法執行機関の職員として適法に実施します",
-        },
-        "zh": {
-            "role_device_owner":     "我是本设备的所有者",
-            "role_authorized_agent": "我获得设备所有者的书面授权",
-            "role_employer":         "公司所有设备,由我负责监督",
-            "role_court_order":      "我持有法院命令或搜查令",
-            "role_law_enforcement":  "我是依法执行任务的执法人员",
-        },
-    }
+        labels = fallback["labels"].copy()
+        server_labels = value.get("labels")
+        if isinstance(server_labels, dict):
+            for key in labels:
+                label = str(server_labels.get(key) or "").strip()
+                if label:
+                    labels[key] = label
 
-    _BASIS_LABELS_LOCALIZED = {
-        "en": {
-            "basis_consent":              "Explicit consent of the data subject",
-            "basis_legitimate_interest":  "Legitimate interest (balancing test documented)",
-            "basis_legal_obligation":     "Legal obligation / regulatory requirement",
-            "basis_public_task":          "Public task / official authority",
-            "basis_vital_interest":       "Vital interest / life safety",
-        },
-        "ko": {
-            "basis_consent":              "Explicit consent of the data subject",
-            "basis_legitimate_interest":  "Legitimate interest (balancing test documented)",
-            "basis_legal_obligation":     "Legal obligation / regulatory requirement",
-            "basis_public_task":          "Public task / official authority",
-            "basis_vital_interest":       "Vital interest / life safety",
-        },
-        "ja": {
-            "basis_consent":              "データ主体の明示的同意",
-            "basis_legitimate_interest":  "正当な利益(比較考量を文書化)",
-            "basis_legal_obligation":     "法的義務 / 規制要件",
-            "basis_public_task":          "公的任務 / 公的権限",
-            "basis_vital_interest":       "重大な利益 / 生命安全",
-        },
-        "zh": {
-            "basis_consent":              "数据主体的明示同意",
-            "basis_legitimate_interest":  "正当利益(已记录利益权衡)",
-            "basis_legal_obligation":     "法律义务 / 监管要求",
-            "basis_public_task":          "公共任务 / 法定职权",
-            "basis_vital_interest":       "重大利益 / 生命安全",
-        },
-    }
+        roles = self._normalize_authorization_options(value.get("roles"), fallback["roles"])
+        legal_bases = self._normalize_authorization_options(value.get("legal_bases"), fallback["legal_bases"])
+
+        return {
+            "version": str(value.get("version") or fallback["version"]),
+            "required": value.get("required", fallback["required"]) is not False,
+            "require_transfer_ack": value.get("require_transfer_ack", fallback["require_transfer_ack"]) is not False,
+            "labels": labels,
+            "roles": roles,
+            "legal_bases": legal_bases,
+        }
+
+    def _set_combo_options(self, combo: QComboBox, options: list, current_value: str) -> str:
+        combo.blockSignals(True)
+        combo.clear()
+        for item in options:
+            combo.addItem(item["label"], item["value"])
+        idx = combo.findData(current_value)
+        if idx < 0:
+            idx = 0 if combo.count() else -1
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        selected = combo.currentData() or ""
+        combo.blockSignals(False)
+        return selected
 
     def _build_operator_section(self, parent_layout) -> None:
-        """Render the operator-authorization section of the dialog."""
+        """Render the server-provided operator-authorization section."""
         frame = QFrame()
         frame.setObjectName("operatorFrame")
         vbox = QVBoxLayout(frame)
         vbox.setContentsMargins(12, 12, 12, 12)
         vbox.setSpacing(10)
 
-        self._operator_section_title = QLabel(self._OPERATOR_LABELS["section_title"][self.language])
+        auth = getattr(self, "operator_authorization", None) or self._default_operator_authorization()
+        labels = auth["labels"]
+
+        self._operator_section_title = QLabel(labels["section_title"])
         self._operator_section_title.setObjectName("sectionTitle")
         vbox.addWidget(self._operator_section_title)
 
-        self._role_label_widget = QLabel(self._OPERATOR_LABELS["role_label"][self.language])
+        self._role_label_widget = QLabel(labels["role_label"])
         self._role_label_widget.setObjectName("fieldLabel")
         self.role_combo = QComboBox()
         self.role_combo.setFixedHeight(32)
-        for value, key, _ in self._ROLE_OPTIONS:
-            label = self._ROLE_LABELS_LOCALIZED[self.language].get(key, value)
-            self.role_combo.addItem(label, value)
+        self.operator_role = self._set_combo_options(self.role_combo, auth["roles"], self.operator_role)
         self.role_combo.currentIndexChanged.connect(self._on_role_changed)
         vbox.addLayout(self._form_row(self._role_label_widget, self.role_combo))
 
-        self._basis_label_widget = QLabel(self._OPERATOR_LABELS["basis_label"][self.language])
+        self._basis_label_widget = QLabel(labels["basis_label"])
         self._basis_label_widget.setObjectName("fieldLabel")
         self.basis_combo = QComboBox()
         self.basis_combo.setFixedHeight(32)
-        for value, key, _ in self._BASIS_OPTIONS:
-            label = self._BASIS_LABELS_LOCALIZED[self.language].get(key, value)
-            self.basis_combo.addItem(label, value)
+        self.operator_legal_basis = self._set_combo_options(
+            self.basis_combo,
+            auth["legal_bases"],
+            self.operator_legal_basis,
+        )
         self.basis_combo.currentIndexChanged.connect(self._on_basis_changed)
         vbox.addLayout(self._form_row(self._basis_label_widget, self.basis_combo))
 
-        transfer_text = self._OPERATOR_LABELS["transfer_label"][self.language]
-        transfer_row, self.transfer_checkbox, self._transfer_label_widget = self._make_check_row(transfer_text)
+        transfer_row, self.transfer_checkbox, self._transfer_label_widget = self._make_check_row(labels["transfer_label"])
         self.transfer_checkbox.stateChanged.connect(self._on_transfer_changed)
         vbox.addWidget(transfer_row)
 
@@ -782,40 +748,27 @@ class ConsentDialog(QDialog):
         self._update_button_state()
 
     def _relocalize_operator_section(self) -> None:
-        """Called from _on_language_changed so the section re-renders
-        labels without losing the user's current selection."""
+        """Refresh operator authorization from the latest server template."""
         if not (self.role_combo and self.basis_combo and self.transfer_checkbox):
             return
+        auth = getattr(self, "operator_authorization", None) or self._default_operator_authorization()
+        labels = auth["labels"]
         try:
-            self._operator_section_title.setText(self._OPERATOR_LABELS["section_title"][self.language])
-            self._role_label_widget.setText(self._OPERATOR_LABELS["role_label"][self.language])
-            self._basis_label_widget.setText(self._OPERATOR_LABELS["basis_label"][self.language])
-            new_transfer = self._OPERATOR_LABELS["transfer_label"][self.language]
-            self.transfer_checkbox.setToolTip(new_transfer)
+            self._operator_section_title.setText(labels["section_title"])
+            self._role_label_widget.setText(labels["role_label"])
+            self._basis_label_widget.setText(labels["basis_label"])
+            transfer_text = labels["transfer_label"]
+            self.transfer_checkbox.setToolTip(transfer_text)
             if hasattr(self, "_transfer_label_widget"):
-                self._transfer_label_widget.setText(new_transfer)
-            # Re-populate combo labels, preserving current selection.
-            cur_role = self.role_combo.currentData() or self.operator_role
-            self.role_combo.blockSignals(True)
-            self.role_combo.clear()
-            for value, key, _ in self._ROLE_OPTIONS:
-                self.role_combo.addItem(self._ROLE_LABELS_LOCALIZED[self.language].get(key, value), value)
-            idx = self.role_combo.findData(cur_role)
-            if idx >= 0:
-                self.role_combo.setCurrentIndex(idx)
-            self.role_combo.blockSignals(False)
+                self._transfer_label_widget.setText(transfer_text)
 
-            cur_basis = self.basis_combo.currentData() or self.operator_legal_basis
-            self.basis_combo.blockSignals(True)
-            self.basis_combo.clear()
-            for value, key, _ in self._BASIS_OPTIONS:
-                self.basis_combo.addItem(self._BASIS_LABELS_LOCALIZED[self.language].get(key, value), value)
-            idx = self.basis_combo.findData(cur_basis)
-            if idx >= 0:
-                self.basis_combo.setCurrentIndex(idx)
-            self.basis_combo.blockSignals(False)
+            current_role = self.role_combo.currentData() or self.operator_role
+            self.operator_role = self._set_combo_options(self.role_combo, auth["roles"], current_role)
+            current_basis = self.basis_combo.currentData() or self.operator_legal_basis
+            self.operator_legal_basis = self._set_combo_options(self.basis_combo, auth["legal_bases"], current_basis)
+            self._update_button_state()
         except Exception as e:
-            logger.debug(f"operator section relocalize failed: {e}")
+            logger.debug(f"operator section refresh failed: {e}")
 
     def _add_consent_item(self, text: str) -> None:
         """Add a consent checkbox row."""
@@ -830,7 +783,9 @@ class ConsentDialog(QDialog):
         completion. All artifact checkboxes must be checked AND the
         cross-border transfer acknowledgment must be explicit."""
         all_checked = all(cb.isChecked() for cb in self.checkboxes) if self.checkboxes else False
-        operator_ready = bool(self.international_transfer_ack)
+        auth = getattr(self, "operator_authorization", None) or self._default_operator_authorization()
+        require_transfer_ack = auth.get("require_transfer_ack", True) is not False
+        operator_ready = (not require_transfer_ack) or bool(self.international_transfer_ack)
         self.agree_btn.setEnabled(all_checked and operator_ready)
 
     def _on_agree(self):
@@ -845,75 +800,31 @@ class ConsentDialog(QDialog):
         """
         submitted = self._submit_consent_to_server()
         if not submitted:
-            title_by_lang = {
-                "en": "Consent submission failed",
-                "ko": "Consent submission failed",
-                "ja": "同意記録の送信に失敗",
-                "zh": "同意记录提交失败",
-            }
-            body_by_lang = {
-                "en": (
-                    "Could not record your consent on the analysis server. "
-                    "Please check your network connection and try again. "
-                    "If the problem persists, contact your administrator."
-                ),
-                "ko": (
-                    "Could not record your consent on the analysis server. "
-                    "Please check your network connection and try again. "
-                    "If the problem persists, contact your administrator."
-                ),
-                "ja": (
-                    "同意記録を解析サーバーに保存できませんでした。"
-                    "ネットワーク接続を確認して再試行してください。"
-                    "問題が続く場合は管理者にご連絡ください。"
-                ),
-                "zh": (
-                    "无法将您的同意记录保存到分析服务器。"
-                    "请检查网络连接后重试。"
-                    "如问题持续,请联系管理员。"
-                ),
-            }
-            title = title_by_lang.get(self.language, title_by_lang["en"])
-            body = body_by_lang.get(self.language, body_by_lang["en"])
+            title = "Consent submission failed"
+            body = (
+                "Could not record your consent on the analysis server. "
+                "Please check your network connection and try again. "
+                "If the problem persists, contact your administrator."
+            )
             try:
                 from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.critical(self, title, body)
             except Exception:
-                # GUI not available (e.g. headless mode) — log only
+                # GUI not available (e.g. headless mode) - log only
                 logger.error("Consent submission failed; refusing to proceed")
             return
 
         try:
             self.consent_record = self._create_consent_record()
         except RuntimeError as rec_err:
-            # Signing-key unavailable — fail closed with user-facing error.
+            # Signing-key unavailable - fail closed with user-facing error.
             logger.error(f"Consent record generation failed: {rec_err}")
-            key_title = {
-                "en": "Consent signing unavailable",
-                "ko": "Consent signing unavailable",
-                "ja": "同意書の署名が利用できません",
-                "zh": "无法对同意书进行签名",
-            }.get(self.language, "Consent signing unavailable")
-            key_body = {
-                "en": (
-                    "A secure signing key is required to record consent. "
-                    "The server did not provide one. Please retry; if the problem "
-                    "continues, contact your administrator."
-                ),
-                "ko": (
-                    "A secure signing key is required to record consent. "
-                    "The server did not provide one. Please retry; if the problem "
-                    "continues, contact your administrator."
-                ),
-                "ja": (
-                    "安全な署名キーが取得できず、同意記録を生成できません。"
-                    "再試行してください。問題が続く場合は管理者にご連絡ください。"
-                ),
-                "zh": (
-                    "无法获取安全签名密钥,同意记录无法生成。"
-                    "请重试,如问题持续,请联系管理员。"
-                ),
-            }.get(self.language, "A secure signing key is required to record consent. Please retry.")
+            key_title = "Consent signing unavailable"
+            key_body = (
+                "A secure signing key is required to record consent. "
+                "The server did not provide one. Please retry; if the problem "
+                "continues, contact your administrator."
+            )
             try:
                 from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.critical(self, key_title, key_body)
@@ -1006,16 +917,16 @@ class ConsentDialog(QDialog):
         record_str = "|".join(record_components)
         record["consent_hash"] = hashlib.sha256(record_str.encode()).hexdigest()
 
-        # HMAC signature — REQUIRE a real key. We never produce a random
+        # HMAC signature - REQUIRE a real key. We never produce a random
         # fallback because it yields a legally worthless signature that
         # cannot be verified by the server.
         signing_key = self._server_signing_key or os.getenv("CONSENT_SIGNING_KEY")
         if not signing_key:
             logger.error(
-                "[CONSENT] No signing key available — refusing to generate record. "
+                "[CONSENT] No signing key available - refusing to generate record. "
                 "Set CONSENT_SIGNING_KEY or wait for the server to issue one."
             )
-            raise RuntimeError("CONSENT_SIGNING_KEY missing — cannot produce verifiable consent record")
+            raise RuntimeError("CONSENT_SIGNING_KEY missing - cannot produce verifiable consent record")
 
         # The signed payload mirrors the fields we want the server to
         # re-validate, NOT just timestamp/version/content_hash like before.

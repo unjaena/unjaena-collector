@@ -3602,6 +3602,57 @@ class CollectionWorker(QThread):
         self._heartbeat_stop_event = None
         self._heartbeat_thread = None
 
+    def _metadata_source_identity(self, file_path: str, metadata: dict) -> str:
+        if not isinstance(metadata, dict):
+            metadata = {}
+        for key in (
+            'original_path',
+            'source_path',
+            'full_path',
+            'relative_path',
+            'path',
+            'file_id',
+        ):
+            value = metadata.get(key)
+            if value:
+                if isinstance(value, (list, tuple, set)):
+                    value = '|'.join(str(item) for item in value)
+                return str(value).replace('\\', '/').strip().lower()
+        return str(Path(file_path)).replace('\\', '/').strip().lower()
+
+    def _upload_dedupe_key(self, file_path: str, metadata: dict, original_hash: str):
+        source_identity = self._metadata_source_identity(file_path, metadata)
+        content_hash = str(original_hash or (metadata or {}).get('hash_sha256') or '').lower()
+        return content_hash, source_identity
+
+    def _queue_prepared_upload(
+        self,
+        encrypted_files: list,
+        upload_dedupe_index: dict,
+        file_path: str,
+        artifact_type: str,
+        metadata: dict,
+        original_hash: str,
+    ) -> bool:
+        dedupe_key = self._upload_dedupe_key(file_path, metadata, original_hash)
+        existing_index = upload_dedupe_index.get(dedupe_key)
+        if existing_index is not None:
+            existing_artifact_type = encrypted_files[existing_index][1]
+            existing_metadata = encrypted_files[existing_index][2]
+            matched_types = existing_metadata.setdefault('matched_artifact_types', [])
+            for candidate in (existing_artifact_type, artifact_type):
+                if candidate and candidate not in matched_types:
+                    matched_types.append(candidate)
+            duplicate_types = existing_metadata.setdefault('duplicate_artifact_types', [])
+            if artifact_type and artifact_type not in duplicate_types:
+                duplicate_types.append(artifact_type)
+            return False
+
+        metadata.setdefault('matched_artifact_types', [artifact_type])
+        upload_dedupe_index[dedupe_key] = len(encrypted_files)
+        encrypted_files.append((file_path, artifact_type, metadata))
+        return True
+
     def _start_heartbeat(self):
         """
         Start heartbeat thread to keep collection session alive.
@@ -4392,6 +4443,8 @@ class CollectionWorker(QThread):
             # ========================================
             self.log_message.emit(f"🔐 Preparing {len(collected_raw_files)} files for upload...", False)
             encrypted_files = []  # (file_path, artifact_type, metadata)
+            upload_dedupe_index = {}
+            duplicate_uploads_skipped = 0
             total_files = len(collected_raw_files)
 
             for j, (file_path, artifact_type, metadata) in enumerate(collected_raw_files):
@@ -4450,11 +4503,22 @@ class CollectionWorker(QThread):
                         'original_hash': original_hash,
                     }
 
-                    encrypted_files.append((
+                    queued = self._queue_prepared_upload(
+                        encrypted_files,
+                        upload_dedupe_index,
                         file_path,
                         artifact_type,
-                        metadata
-                    ))
+                        metadata,
+                        original_hash,
+                    )
+                    if not queued:
+                        duplicate_uploads_skipped += 1
+                        if duplicate_uploads_skipped <= 20:
+                            self.log_message.emit(
+                                f"[SKIP] {filename}: duplicate source already queued",
+                                False,
+                            )
+                        continue
 
                 except FileNotFoundError:
                     self.log_message.emit(
@@ -4464,6 +4528,17 @@ class CollectionWorker(QThread):
                     )
                 except Exception as e:
                     self.log_message.emit(f"Preparation failed ({filename}): {e}", True)
+
+            if duplicate_uploads_skipped > 20:
+                self.log_message.emit(
+                    f"[SKIP] {duplicate_uploads_skipped - 20} additional duplicate source files already queued",
+                    False,
+                )
+            if duplicate_uploads_skipped:
+                self.log_message.emit(
+                    f"Deduplicated {duplicate_uploads_skipped} duplicate upload queue entries.",
+                    False,
+                )
 
             if self._cancelled:
                 self.finished.emit(False, "Preparation cancelled")
