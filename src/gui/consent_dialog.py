@@ -18,7 +18,7 @@ import logging
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
     QPushButton, QFrame, QScrollArea, QWidget,
-    QComboBox, QMessageBox, QSizePolicy
+    QComboBox, QMessageBox, QSizePolicy, QLayout
 )
 from PyQt6.QtCore import Qt, QSize, QTimer
 
@@ -146,11 +146,14 @@ class ConsentDialog(QDialog):
         self.body_layout = QVBoxLayout(self.body_widget)
         self.body_layout.setContentsMargins(20, 16, 20, 16)
         self.body_layout.setSpacing(12)
+        self.body_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        self.body_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.body_scroll.setWidget(self.body_widget)
         layout.addWidget(self.body_scroll, 1)
 
         self.warning_frame = QFrame()
         self.warning_frame.setObjectName("warningFrame")
+        self.warning_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         warning_layout = QVBoxLayout(self.warning_frame)
         warning_layout.setContentsMargins(12, 10, 12, 10)
         warning_layout.setSpacing(0)
@@ -167,6 +170,7 @@ class ConsentDialog(QDialog):
 
         self.checkbox_frame = QFrame()
         self.checkbox_frame.setObjectName("checkboxFrame")
+        self.checkbox_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.checkbox_layout = QVBoxLayout(self.checkbox_frame)
         self.checkbox_layout.setContentsMargins(12, 12, 12, 12)
         self.checkbox_layout.setSpacing(8)
@@ -174,6 +178,7 @@ class ConsentDialog(QDialog):
 
         self.document_frame = QFrame()
         self.document_frame.setObjectName("documentFrame")
+        self.document_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         document_layout = QVBoxLayout(self.document_frame)
         document_layout.setContentsMargins(14, 12, 14, 12)
         document_layout.setSpacing(8)
@@ -189,7 +194,6 @@ class ConsentDialog(QDialog):
         self.consent_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         document_layout.addWidget(self.consent_text)
         self.body_layout.addWidget(self.document_frame)
-        self.body_layout.addStretch(1)
 
         self.footer_frame = QFrame()
         self.footer_frame.setObjectName("footerFrame")

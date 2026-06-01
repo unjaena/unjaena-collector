@@ -95,6 +95,9 @@ def apply_collection_profile_to_registry(
             mft_config["max_file_size"] = target.get("max_bytes")
         if mft_config:
             merged["mft_config"] = mft_config
+            for key, value in mft_config.items():
+                if key in _MFT_CONFIG_KEYS:
+                    merged[key] = deepcopy(value)
 
         merged.setdefault("name", metadata.get("label") or artifact_type.replace("_", " ").title())
         merged.setdefault("description", metadata.get("description") or "Server-authorized collection target")

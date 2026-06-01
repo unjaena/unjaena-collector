@@ -427,6 +427,8 @@ class BaseMFTCollector(ABC):
             if mft_filter.get('extensions'):
                 mft_filter['full_disk_scan'] = True
                 mft_filter['path_optional'] = True
+                for key in ('paths', 'path_pattern', 'path_patterns', 'base_path', 'user_path'):
+                    mft_filter.pop(key, None)
 
         logger.info(f"[{source}] Collecting {artifact_type}, filter={mft_filter}")
 
@@ -682,14 +684,31 @@ class BaseMFTCollector(ABC):
             files_to_check = itertools.chain(files_to_check, self._mft_cache['deleted_files'])
 
         # Filter conditions
-        extensions = mft_filter.get('extensions', set())
-        exclude_extensions = mft_filter.get('exclude_extensions', set())
-        target_files = mft_filter.get('files', set())
+        extensions = {str(ext).lower() for ext in (mft_filter.get('extensions', set()) or set()) if ext}
+        exclude_extensions = {str(ext).lower() for ext in (mft_filter.get('exclude_extensions', set()) or set()) if ext}
+        target_files = {str(name).lower() for name in (mft_filter.get('files', set()) or set()) if name}
         path_pattern = mft_filter.get('path_pattern')
-        path_patterns = mft_filter.get('path_patterns', [])
+        path_patterns = list(mft_filter.get('path_patterns', []) or [])
         name_pattern = mft_filter.get('name_pattern')
         path_optional = mft_filter.get('path_optional', False)  # Collect by filename only even without path
-        exclude_path_patterns = mft_filter.get('exclude_path_patterns', [])
+        exclude_path_patterns = list(mft_filter.get('exclude_path_patterns', []) or [])
+
+        def _glob_to_regex(value: str) -> str:
+            return re.escape(value).replace(r'\*', '[^/]+')
+
+        base_path = str(mft_filter.get('base_path') or '').strip().replace('\\', '/')
+        user_path = str(mft_filter.get('user_path') or '').strip().replace('\\', '/')
+        profile_pattern = str(mft_filter.get('pattern') or '').strip()
+        if user_path:
+            user_path = user_path.strip('/')
+            if user_path:
+                path_patterns.append(r'(users|documents and settings)/[^/]+/' + _glob_to_regex(user_path))
+        if base_path:
+            base_path = base_path.strip('/')
+            if base_path:
+                path_patterns.append(_glob_to_regex(base_path))
+        if profile_pattern and profile_pattern != '*' and not name_pattern:
+            name_pattern = _glob_to_regex(profile_pattern)
 
         # Convert Linux/macOS 'paths' list into path_patterns + target_files
         # 'paths' entries are absolute paths like '/var/log/auth.log' or
@@ -769,6 +788,12 @@ class BaseMFTCollector(ABC):
                     filename = entry.filename if hasattr(entry, 'filename') else str(entry)
                     full_path = entry.full_path if hasattr(entry, 'full_path') else ""
                     full_path_lower = full_path.lower().replace('\\', '/') if full_path else ""
+                    if compiled_patterns:
+                        if full_path_lower:
+                            if not any(pattern.search(full_path_lower) for pattern in compiled_patterns):
+                                continue
+                        elif not path_optional:
+                            continue
                     if _excluded_path(full_path_lower):
                         continue
                     path_name_lower = full_path_lower.rsplit('/', 1)[-1] if full_path_lower else filename.lower()

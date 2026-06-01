@@ -1092,6 +1092,14 @@ class CollectorWindow(QMainWindow):
 
         self._update_collect_button_state()
 
+    def _target_label(self, artifact_type: str, index: int = None, total: int = None, device_name: str = None) -> str:
+        base = "Selected target"
+        if index is not None and total:
+            base = f"Selected target {index}/{total}"
+        if device_name:
+            return f"[{device_name}] {base}"
+        return base
+
     def _artifact_category(self, artifact_type: str) -> str:
         """Return the platform category for an artifact type."""
         info = ARTIFACT_TYPES.get(artifact_type, {})
@@ -1982,11 +1990,11 @@ class CollectorWindow(QMainWindow):
             self.token_status.setStyleSheet("color: #4cc9f0;")
             self._log(f"Token validated. Case ID: {self.case_id}")
             self._log(f"Session ID: {self.session_id}")
-            self._log(f"Allowed artifacts: {', '.join(self.allowed_artifacts)}")
+            self._log(f"Authorized upload scope loaded: {len(self.allowed_artifacts)} server target(s)")
             if self.collection_profile_id:
                 self._log(f"Server collection profile loaded: {len(self.collection_profile_targets)} authorized target(s)")
                 if self.profile_artifact_types:
-                    self._log(f"Runtime profile applied: {len(self.profile_artifact_types)} artifact type(s)")
+                    self._log(f"Server policy applied to {len(self.profile_artifact_types)} collection target(s)")
                 if android_ffs_count or ios_ffs_count:
                     message = (
                         f"Mobile FFS profile applied: {android_ffs_count} Android spec(s), "
@@ -2040,7 +2048,7 @@ class CollectorWindow(QMainWindow):
             self._allow_all_artifacts = allow_all
             self._mapped_allowed_artifacts = mapped_allowed
 
-            self._log(f"Mapped artifacts for GUI: {', '.join(sorted(mapped_allowed))}")
+            self._log(f"Collection target mapping ready: {len(mapped_allowed)} selectable target(s)")
             if allow_all:
                 self._log("All artifacts are authorized by the collection token")
 
@@ -3742,6 +3750,14 @@ class CollectionWorker(QThread):
             minutes = int((remaining % 3600) / 60)
             return f"{hours}h {minutes}m"
 
+    def _target_label(self, artifact_type: str, index: int = None, total: int = None, device_name: str = None) -> str:
+        base = "Selected target"
+        if index is not None and total:
+            base = f"Selected target {index}/{total}"
+        if device_name:
+            return f"[{device_name}] {base}"
+        return base
+
     def _artifact_category(self, artifact_type: str) -> str:
         info = ARTIFACT_TYPES.get(artifact_type, {})
         category = str(info.get('category') or '').lower()
@@ -4183,7 +4199,7 @@ class CollectionWorker(QThread):
 
                         self.progress_updated.emit(
                             1, stage_progress, overall_progress,
-                            f"[{device_name}] Collecting: {artifact_type}...",
+                            f"{self._target_label(artifact_type, item_index, total_items, device_name)} collecting...",
                             remaining
                         )
 
@@ -4201,7 +4217,7 @@ class CollectionWorker(QThread):
                                         pct = float(msg.split(":")[-1].strip().rstrip("%"))
                                         self.progress_updated.emit(
                                             1, int(pct), self._calculate_overall_progress(1, int(pct)),
-                                            f"[{device_name}] {artifact_type}: {pct:.1f}%",
+                                            f"{self._target_label(artifact_type, item_index, total_items, device_name)}: {pct:.1f}%",
                                             ""
                                         )
                                     except (ValueError, IndexError):
@@ -4230,13 +4246,13 @@ class CollectionWorker(QThread):
                                     # not_found = file absent from backup (normal for uninstalled apps)
                                     # Unknown artifact type = other platform artifact (silent skip)
                                     if status == 'not_found':
-                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: Not in backup", False)
+                                        self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: not present", False)
                                     elif status == 'skipped':
-                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: {error_msg}", False)
+                                        self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: skipped", False)
                                     elif 'Root access required' in error_msg or 'not rooted' in error_msg:
-                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: Requires root", False)
+                                        self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: requires elevated access", False)
                                     elif error_msg not in ['Unknown artifact type: ' + artifact_type]:
-                                        self.log_message.emit(f"[{device_name}] {artifact_type}: {error_msg}", True)
+                                        self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)}: collection warning", True)
                                     error_count += 1
                                     continue
 
@@ -4254,12 +4270,12 @@ class CollectionWorker(QThread):
 
                                 # Update progress every 100 items + process GUI events
                                 if file_count % CHUNK_SIZE == 0:
-                                    self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count} files collecting...", False)
+                                    self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)}: {file_count} files collecting...", False)
 
                             if file_count == 0 and error_count == 0:
-                                self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: No files found", False)
+                                self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: no matching files found", False)
                             elif file_count > 0:
-                                self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count} files collected", False)
+                                self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)}: {file_count} files collected", False)
 
                         except Exception as e:
                             import logging
@@ -4269,7 +4285,7 @@ class CollectionWorker(QThread):
                                 # Silently skip — not an error
                                 logging.debug(f"Skipped cross-platform artifact: {artifact_type} on {device_name}")
                             else:
-                                self.log_message.emit(f"Collection failed [{device_name}] ({artifact_type}): {e}", True)
+                                self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)} failed: {e}", True)
                                 logging.debug(f"Collection error for {artifact_type} on {device_name}: {e}")
 
                     # Release scan cache before closing collector
@@ -4324,10 +4340,10 @@ class CollectionWorker(QThread):
 
                     self.progress_updated.emit(
                         1, stage_progress, overall_progress,
-                        f"Collecting: {artifact_type}...",
+                        f"{self._target_label(artifact_type, i + 1, total_artifacts)} collecting...",
                         remaining
                     )
-                    self.log_message.emit(f"Collecting: {artifact_type}", False)
+                    self.log_message.emit(f"{self._target_label(artifact_type, i + 1, total_artifacts)} collecting", False)
 
                     try:
                         # Phase 2.1: Pass kwargs per category
@@ -4361,16 +4377,16 @@ class CollectionWorker(QThread):
 
                             # Update progress every 100 items + process GUI events
                             if file_count % CHUNK_SIZE == 0:
-                                self.log_message.emit(f"{artifact_type}: {file_count} files collecting...", False)
+                                self.log_message.emit(f"{self._target_label(artifact_type, i + 1, total_artifacts)}: {file_count} files collecting...", False)
 
                         if file_count == 0:
-                            self.log_message.emit(f"[SKIP] {artifact_type}: No files found", False)
+                            self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, i + 1, total_artifacts)}: no matching files found", False)
                         else:
-                            self.log_message.emit(f"✓ {artifact_type}: {file_count} files collected", False)
+                            self.log_message.emit(f"✓ {self._target_label(artifact_type, i + 1, total_artifacts)}: {file_count} files collected", False)
 
                     except Exception as e:
                         import logging
-                        self.log_message.emit(f"Collection failed ({artifact_type}): {e}", True)
+                        self.log_message.emit(f"{self._target_label(artifact_type, i + 1, total_artifacts)} failed: {e}", True)
                         logging.debug(f"Collection error for {artifact_type}: {e}")
 
                 # Release scan cache after all artifact types collected
@@ -4530,7 +4546,7 @@ class CollectionWorker(QThread):
                             self.log_message.emit("⏳ Previous data cleanup in progress. Please try again after cleanup completes.", True)
                             self._cancelled = True
                         else:
-                            self.log_message.emit(f"✗ Upload failed ({artifact_type}): {result.error}", True)
+                            self.log_message.emit(f"✗ Upload failed: {result.error}", True)
 
                 return result
 

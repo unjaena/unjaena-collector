@@ -360,6 +360,10 @@ def _assert_worker_filtering() -> None:
     assert worker._artifacts_for_device(windows) == ["windows_smoke"]
     assert worker._artifacts_for_device(ios) == ["ios_smoke"]
 
+    label = worker._target_label("windows_discord", 2, 7, "evidence.E01")
+    assert label == "[evidence.E01] Selected target 2/7"
+    assert "windows_discord" not in label
+
 
 def _assert_checkbox_widget_visible(dialog: ConsentDialog, checkbox, name: str) -> None:
     assert checkbox is not None, f"{name} checkbox missing"
