@@ -361,8 +361,35 @@ def _assert_worker_filtering() -> None:
     assert worker._artifacts_for_device(ios) == ["ios_smoke"]
 
 
+def _assert_checkbox_widget_visible(dialog: ConsentDialog, checkbox, name: str) -> None:
+    assert checkbox is not None, f"{name} checkbox missing"
+    assert checkbox.isVisible(), f"{name} checkbox widget is hidden"
+    assert checkbox.width() >= 30 and checkbox.height() >= 30, f"{name} checkbox is too small"
+
+    parent = checkbox.parentWidget()
+    assert parent is not None, f"{name} checkbox has no parent row"
+    top_left = checkbox.mapTo(parent, checkbox.rect().topLeft())
+    bottom_right = checkbox.mapTo(parent, checkbox.rect().bottomRight())
+    assert parent.rect().contains(top_left), f"{name} checkbox top-left is clipped by row"
+    assert parent.rect().contains(bottom_right), f"{name} checkbox bottom-right is clipped by row"
+
+
+def _assert_checkbox_pixels_visible(dialog: ConsentDialog, checkbox, name: str) -> None:
+    checkbox.repaint()
+    QApplication.processEvents()
+    image = dialog.grab().toImage()
+    top_left = checkbox.mapTo(dialog, checkbox.rect().topLeft())
+    colors = set()
+    for x in range(max(0, top_left.x()), min(image.width(), top_left.x() + checkbox.width())):
+        for y in range(max(0, top_left.y()), min(image.height(), top_left.y() + checkbox.height())):
+            colors.add(image.pixelColor(x, y).name())
+            if len(colors) >= 3:
+                return
+    assert len(colors) >= 3, f"{name} checkbox did not render visible border/fill pixels"
+
+
 def _assert_consent_dialog(window: CollectorWindow) -> None:
-    dialog = ConsentDialog(parent=window, server_url=None, session_id="session", case_id="case", language="en")
+    dialog = ConsentDialog(parent=window, server_url=None, session_id="session", case_id="case", language="ko")
     dialog._apply_template({
         "id": "smoke-template",
         "version": "smoke",
@@ -372,7 +399,7 @@ def _assert_consent_dialog(window: CollectorWindow) -> None:
             "I confirm that I have authority to perform this collection.",
             "I understand that selected evidence sources will be collected and uploaded for analysis.",
             "I understand that collection may include system, file-system, application, event-log, and network artifacts according to the selected profile.",
-            "I acknowledge that the collected data will be processed according to the case retention policy.",
+            "I acknowledge that the collected data will be processed according to the case retention policy and deleted when the retention window expires unless the case is extended.",
             "I agree to start collection for the selected evidence sources.",
         ],
     })
@@ -383,8 +410,26 @@ def _assert_consent_dialog(window: CollectorWindow) -> None:
 
     assert dialog.windowTitle()
     assert hasattr(dialog, "checkbox_scroll")
-    assert dialog.checkbox_scroll.maximumHeight() <= 190
+    assert dialog.checkbox_scroll.maximumHeight() <= 240
+    assert dialog.checkbox_scroll.minimumHeight() >= 170
     assert dialog.checkbox_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+
+    assert len(dialog.checkboxes) == 5, "required consent checkbox rows were not created"
+    _assert_checkbox_widget_visible(dialog, dialog.transfer_checkbox, "transfer")
+    _assert_checkbox_widget_visible(dialog, dialog.checkboxes[0], "first consent")
+
+    viewport_rect = dialog.checkbox_scroll.viewport().rect()
+    first_center = dialog.checkboxes[0].mapTo(dialog.checkbox_scroll.viewport(), dialog.checkboxes[0].rect().center())
+    assert viewport_rect.contains(first_center), "first consent checkbox is outside visible scroll viewport"
+
+    _assert_checkbox_pixels_visible(dialog, dialog.transfer_checkbox, "transfer")
+    _assert_checkbox_pixels_visible(dialog, dialog.checkboxes[0], "first consent")
+
+    for cb in dialog.checkboxes:
+        cb.setChecked(True)
+    dialog.transfer_checkbox.setChecked(True)
+    QApplication.processEvents()
+    assert dialog.agree_btn.isEnabled(), "agree button did not enable after visible consent checks"
 
     cancel_geo = dialog.cancel_btn.geometry()
     agree_geo = dialog.agree_btn.geometry()
@@ -392,6 +437,7 @@ def _assert_consent_dialog(window: CollectorWindow) -> None:
     assert dialog.cancel_btn.height() == dialog.agree_btn.height() == 36
     assert agree_geo.width() >= 240
     assert dialog.footer_frame.geometry().bottom() <= dialog.contentsRect().bottom()
+    assert dialog.grab().save("/tmp/unjaena_consent_dialog_smoke.png")
     dialog.close()
 
 

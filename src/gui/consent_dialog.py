@@ -20,11 +20,69 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QFrame, QScrollArea, QWidget,
     QComboBox, QMessageBox, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QSize, QTimer
+from PyQt6.QtCore import Qt, QSize, QTimer, QRectF, QPointF
+from PyQt6.QtGui import QPainter, QPen, QBrush, QColor
 
 from gui.styles import COLORS
 
 logger = logging.getLogger(__name__)
+
+
+class ConsentCheckBox(QCheckBox):
+    """Checkbox with a guaranteed visible indicator on dark themed dialogs."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setText("")
+        self.setObjectName("consentCheck")
+        self.setFixedSize(30, 30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setStyleSheet("background: transparent; border: none; padding: 0; margin: 0;")
+
+    def sizeHint(self) -> QSize:
+        return QSize(30, 30)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        opacity = 1.0 if self.isEnabled() else 0.45
+        painter.setOpacity(opacity)
+
+        rect = QRectF(4.0, 4.0, 22.0, 22.0)
+        border_color = COLORS.get("border_default", "#484f58")
+        bg_color = COLORS.get("bg_primary", "#0d1117")
+        hover_color = COLORS.get("bg_tertiary", "#21262d")
+        fill_color = COLORS.get("brand_primary", "#d4a574")
+        accent_color = COLORS.get("brand_accent", "#e8c49a")
+
+        if self.isChecked():
+            painter.setBrush(QBrush(QColor(fill_color)))
+            painter.setPen(QPen(QColor(accent_color), 2.0))
+        else:
+            painter.setBrush(QBrush(QColor(hover_color if self.underMouse() else bg_color)))
+            painter.setPen(QPen(QColor(border_color), 2.0))
+        painter.drawRoundedRect(rect, 4.0, 4.0)
+
+        if self.isChecked():
+            painter.setPen(
+                QPen(
+                    QColor(COLORS.get("bg_primary", "#0d1117")),
+                    2.8,
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
+                )
+            )
+            painter.drawLine(QPointF(9.0, 15.2), QPointF(13.0, 19.0))
+            painter.drawLine(QPointF(13.0, 19.0), QPointF(21.0, 10.8))
+
+        if self.hasFocus():
+            focus_rect = QRectF(1.5, 1.5, 27.0, 27.0)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(accent_color), 1.4))
+            painter.drawRoundedRect(focus_rect, 6.0, 6.0)
 
 
 class ConsentDialog(QDialog):
@@ -91,9 +149,9 @@ class ConsentDialog(QDialog):
     def setup_ui(self):
         """Initialize UI (with server API integration)"""
         self.setWindowTitle("AI Forensic Lab - Data Collection Consent")
-        self.setMinimumSize(QSize(860, 760))
-        self.setMaximumSize(QSize(1120, 980))
-        self.resize(QSize(900, 820))
+        self.setMinimumSize(QSize(860, 720))
+        self.setMaximumSize(QSize(1160, 920))
+        self.resize(QSize(920, 780))
         self.setModal(True)
         self.setSizeGripEnabled(False)
         self.setStyleSheet(self._get_stylesheet())
@@ -146,8 +204,8 @@ class ConsentDialog(QDialog):
         self.consent_text = QTextEdit()
         self.consent_text.setObjectName("consentDocument")
         self.consent_text.setReadOnly(True)
-        self.consent_text.setMinimumHeight(220)
-        self.consent_text.setMaximumHeight(340)
+        self.consent_text.setMinimumHeight(160)
+        self.consent_text.setMaximumHeight(260)
         self.consent_text.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -178,8 +236,8 @@ class ConsentDialog(QDialog):
         self.checkbox_scroll.setObjectName("checkboxScroll")
         self.checkbox_scroll.setWidgetResizable(True)
         self.checkbox_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.checkbox_scroll.setMinimumHeight(120)
-        self.checkbox_scroll.setMaximumHeight(190)
+        self.checkbox_scroll.setMinimumHeight(170)
+        self.checkbox_scroll.setMaximumHeight(240)
         self.checkbox_scroll.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
@@ -187,8 +245,8 @@ class ConsentDialog(QDialog):
         self.checkbox_frame = QFrame()
         self.checkbox_frame.setObjectName("checkboxFrame")
         self.checkbox_layout = QVBoxLayout(self.checkbox_frame)
-        self.checkbox_layout.setContentsMargins(10, 8, 10, 8)
-        self.checkbox_layout.setSpacing(6)
+        self.checkbox_layout.setContentsMargins(10, 10, 10, 10)
+        self.checkbox_layout.setSpacing(8)
         self.checkbox_frame.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
         )
@@ -686,68 +744,70 @@ class ConsentDialog(QDialog):
     }
 
     def _build_operator_section(self, parent_layout) -> None:
-        """Render the operator-authorization section of the dialog.
-
-        Placed between the consent template text and the dynamic
-        per-artifact checkboxes so the operator answers "who am I and
-        on what authority?" BEFORE ticking collection items.
-        """
-        from PyQt6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox
+        """Render the operator-authorization section of the dialog."""
+        from PyQt6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QComboBox
 
         frame = QFrame()
         frame.setObjectName("operatorFrame")
-        # Reuse the warningFrame palette so it visually reads as a
-        # "pay attention" section without needing a new style token.
         frame.setStyleSheet(
             f"""
             QFrame#operatorFrame {{
-                background-color: {COLORS.get('bg_secondary', '#1f2937')};
-                border: 1px solid {COLORS.get('border', '#374151')};
+                background-color: {COLORS.get('bg_secondary', '#161b22')};
+                border: 1px solid {COLORS.get('border_subtle', '#30363d')};
                 border-radius: 8px;
-                padding: 8px;
             }}
             """
         )
         vbox = QVBoxLayout(frame)
-        vbox.setContentsMargins(10, 8, 10, 8)
-        vbox.setSpacing(6)
+        vbox.setContentsMargins(12, 10, 12, 10)
+        vbox.setSpacing(8)
 
-        # Section title
         self._operator_section_title = QLabel(self._OPERATOR_LABELS["section_title"][self.language])
         self._operator_section_title.setStyleSheet(
             f"color: {COLORS.get('brand_primary', '#d4a574')}; font-weight: 600; font-size: 13px;"
         )
         vbox.addWidget(self._operator_section_title)
 
-        # Role selector
         self._role_label_widget = QLabel(self._OPERATOR_LABELS["role_label"][self.language])
-        self._role_label_widget.setStyleSheet(f"color: {COLORS.get('text_secondary', '#9ca3af')}; font-size: 12px;")
-        vbox.addWidget(self._role_label_widget)
+        self._role_label_widget.setStyleSheet(f"color: {COLORS.get('text_secondary', '#8b949e')}; font-size: 12px;")
+        self._role_label_widget.setMinimumWidth(190)
+        self._role_label_widget.setWordWrap(True)
 
         self.role_combo = QComboBox()
+        self.role_combo.setMinimumHeight(30)
         for value, key, _ in self._ROLE_OPTIONS:
             label = self._ROLE_LABELS_LOCALIZED[self.language].get(key, value)
             self.role_combo.addItem(label, value)
         self.role_combo.currentIndexChanged.connect(self._on_role_changed)
-        vbox.addWidget(self.role_combo)
 
-        # Legal basis selector
+        role_row = QHBoxLayout()
+        role_row.setContentsMargins(0, 0, 0, 0)
+        role_row.setSpacing(10)
+        role_row.addWidget(self._role_label_widget, 0)
+        role_row.addWidget(self.role_combo, 1)
+        vbox.addLayout(role_row)
+
         self._basis_label_widget = QLabel(self._OPERATOR_LABELS["basis_label"][self.language])
-        self._basis_label_widget.setStyleSheet(f"color: {COLORS.get('text_secondary', '#9ca3af')}; font-size: 12px;")
-        vbox.addWidget(self._basis_label_widget)
+        self._basis_label_widget.setStyleSheet(f"color: {COLORS.get('text_secondary', '#8b949e')}; font-size: 12px;")
+        self._basis_label_widget.setMinimumWidth(190)
+        self._basis_label_widget.setWordWrap(True)
 
         self.basis_combo = QComboBox()
+        self.basis_combo.setMinimumHeight(30)
         for value, key, _ in self._BASIS_OPTIONS:
             label = self._BASIS_LABELS_LOCALIZED[self.language].get(key, value)
             self.basis_combo.addItem(label, value)
         self.basis_combo.currentIndexChanged.connect(self._on_basis_changed)
-        vbox.addWidget(self.basis_combo)
 
-        # International transfer acknowledgment (required under PIPA §28-8
-        # + GDPR Chap. V). Disables the Agree button until ticked.
+        basis_row = QHBoxLayout()
+        basis_row.setContentsMargins(0, 0, 0, 0)
+        basis_row.setSpacing(10)
+        basis_row.addWidget(self._basis_label_widget, 0)
+        basis_row.addWidget(self.basis_combo, 1)
+        vbox.addLayout(basis_row)
+
         transfer_text = self._OPERATOR_LABELS["transfer_label"][self.language]
-        self.transfer_checkbox = QCheckBox()
-        self.transfer_checkbox.setObjectName("consentCheck")
+        self.transfer_checkbox = ConsentCheckBox()
         self.transfer_checkbox.setToolTip(transfer_text)
         self.transfer_checkbox.stateChanged.connect(self._on_transfer_changed)
 
@@ -769,8 +829,8 @@ class ConsentDialog(QDialog):
         self._transfer_label_widget.setCursor(Qt.CursorShape.PointingHandCursor)
 
         transfer_row = QHBoxLayout()
-        transfer_row.setContentsMargins(0, 0, 0, 0)
-        transfer_row.setSpacing(8)
+        transfer_row.setContentsMargins(0, 2, 0, 0)
+        transfer_row.setSpacing(10)
         transfer_row.addWidget(self.transfer_checkbox, 0, Qt.AlignmentFlag.AlignTop)
         transfer_row.addWidget(self._transfer_label_widget, 1)
         vbox.addLayout(transfer_row)
@@ -829,24 +889,16 @@ class ConsentDialog(QDialog):
             logger.debug(f"operator section relocalize failed: {e}")
 
     def _add_consent_item(self, text: str) -> None:
-        """Add a single consent checkbox row with full word-wrapped text.
-
-        [2026-04-27 Round 6.6] QCheckBox does not natively word-wrap its
-        own label, which truncated long PIPA / GDPR / cross-border-
-        transfer statements to a single line in the dialog. We pair the
-        checkbox with a separate QLabel that has wordWrap=True; clicking
-        the label toggles the checkbox so the pair behaves like a single
-        widget for the operator. The full statement is also set as the
-        checkbox tooltip so on-hover preview works for very long items.
-        """
+        """Add a single visible checkbox row with full word-wrapped text."""
         row = QFrame()
         row.setObjectName("consentRow")
+        row.setMinimumHeight(42)
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(8)
+        row_layout.setContentsMargins(8, 7, 8, 7)
+        row_layout.setSpacing(10)
 
-        cb = QCheckBox()
-        cb.setObjectName("consentCheck")
+        cb = ConsentCheckBox()
         cb.setProperty("consent_text", text)
         cb.setToolTip(text)
         cb.stateChanged.connect(self._update_button_state)
@@ -864,9 +916,6 @@ class ConsentDialog(QDialog):
         label_policy.setHeightForWidth(True)
         label.setSizePolicy(label_policy)
         label.setMinimumWidth(1)
-        # Clicking the label toggles the checkbox — the row behaves as one widget
-        # for the operator. We use mousePressEvent override via lambda
-        # because QLabel has no native click signal.
         label.mousePressEvent = lambda _e, _cb=cb: _cb.toggle()
         label.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -1143,8 +1192,9 @@ class ConsentDialog(QDialog):
                 border: none;
             }}
             #consentRow {{
-                background-color: transparent;
-                border: none;
+                background-color: {COLORS['bg_tertiary']};
+                border: 1px solid {COLORS['border_subtle']};
+                border-radius: 6px;
             }}
             #consentLabel {{
                 color: {COLORS['text_primary']};
@@ -1153,22 +1203,10 @@ class ConsentDialog(QDialog):
                 line-height: 1.4;
             }}
             #consentCheck {{
-                color: {COLORS['text_primary']};
                 background-color: transparent;
-                font-size: 11px;
-                spacing: 6px;
-                padding: 2px 0;
-            }}
-            #consentCheck::indicator {{
-                width: 16px;
-                height: 16px;
-                border: 2px solid {COLORS['border_subtle']};
-                border-radius: 3px;
-                background-color: {COLORS['bg_tertiary']};
-            }}
-            #consentCheck::indicator:checked {{
-                background-color: {COLORS['brand_primary']};
-                border-color: {COLORS['brand_primary']};
+                border: none;
+                padding: 0;
+                margin: 0;
             }}
             QTextEdit {{
                 background-color: {COLORS['bg_secondary']};
