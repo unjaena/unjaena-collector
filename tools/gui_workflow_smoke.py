@@ -23,6 +23,7 @@ PROFILE_ARTIFACTS = [
     ("windows_smoke", "windows", "system"),
     ("windows_target_b", "windows", "system"),
     ("windows_target_c", "windows", "system"),
+    ("windows_forensic_policy", "forensic", "system"),
     ("android_smoke", "android", "basic"),
     ("ios_smoke", "ios", "core"),
     ("ios_target_b", "ios", "core"),
@@ -137,7 +138,7 @@ def _assert_artifact_selection_matrix(window: CollectorWindow) -> None:
 
     window._update_platform_tab_states()
     window.artifacts_tab.setCurrentIndex(0)
-    windows = ["windows_smoke", "windows_target_b", "windows_target_c"]
+    windows = ["windows_smoke", "windows_target_b", "windows_target_c", "windows_forensic_policy"]
     non_windows = ["android_smoke", "ios_smoke", "ios_target_b", "linux_smoke", "macos_smoke"]
 
     for artifact_type in windows:
@@ -451,7 +452,7 @@ def _assert_worker_filtering() -> None:
     artifacts = [artifact_type for artifact_type, _, _ in PROFILE_ARTIFACTS]
     worker = CollectionWorker("", "", "", "", "", artifacts, selected_devices=[unknown, windows, ios])
     assert worker._artifacts_for_device(unknown) == artifacts
-    assert set(worker._artifacts_for_device(windows)) == {"windows_smoke", "windows_target_b", "windows_target_c"}
+    assert set(worker._artifacts_for_device(windows)) == {"windows_smoke", "windows_target_b", "windows_target_c", "windows_forensic_policy"}
     assert set(worker._artifacts_for_device(ios)) == {"ios_smoke", "ios_target_b"}
 
     label = worker._target_label("windows_discord", 2, 7, "evidence.E01")

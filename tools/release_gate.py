@@ -34,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     _run("compile source", [sys.executable, "-m", "compileall", "-q", "src", "tools"])
     _run("public preflight", [sys.executable, "tools/public_preflight.py"])
     _run("profile filter smoke", [sys.executable, "tools/profile_filter_smoke.py"])
+    _run("server profile render smoke", [sys.executable, "tools/server_profile_render_smoke.py"])
 
     device_args = [sys.executable, "tools/device_enumerator_smoke.py"]
     if actual_local:

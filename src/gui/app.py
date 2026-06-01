@@ -514,13 +514,13 @@ class CollectorWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(2)
 
-        # Group Windows artifacts by subcategory
+        # Group Windows artifacts by subcategory. Server-issued profile
+        # rows may use generic policy categories such as "forensic" while
+        # still representing Windows targets; normalize through the same
+        # category resolver used by source scoping and collection.
         subcategory_items: dict = {}
         for artifact_type, info in ARTIFACT_TYPES.items():
-            category = info.get('category', 'windows')
-            if category != 'windows' and 'category' in info:
-                continue
-            if artifact_type.startswith('mobile_'):
+            if self._artifact_category(artifact_type) != 'windows':
                 continue
             subcat = info.get('subcategory', 'system')
             subcategory_items.setdefault(subcat, []).append((artifact_type, info))
@@ -1898,19 +1898,8 @@ class CollectorWindow(QMainWindow):
             if not self._artifact_checkbox_enabled_for_collection(cb):
                 continue
 
-            # Check artifact category
-            artifact_info = ARTIFACT_TYPES.get(artifact_type, {})
-            artifact_category = artifact_info.get('category', 'windows')
-
-            # Windows tab: items without category or 'windows', exclude mobile
-            if current_category == 'windows':
-                if artifact_type.startswith('mobile_'):
-                    continue
-                if artifact_category not in ('windows', None) and 'category' in artifact_info:
-                    continue
-
-            # Other tabs: matching category only
-            elif artifact_category != current_category:
+            artifact_category = self._artifact_category(artifact_type)
+            if artifact_category != current_category:
                 continue
 
             cb.setChecked(checked)
