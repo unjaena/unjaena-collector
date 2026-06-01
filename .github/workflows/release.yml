@@ -104,7 +104,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libusb-1.0-0-dev libxcb-cursor0 libxcb-xinerama0 libgl1
+          sudo apt-get install -y libusb-1.0-0-dev libxcb-cursor0 libxcb-xinerama0 libgl1 libegl1
 
       - name: Install Python dependencies
         run: |
