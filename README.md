@@ -44,6 +44,16 @@ End users should normally download signed release artifacts from the GitHub Rele
 
 Release artifacts include `SHA256SUMS.txt` for integrity verification.
 
+## Release validation
+
+Before tagging a release, run the source acceptance gate:
+
+```bash
+python tools/release_gate.py --actual-local
+```
+
+The gate compiles source files, checks the public-client boundary, verifies server-profile filtering, simulates Windows logical-drive discovery, checks actual local-source discovery on the current OS, and exercises GUI artifact selection, source scoping, consent layout, duplicate-start locking, and collection-plan behavior with non-sensitive smoke targets. GitHub Actions runs the same gate before each platform build.
+
 ## Build from source
 
 Install Python 3.11 and the platform dependency set for your host OS.

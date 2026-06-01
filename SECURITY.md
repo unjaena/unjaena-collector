@@ -27,11 +27,11 @@ Never commit API tokens, session tokens, GitHub tokens, Apple certificates, nota
 
 ## Public-client boundary
 
-The public collector is designed as a profile-driven acquisition client. Static product-specific target catalogs, parser logic, analysis rules, scoring models, and case policy must remain outside this repository. Public source changes must pass `tools/public_preflight.py` before release.
+The public collector is designed as a profile-driven acquisition client. Static product-specific target catalogs, parser logic, analysis rules, scoring models, and case policy must remain outside this repository. Public source changes must pass `tools/public_preflight.py` and the release acceptance gate in `tools/release_gate.py` before release.
 
 ## Release integrity
 
-Release artifacts should be built by GitHub Actions from reviewed source, signed or notarized where supported, and published with SHA-256 checksums. Users should prefer release artifacts over ad-hoc builds unless they are auditing or modifying the source.
+Release artifacts should be built by GitHub Actions from reviewed source after `tools/release_gate.py --actual-local` passes on the target runner, signed or notarized where supported, and published with SHA-256 checksums. Users should prefer release artifacts over ad-hoc builds unless they are auditing or modifying the source.
 
 ## Dependency policy
 

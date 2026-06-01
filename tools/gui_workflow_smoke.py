@@ -20,8 +20,11 @@ from core.device_manager import DeviceStatus, DeviceType, UnifiedDeviceInfo, Uni
 
 PROFILE_ARTIFACTS = [
     ("windows_smoke", "windows", "system"),
+    ("windows_target_b", "windows", "system"),
+    ("windows_target_c", "windows", "system"),
     ("android_smoke", "android", "basic"),
     ("ios_smoke", "ios", "core"),
+    ("ios_target_b", "ios", "core"),
     ("linux_smoke", "linux", "system"),
     ("macos_smoke", "macos", "system"),
 ]
@@ -94,6 +97,15 @@ def _assert_source_scope(window: CollectorWindow) -> None:
         assert not cb.isChecked(), f"{artifact_type} still checked for Windows-only image"
         assert not cb.isEnabled(), f"{artifact_type} still enabled for Windows-only image"
 
+    logical = _device(DeviceType.WINDOWS_LOGICAL_DRIVE, "windows-volume-c")
+    window._apply_selected_source_scope([logical], force=True)
+    assert window.artifact_checks["windows_smoke"].isEnabled()
+    assert window.artifact_checks["windows_smoke"].isChecked()
+    for artifact_type in ("android_smoke", "ios_smoke", "linux_smoke", "macos_smoke"):
+        cb = window.artifact_checks[artifact_type]
+        assert not cb.isChecked(), f"{artifact_type} still checked for Windows logical drive"
+        assert not cb.isEnabled(), f"{artifact_type} still enabled for Windows logical drive"
+
     ios = _device(DeviceType.IOS_DEVICE, "ios-usb")
     window._apply_selected_source_scope([ios], force=True)
     assert window.artifact_checks["ios_smoke"].isEnabled()
@@ -110,6 +122,86 @@ def _assert_source_scope(window: CollectorWindow) -> None:
         assert cb.isEnabled(), f"{artifact_type} disabled for unsupported source"
         assert cb.isChecked(), f"{artifact_type} unchecked for unsupported source"
 
+
+
+def _assert_artifact_selection_matrix(window: CollectorWindow) -> None:
+    window.session_id = "session-id"
+    window.collection_token = "collection-token"
+    window.case_id = "case-id"
+    window._allow_all_artifacts = True
+    window._mapped_allowed_artifacts = set(ARTIFACT_TYPES)
+    window.device_manager.get_selected_devices = lambda: [
+        _device(DeviceType.WINDOWS_LOGICAL_DRIVE, "windows-volume-c")
+    ]
+
+    window._update_platform_tab_states()
+    window.artifacts_tab.setCurrentIndex(0)
+    windows = ["windows_smoke", "windows_target_b", "windows_target_c"]
+    non_windows = ["android_smoke", "ios_smoke", "ios_target_b", "linux_smoke", "macos_smoke"]
+
+    for artifact_type in windows:
+        assert window.artifact_checks[artifact_type].isEnabled(), f"{artifact_type} not enabled for Windows source"
+    for artifact_type in non_windows:
+        cb = window.artifact_checks[artifact_type]
+        assert not cb.isEnabled(), f"{artifact_type} enabled for Windows source"
+        assert not cb.isChecked(), f"{artifact_type} checked for Windows source"
+
+    for artifact_type in windows:
+        window.artifact_checks[artifact_type].setChecked(False)
+    assert window._selected_artifact_types() == []
+    window._update_collect_button_state()
+    assert not window.collect_btn.isEnabled(), "Start Collection enabled with zero selected artifacts"
+
+    window.artifact_checks["windows_smoke"].setChecked(True)
+    assert set(window._selected_artifact_types()) == {"windows_smoke"}
+    window._update_collect_button_state()
+    assert window.collect_btn.isEnabled(), "single selected artifact did not enable Start Collection"
+
+    window.artifact_checks["windows_target_b"].setChecked(True)
+    assert set(window._selected_artifact_types()) == {"windows_smoke", "windows_target_b"}
+
+    window.artifact_checks["windows_target_c"].setEnabled(False)
+    window.artifact_checks["windows_target_c"].setChecked(True)
+    assert set(window._selected_artifact_types()) == {"windows_smoke", "windows_target_b"}, (
+        "disabled checked artifact leaked into selected collection targets"
+    )
+    window.artifact_checks["windows_target_c"].setChecked(False)
+    window.artifact_checks["windows_target_c"].setEnabled(True)
+
+    for artifact_type in windows:
+        window.artifact_checks[artifact_type].setChecked(False)
+    window.select_all_cb.setEnabled(True)
+    window.select_all_cb.blockSignals(True)
+    window.select_all_cb.setChecked(False)
+    window.select_all_cb.blockSignals(False)
+    window.select_all_cb.setChecked(True)
+    assert set(window._selected_artifact_types()) == set(windows), "Select All current tab did not select all Windows targets"
+    for artifact_type in non_windows:
+        assert not window.artifact_checks[artifact_type].isChecked(), f"Select All changed non-current-tab target {artifact_type}"
+
+    window.select_all_cb.setChecked(False)
+    assert window._selected_artifact_types() == [], "Select All clear did not clear current tab targets"
+
+    window._allow_all_artifacts = False
+    window._mapped_allowed_artifacts = {"windows_target_b"}
+    window._apply_selected_source_scope(window.device_manager.get_selected_devices(), force=True)
+    assert window.artifact_checks["windows_target_b"].isEnabled()
+    assert window.artifact_checks["windows_target_b"].isChecked()
+    assert set(window._selected_artifact_types()) == {"windows_target_b"}
+    for artifact_type in ("windows_smoke", "windows_target_c"):
+        cb = window.artifact_checks[artifact_type]
+        assert not cb.isEnabled(), f"token-disallowed target {artifact_type} remained enabled"
+        assert not cb.isChecked(), f"token-disallowed target {artifact_type} remained checked"
+
+    window._allow_all_artifacts = True
+    window._mapped_allowed_artifacts = set(ARTIFACT_TYPES)
+    window.device_manager.get_selected_devices = lambda: [_device(DeviceType.IOS_DEVICE, "ios-usb")]
+    window._update_platform_tab_states()
+    assert set(window._selected_artifact_types()) == {"ios_smoke", "ios_target_b"}
+    for artifact_type in windows:
+        cb = window.artifact_checks[artifact_type]
+        assert not cb.isEnabled(), f"Windows target {artifact_type} enabled for iOS source"
+        assert not cb.isChecked(), f"Windows target {artifact_type} still checked after iOS source selection"
 
 def _assert_artifact_actions_update_start_button(window: CollectorWindow) -> None:
     window.collection_token = "collection-token"
@@ -270,6 +362,7 @@ def _assert_start_path_keeps_selected_artifacts_while_locked(window: CollectorWi
 def _assert_start_preflight_for_supported_sources(window: CollectorWindow) -> None:
     sources = [
         (DeviceType.WINDOWS_PHYSICAL_DISK, "windows-disk", "windows_smoke", None),
+        (DeviceType.WINDOWS_LOGICAL_DRIVE, "windows-volume-c", "windows_smoke", None),
         (DeviceType.ANDROID_DEVICE, "android-usb", "android_smoke", None),
         (DeviceType.IOS_DEVICE, "ios-usb", "ios_smoke", None),
         (DeviceType.IOS_BACKUP, "ios-backup", "ios_smoke", None),
@@ -357,8 +450,8 @@ def _assert_worker_filtering() -> None:
     artifacts = [artifact_type for artifact_type, _, _ in PROFILE_ARTIFACTS]
     worker = CollectionWorker("", "", "", "", "", artifacts, selected_devices=[unknown, windows, ios])
     assert worker._artifacts_for_device(unknown) == artifacts
-    assert worker._artifacts_for_device(windows) == ["windows_smoke"]
-    assert worker._artifacts_for_device(ios) == ["ios_smoke"]
+    assert set(worker._artifacts_for_device(windows)) == {"windows_smoke", "windows_target_b", "windows_target_c"}
+    assert set(worker._artifacts_for_device(ios)) == {"ios_smoke", "ios_target_b"}
 
     label = worker._target_label("windows_discord", 2, 7, "evidence.E01")
     assert label == "[evidence.E01] Selected target 2/7"
@@ -497,6 +590,7 @@ def main() -> int:
     _install_smoke_profile()
     window = _build_window()
     _assert_source_scope(window)
+    _assert_artifact_selection_matrix(window)
     _assert_artifact_actions_update_start_button(window)
     _assert_device_selection_signal_updates_start_button(window)
     _assert_token_profile_waits_for_evidence_source(window)

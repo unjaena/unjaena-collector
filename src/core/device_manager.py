@@ -50,6 +50,7 @@ class _DevicePollWorker(QObject):
 class DeviceType(Enum):
     """Device type"""
     WINDOWS_PHYSICAL_DISK = auto()
+    WINDOWS_LOGICAL_DRIVE = auto()     # Windows drive letter / mounted volume
     MACOS_LOCAL_SYSTEM = auto()        # Local macOS system (live collection)
     LINUX_LOCAL_SYSTEM = auto()        # Local Linux system (live collection)
     E01_IMAGE = auto()
@@ -155,6 +156,7 @@ class UnifiedDeviceInfo:
         """Check if admin/root privileges required for full access"""
         return self.device_type in (
             DeviceType.WINDOWS_PHYSICAL_DISK,
+            DeviceType.WINDOWS_LOGICAL_DRIVE,
             DeviceType.MACOS_LOCAL_SYSTEM,
             DeviceType.LINUX_LOCAL_SYSTEM,
         )
@@ -163,6 +165,7 @@ class UnifiedDeviceInfo:
     def is_local_system(self) -> bool:
         """Check if local system device (always present, not removable)"""
         return self.device_type in (
+            DeviceType.WINDOWS_LOGICAL_DRIVE,
             DeviceType.MACOS_LOCAL_SYSTEM,
             DeviceType.LINUX_LOCAL_SYSTEM,
         )

@@ -1132,7 +1132,7 @@ class CollectorWindow(QMainWindow):
         """Return artifact categories that should run for one evidence source."""
         device_type = getattr(device, 'device_type', None)
         metadata = getattr(device, 'metadata', None) or {}
-        if device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
+        if device_type in (DeviceType.WINDOWS_PHYSICAL_DISK, DeviceType.WINDOWS_LOGICAL_DRIVE):
             return {'windows'}
         if device_type in (DeviceType.ANDROID_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_ANDROID):
             return {'android'}
@@ -1434,7 +1434,7 @@ class CollectorWindow(QMainWindow):
         target_tab = None
 
         for device in selected_devices:
-            if device.device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
+            if device.device_type in (DeviceType.WINDOWS_PHYSICAL_DISK, DeviceType.WINDOWS_LOGICAL_DRIVE):
                 target_tab = tab_map['windows']
                 break
 
@@ -3776,7 +3776,7 @@ class CollectionWorker(QThread):
 
     def _device_artifact_categories(self, device) -> set:
         device_type = device.device_type
-        if device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
+        if device_type in (DeviceType.WINDOWS_PHYSICAL_DISK, DeviceType.WINDOWS_LOGICAL_DRIVE):
             return {'windows'}
         if device_type in (DeviceType.ANDROID_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_ANDROID):
             return {'android'}
@@ -3907,7 +3907,7 @@ class CollectionWorker(QThread):
                 return collector
 
             # Windows physical disk
-            elif device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
+            elif device_type in (DeviceType.WINDOWS_PHYSICAL_DISK, DeviceType.WINDOWS_LOGICAL_DRIVE):
                 # Get decrypted reader if BitLocker was unlocked via dialog
                 decrypted_reader = None
                 if self.bitlocker_decryptor:
@@ -3920,7 +3920,8 @@ class CollectionWorker(QThread):
                 # Use LocalMFTCollector (BitLocker auto-detection + directory fallback)
                 if BASE_MFT_AVAILABLE:
                     volume = device.metadata.get('volume') or 'C'
-                    self.log_message.emit(f"Using volume: {volume}:", False)
+                    source_label = 'logical drive' if device_type == DeviceType.WINDOWS_LOGICAL_DRIVE else 'physical disk volume'
+                    self.log_message.emit(f"Using Windows {source_label}: {volume}:", False)
                     collector = LocalMFTCollector(output_dir, volume=volume, decrypted_reader=decrypted_reader)
                     self.log_message.emit(
                         f"Collection mode: {collector.get_collection_mode()}", False

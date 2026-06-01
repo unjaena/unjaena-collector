@@ -7,6 +7,7 @@ Each enumerator implements the BaseDeviceEnumerator interface.
 
 Enumerators:
     - WindowsDiskEnumerator: Windows physical disks (WMI-based)
+    - WindowsLogicalDriveEnumerator: Windows drive letters and mounted volumes
     - AndroidDeviceEnumerator: Android devices (ADB-based)
     - iOSBackupEnumerator: iOS backup files
     - iOSDeviceEnumerator: iOS USB direct connection (pymobiledevice3-based)
@@ -184,6 +185,148 @@ class WindowsDiskEnumerator(BaseDeviceEnumerator):
             logger.error(f"Failed to enumerate Windows disks: {e}")
 
         return devices
+
+
+class WindowsLogicalDriveEnumerator(BaseDeviceEnumerator):
+    """
+    Windows logical drive enumerator.
+
+    Lists mounted local/removable drive letters such as C:, D:, and USB
+    volumes. This intentionally does not depend on WMI so users still see
+    selectable local evidence sources when physical disk enumeration is blocked
+    by WMI, drivers, or privilege conditions.
+    """
+
+    DRIVE_REMOVABLE = 2
+    DRIVE_FIXED = 3
+    DRIVE_CDROM = 5
+
+    _DRIVE_TYPE_LABELS = {
+        DRIVE_REMOVABLE: "Removable drive",
+        DRIVE_FIXED: "Local drive",
+        DRIVE_CDROM: "Optical drive",
+    }
+
+    def is_available(self) -> bool:
+        return sys.platform == 'win32'
+
+    def supports_realtime(self) -> bool:
+        return True
+
+    def enumerate(self) -> List[UnifiedDeviceInfo]:
+        if sys.platform != 'win32':
+            return []
+
+        devices: List[UnifiedDeviceInfo] = []
+        for root in self._logical_roots():
+            try:
+                meta = self._read_volume_metadata(root)
+                drive_type = meta.get('drive_type_code')
+                if drive_type not in (self.DRIVE_REMOVABLE, self.DRIVE_FIXED, self.DRIVE_CDROM):
+                    continue
+
+                # Skip empty optical drives, but keep inaccessible fixed/removable
+                # drives visible so the user gets a clear disabled reason.
+                if drive_type == self.DRIVE_CDROM and not meta.get('accessible'):
+                    continue
+
+                letter = root[:1].upper()
+                label = meta.get('volume_label') or self._DRIVE_TYPE_LABELS.get(drive_type, 'Drive')
+                fs_type = meta.get('filesystem') or 'Unknown FS'
+                drive_label = self._DRIVE_TYPE_LABELS.get(drive_type, 'Drive')
+                display_name = f"{letter}: {label} ({drive_label})"
+
+                device = UnifiedDeviceInfo(
+                    device_id=f"windows_volume_{letter}",
+                    device_type=DeviceType.WINDOWS_LOGICAL_DRIVE,
+                    display_name=display_name,
+                    status=DeviceStatus.READY if meta.get('accessible') else DeviceStatus.ERROR,
+                    size_bytes=int(meta.get('total_bytes') or 0),
+                    connection_time=datetime.now(),
+                    metadata={
+                        'volume': letter,
+                        'root_path': root,
+                        'target_root': root,
+                        'drive_type': drive_label,
+                        'drive_type_code': drive_type,
+                        'filesystem': fs_type,
+                        'volume_label': meta.get('volume_label') or '',
+                        'volume_serial': meta.get('volume_serial') or '',
+                        'free_bytes': int(meta.get('free_bytes') or 0),
+                        'detected_os': 'windows',
+                        'is_removable': drive_type == self.DRIVE_REMOVABLE,
+                    },
+                    is_selectable=bool(meta.get('accessible')),
+                    selection_disabled_reason='' if meta.get('accessible') else 'Drive is not currently accessible',
+                )
+                devices.append(device)
+            except Exception as e:
+                logger.debug(f"Windows logical drive enumeration skipped {root}: {e}")
+                continue
+        return devices
+
+    def _logical_roots(self) -> List[str]:
+        try:
+            import ctypes
+            mask = ctypes.windll.kernel32.GetLogicalDrives()
+        except Exception as e:
+            logger.warning(f"GetLogicalDrives failed: {e}")
+            return []
+
+        roots = []
+        for index in range(26):
+            if mask & (1 << index):
+                roots.append(f"{chr(ord('A') + index)}:\\\\")
+        return roots
+
+    def _read_volume_metadata(self, root: str) -> Dict[str, object]:
+        import ctypes
+        import shutil
+
+        kernel32 = ctypes.windll.kernel32
+        drive_type = int(kernel32.GetDriveTypeW(root))
+        metadata: Dict[str, object] = {
+            'drive_type_code': drive_type,
+            'accessible': True,
+            'total_bytes': 0,
+            'free_bytes': 0,
+            'volume_label': '',
+            'filesystem': '',
+            'volume_serial': '',
+        }
+
+        try:
+            usage = shutil.disk_usage(root)
+            metadata['total_bytes'] = int(usage.total)
+            metadata['free_bytes'] = int(usage.free)
+        except Exception as e:
+            metadata['accessible'] = False
+            logger.debug(f"Disk usage unavailable for {root}: {e}")
+
+        try:
+            volume_name = ctypes.create_unicode_buffer(261)
+            fs_name = ctypes.create_unicode_buffer(261)
+            serial = ctypes.c_ulong(0)
+            max_component = ctypes.c_ulong(0)
+            flags = ctypes.c_ulong(0)
+            ok = kernel32.GetVolumeInformationW(
+                ctypes.c_wchar_p(root),
+                volume_name,
+                len(volume_name),
+                ctypes.byref(serial),
+                ctypes.byref(max_component),
+                ctypes.byref(flags),
+                fs_name,
+                len(fs_name),
+            )
+            if ok:
+                metadata['volume_label'] = volume_name.value
+                metadata['filesystem'] = fs_name.value
+                metadata['volume_serial'] = f"{int(serial.value):08X}"
+        except Exception as e:
+            logger.debug(f"Volume information unavailable for {root}: {e}")
+
+        return metadata
 
 
 # =============================================================================
@@ -1149,8 +1292,12 @@ def create_default_enumerators() -> Dict[str, BaseDeviceEnumerator]:
     """
     enumerators = {}
 
-    # Windows disks (Windows only)
+    # Windows disks and mounted volumes (Windows only)
     if sys.platform == 'win32':
+        windows_volumes = WindowsLogicalDriveEnumerator()
+        if windows_volumes.is_available():
+            enumerators['windows_volumes'] = windows_volumes
+
         windows = WindowsDiskEnumerator()
         if windows.is_available():
             enumerators['windows'] = windows

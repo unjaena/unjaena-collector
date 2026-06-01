@@ -36,6 +36,9 @@ jobs:
           pip install -r requirements/windows.txt
           pip install pyinstaller
 
+      - name: Run release gate
+        run: python tools/release_gate.py --actual-local
+
       - name: Prepare config with version
         shell: bash
         env:
@@ -109,6 +112,9 @@ jobs:
           pip install -r requirements/linux.txt
           pip install pyinstaller
 
+      - name: Run release gate
+        run: python tools/release_gate.py --actual-local
+
       - name: Prepare config with version
         env:
           SERVER_URL: ${{ secrets.PRODUCTION_SERVER_URL }}
@@ -179,6 +185,9 @@ jobs:
           pip install -r requirements/base.txt
           pip install -r requirements/macos.txt
           pip install pyinstaller
+
+      - name: Run release gate
+        run: python tools/release_gate.py --actual-local
 
       - name: Prepare config with version
         env:

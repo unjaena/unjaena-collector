@@ -58,6 +58,7 @@ class DeviceListPanel(QWidget):
         super().__init__(parent)
         self.device_manager = device_manager
         self.device_checkboxes: Dict[str, QCheckBox] = {}
+        self._scan_seen = False
         self._setup_ui()
         self._connect_signals()
 
@@ -99,6 +100,16 @@ class DeviceListPanel(QWidget):
         self.devices_layout.setSpacing(2)
         layout.addWidget(self.devices_container)
 
+        self.empty_label = QLabel("Scanning local disks and connected devices...")
+        self.empty_label.setWordWrap(True)
+        self.empty_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; "
+            f"background: {COLORS['bg_secondary']}; "
+            f"border: 1px dashed {COLORS['border_subtle']}; "
+            f"border-radius: 4px; padding: 8px;"
+        )
+        layout.addWidget(self.empty_label)
+
         # Mobile connection guide (always visible)
         self.mobile_guide = QLabel()
         self.mobile_guide.setWordWrap(True)
@@ -118,6 +129,31 @@ class DeviceListPanel(QWidget):
         self.device_manager.device_added.connect(self._on_device_added)
         self.device_manager.device_removed.connect(self._on_device_removed)
         self.device_manager.device_updated.connect(self._on_device_updated)
+        self.device_manager.scan_started.connect(self._on_scan_started)
+        self.device_manager.scan_completed.connect(self._on_scan_completed)
+
+    def _on_scan_started(self):
+        self._update_empty_state(scanning=True)
+
+    def _on_scan_completed(self):
+        self._scan_seen = True
+        self._update_empty_state(scanning=False)
+        self._update_mobile_guide()
+
+    def _update_empty_state(self, scanning: bool = False):
+        if self.device_checkboxes:
+            self.empty_label.setVisible(False)
+            return
+        self.empty_label.setVisible(True)
+        if scanning and not self._scan_seen:
+            self.empty_label.setText("Scanning local disks and connected devices...")
+        elif scanning:
+            self.empty_label.setText("Refreshing connected evidence sources...")
+        else:
+            self.empty_label.setText(
+                "No local evidence source detected. Run the collector as administrator "
+                "for physical disks, connect a USB/mobile device, or use + Add Image / Bundle."
+            )
 
     # =========================================================================
     # Mobile Connection Guide
@@ -206,7 +242,7 @@ class DeviceListPanel(QWidget):
         # --- E01/RAW hint ---
         sections.append(
             f"<span style='color:{dim};'>"
-            "● <b>E01/RAW</b>: Use <b>+ Add E01/RAW</b> button above"
+            "● <b>Images/Bundles</b>: Use <b>+ Add Image / Bundle</b> above"
             "</span>"
         )
 
@@ -264,6 +300,7 @@ class DeviceListPanel(QWidget):
         self.device_checkboxes[device.device_id] = cb
         self.devices_layout.addWidget(cb)
         self._update_summary()
+        self._update_empty_state(scanning=False)
         self._update_mobile_guide()
 
     def _on_device_removed(self, device_id: str):
@@ -273,6 +310,7 @@ class DeviceListPanel(QWidget):
             self.devices_layout.removeWidget(cb)
             cb.deleteLater()
             self._update_summary()
+            self._update_empty_state(scanning=False)
             self._update_mobile_guide()
 
     def _on_device_updated(self, device: UnifiedDeviceInfo):
@@ -292,6 +330,7 @@ class DeviceListPanel(QWidget):
     def _on_refresh_clicked(self):
         """Refresh"""
         self.device_manager.refresh()
+        self._update_empty_state(scanning=True)
         self._update_mobile_guide()
 
     def _on_add_image_clicked(self):
@@ -395,6 +434,7 @@ class DeviceListPanel(QWidget):
         """Device display label"""
         type_icons = {
             DeviceType.WINDOWS_PHYSICAL_DISK: "💿",
+            DeviceType.WINDOWS_LOGICAL_DRIVE: "🗄",
             DeviceType.MACOS_LOCAL_SYSTEM: "🖥",
             DeviceType.LINUX_LOCAL_SYSTEM: "🖥",
             DeviceType.E01_IMAGE: "📀",
@@ -417,6 +457,13 @@ class DeviceListPanel(QWidget):
             if all_volumes:
                 volumes_str = ', '.join(f"{v}:" for v in all_volumes)
                 label = f"{label} [{volumes_str}]"
+
+        if device.device_type == DeviceType.WINDOWS_LOGICAL_DRIVE:
+            fs_type = device.metadata.get('filesystem') or ''
+            drive_type = device.metadata.get('drive_type') or ''
+            details = ' / '.join(part for part in (drive_type, fs_type) if part)
+            if details:
+                label = f"{label} [{details}]"
 
         if device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
                                         DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
@@ -477,6 +524,15 @@ class DeviceListPanel(QWidget):
             fs_type = device.metadata.get('filesystem_type', 'Unknown')
             lines.append(f"Filesystem: {fs_type}")
             lines.append(f"Detected OS: {detected_os.upper()}")
+
+        if device.device_type == DeviceType.WINDOWS_LOGICAL_DRIVE:
+            m = device.metadata
+            lines.append(f"Volume: {m.get('volume', '?')}:")
+            lines.append(f"Drive type: {m.get('drive_type', 'Unknown')}")
+            lines.append(f"Filesystem: {m.get('filesystem', 'Unknown')}")
+            if m.get('volume_label'):
+                lines.append(f"Label: {m.get('volume_label')}")
+            lines.append("Collection: Windows local filesystem / MFT where accessible")
 
         if device.device_type == DeviceType.ANDROID_DEVICE:
             m = device.metadata
