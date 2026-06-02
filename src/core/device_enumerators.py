@@ -718,8 +718,13 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
     """
 
     # Supported extensions
-    E01_EXTENSIONS = {'.e01', '.ex01', '.s01', '.l01'}
-    RAW_EXTENSIONS = {'.dd', '.raw', '.img', '.bin', '.001'}
+    E01_EXTENSIONS = {'.e01', '.ex01', '.s01', '.l01', '.lx01'}
+    RAW_EXTENSIONS = {'.dd', '.raw', '.img', '.bin', '.001', '.000'}
+    FILESYSTEM_IMAGE_EXTENSIONS = {
+        '.ntfs', '.fat', '.fat12', '.fat16', '.fat32', '.exfat',
+        '.ext', '.ext2', '.ext3', '.ext4', '.xfs', '.btrfs',
+        '.hfs', '.hfsx', '.apfs', '.ufs',
+    }
     VMDK_EXTENSIONS = {'.vmdk'}
     VHD_EXTENSIONS = {'.vhd'}
     VHDX_EXTENSIONS = {'.vhdx'}
@@ -771,7 +776,8 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
             self.E01_EXTENSIONS | self.RAW_EXTENSIONS |
             self.VMDK_EXTENSIONS | self.VHD_EXTENSIONS |
             self.VHDX_EXTENSIONS | self.QCOW2_EXTENSIONS |
-            self.VDI_EXTENSIONS | self.DMG_EXTENSIONS
+            self.VDI_EXTENSIONS | self.DMG_EXTENSIONS |
+            self.FILESYSTEM_IMAGE_EXTENSIONS
         )
 
         if ext not in all_extensions:
@@ -920,22 +926,36 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
             return None
 
     def _find_e01_segments(self, first_segment: Path) -> List[str]:
-        """Find E01 segment files"""
-        segments = [str(first_segment)]
+        """Find E01/L01/Ex01/Lx01 segment files."""
+        try:
+            import pyewf
+            segments = [str(Path(item).resolve()) for item in pyewf.glob(str(first_segment))]
+            if segments:
+                return segments
+        except Exception:
+            pass
 
-        # E01 -> E02, E03, ... or Ex01 -> Ex02, Ex03, ...
+        segments = [str(first_segment.resolve())]
         base = first_segment.stem
         parent = first_segment.parent
+        ext = first_segment.suffix.lower()
 
-        # E01 format (E01, E02, ... E99, EAA, EAB, ...)
-        if first_segment.suffix.lower() in ('.e01', '.ex01'):
-            for i in range(2, 100):
-                suffix = f".E{i:02d}" if first_segment.suffix.startswith('.E') else f".e{i:02d}"
-                segment = parent / f"{base}{suffix}"
-                if segment.exists():
-                    segments.append(str(segment))
-                else:
-                    break
+        if ext.startswith('.ex') and len(ext) == 5:
+            prefix = first_segment.suffix[:3]
+        elif ext.startswith('.lx') and len(ext) == 5:
+            prefix = first_segment.suffix[:3]
+        elif len(ext) == 4 and ext[1] in {'e', 'l', 's'} and ext[2:].isdigit():
+            prefix = first_segment.suffix[:2]
+        else:
+            return segments
+
+        for i in range(2, 100):
+            suffix = f"{prefix}{i:02d}"
+            segment = parent / f"{base}{suffix}"
+            if segment.exists():
+                segments.append(str(segment.resolve()))
+            else:
+                break
 
         return segments
 
@@ -971,7 +991,7 @@ class ForensicImageEnumerator(BaseDeviceEnumerator):
 class MobileFFSBundleEnumerator(BaseDeviceEnumerator):
     """Mobile FFS bundle enumerator (Cellebrite UFED CLBX zip)."""
 
-    BUNDLE_EXTENSIONS = {'.zip'}
+    BUNDLE_EXTENSIONS = {'.zip', '.clbx'}
 
     def __init__(self):
         self._registered: Dict[str, UnifiedDeviceInfo] = {}
@@ -1030,7 +1050,7 @@ class MobileFFSBundleEnumerator(BaseDeviceEnumerator):
         info = UnifiedDeviceInfo(
             device_id=device_id,
             device_type=device_type,
-            display_name=f"FFS Bundle ({platform}) — {path.name}",
+            display_name=f"FFS Bundle ({platform}) - {path.name}",
             status=DeviceStatus.READY,
             size_bytes=size_bytes,
             metadata={

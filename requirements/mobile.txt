@@ -8,5 +8,4 @@ iphone_backup_decrypt>=0.6.0
 # Android Forensics (USB direct connection - no external ADB binary required)
 adb-shell[usb]>=0.4.4
 libusb1>=3.0.0
-pyusb>=1.2.1                  # PyUSB — used by device_enumerators
-
+pyusb>=1.2.1                  # PyUSB - used by device_enumerators

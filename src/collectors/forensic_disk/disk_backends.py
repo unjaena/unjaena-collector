@@ -320,28 +320,35 @@ class E01DiskBackend(UnifiedDiskReader):
         """
         Find E01 segment files
 
-        E01, E02, E03... or Ex01, Ex02... patterns
+        E01/E02, Ex01/Ex02, L01/L02, Lx01/Lx02, S01/S02 patterns.
         """
-        import glob
-
         e01_path = str(e01_path)
         path = Path(e01_path)
 
         if not path.exists():
             return []
 
+        try:
+            import pyewf
+            segments = list(pyewf.glob(e01_path))
+            if segments:
+                return segments
+        except Exception:
+            pass
+
+        import glob
+
         # Analyze extension pattern
         ext = path.suffix.lower()
         base = str(path.with_suffix(''))
 
-        if ext.startswith('.e') and len(ext) == 4:
-            # .E01 pattern
-            pattern = f"{base}.[Ee]*"
-        elif ext.startswith('.ex') or ext.startswith('.Ex'):
-            # .Ex01 pattern
+        if ext.startswith('.ex') and len(ext) == 5:
             pattern = f"{base}.[Ee][Xx]*"
+        elif ext.startswith('.lx') and len(ext) == 5:
+            pattern = f"{base}.[Ll][Xx]*"
+        elif ext and len(ext) == 4 and ext[1] in {'e', 'l', 's'} and ext[2:].isdigit():
+            pattern = f"{base}.[{ext[1].upper()}{ext[1].lower()}][0-9][0-9]"
         else:
-            # Single file
             return [e01_path]
 
         segments = sorted(glob.glob(pattern))
@@ -1640,7 +1647,7 @@ def create_disk_backend(source: str) -> UnifiedDiskReader:
     # Check file extension
     ext = Path(source).suffix.lower()
 
-    if ext in ('.e01', '.ex01', '.s01', '.l01'):
+    if ext in ('.e01', '.ex01', '.s01', '.l01', '.lx01'):
         return E01DiskBackend(source)
     elif ext == '.vmdk':
         return VMDKDiskBackend(source)

@@ -86,6 +86,11 @@ class CreditPausedError(Exception):
         super().__init__(message)
         self.detail = detail or {}
 
+
+class CollectionProfileExpiredError(Exception):
+    """Raised when the server rejects an expired upload authorization profile."""
+    pass
+
 from utils.error_messages import translate_error
 
 logger = logging.getLogger(__name__)
@@ -126,6 +131,57 @@ def _sanitize_error_for_logging(error_text: str, max_length: int = 200) -> str:
         sanitized = sanitized[:max_length] + "..."
 
     return sanitized
+
+
+def _response_detail_text(response) -> str:
+    try:
+        detail = response.json().get("detail", "")
+        if isinstance(detail, dict):
+            detail = detail.get("message") or detail.get("error") or str(detail)
+        return str(detail or "")
+    except Exception:
+        return str(getattr(response, "text", "") or "")[:500]
+
+
+def _is_collection_profile_expired_response(response) -> bool:
+    if getattr(response, "status_code", None) != 403:
+        return False
+    detail = _response_detail_text(response).lower()
+    return "collection profile is expired or unknown" in detail
+
+
+def _refresh_profile_for_uploader(uploader, expired_profile_id: str = None) -> bool:
+    callback = getattr(uploader, "profile_refresh_callback", None)
+    if not callback:
+        return False
+
+    lock = getattr(uploader, "_profile_refresh_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        uploader._profile_refresh_lock = lock
+
+    with lock:
+        current_profile_id = getattr(uploader, "profile_id", None)
+        if expired_profile_id and current_profile_id and current_profile_id != expired_profile_id:
+            return True
+
+        try:
+            refreshed = callback()
+        except Exception as exc:
+            logger.warning("[UPLOAD] Collection profile refresh failed: %s", exc)
+            return False
+
+        new_profile_id = refreshed.get("profile_id") if isinstance(refreshed, dict) else refreshed
+        if not new_profile_id:
+            logger.warning("[UPLOAD] Collection profile refresh returned no profile_id")
+            return False
+
+        uploader.profile_id = str(new_profile_id)
+        fallback = getattr(uploader, "fallback_uploader", None)
+        if fallback is not None and hasattr(fallback, "profile_id"):
+            fallback.profile_id = uploader.profile_id
+        logger.info("[UPLOAD] Collection profile refreshed")
+        return True
 
 
 def _zeroize_key(key_ref: str) -> None:
@@ -668,6 +724,7 @@ class SyncUploader:
         config: dict = None,
         request_signer=None,
         profile_id: str = None,
+        profile_refresh_callback=None,
     ):
         self.server_url = server_url.rstrip('/')
         self.ws_url = ws_url.rstrip('/')
@@ -679,6 +736,8 @@ class SyncUploader:
         self._dev_mode = config.get('dev_mode', False) if config else False
         self.request_signer = request_signer
         self.profile_id = profile_id
+        self.profile_refresh_callback = profile_refresh_callback
+        self._profile_refresh_lock = threading.Lock()
 
     def upload_file(
         self,
@@ -785,6 +844,19 @@ class SyncUploader:
                         )
                     else:
                         error_text = response.text
+                        if _is_collection_profile_expired_response(response):
+                            expired_profile_id = self.profile_id
+                            if _refresh_profile_for_uploader(self, expired_profile_id):
+                                last_error = "Collection profile expired; refreshed and retrying"
+                                logger.info("[UPLOAD] Collection profile expired; retrying raw upload with refreshed profile")
+                                continue
+                            return UploadResult(
+                                success=False,
+                                error="Upload authorization profile expired. Please re-authenticate the collector.",
+                                error_title="Upload Authorization Expired",
+                                error_solution="Restart collection from the web platform to issue a fresh collector session.",
+                                is_recoverable=False,
+                            )
                         # Server paused: stop uploading.
                         if response.status_code == 402:
                             logger.warning("[UPLOAD] Server paused - stopping upload")
@@ -877,6 +949,7 @@ class DirectUploader:
         profile_id: str = None,
         fallback_uploader=None,
         retry_count: int = None,
+        profile_refresh_callback=None,
     ):
         """
         Args:
@@ -902,6 +975,8 @@ class DirectUploader:
         self.request_signer = request_signer
         self.profile_id = profile_id
         self.fallback_uploader = fallback_uploader
+        self.profile_refresh_callback = profile_refresh_callback
+        self._profile_refresh_lock = threading.Lock()
         if retry_count is None:
             retry_count = int(os.getenv('COLLECTOR_DIRECT_UPLOAD_RETRIES', '5'))
         self.request_retries = max(1, int(retry_count))
@@ -955,6 +1030,23 @@ class DirectUploader:
                     timeout=60,
                     verify=_get_ssl_verify(),
                 )
+
+                if _is_collection_profile_expired_response(response):
+                    expired_profile_id = self.profile_id
+                    if _refresh_profile_for_uploader(self, expired_profile_id):
+                        payload["profile_id"] = self.profile_id
+                        body = canonical_json_bytes(payload)
+                        headers = self._get_auth_headers("POST", endpoint, body)
+                        headers['Content-Type'] = 'application/json'
+                        response = requests.post(
+                            f"{self.server_url}{endpoint}",
+                            data=body,
+                            headers=headers,
+                            timeout=60,
+                            verify=_get_ssl_verify(),
+                        )
+                    if _is_collection_profile_expired_response(response):
+                        raise CollectionProfileExpiredError("Collection profile expired and could not be refreshed")
 
                 if response.status_code == 402:
                     try:
@@ -1148,6 +1240,23 @@ class DirectUploader:
                     timeout=60,
                     verify=_get_ssl_verify(),
                 )
+
+                if _is_collection_profile_expired_response(response):
+                    expired_profile_id = self.profile_id
+                    if _refresh_profile_for_uploader(self, expired_profile_id):
+                        payload["profile_id"] = self.profile_id
+                        body = canonical_json_bytes(payload)
+                        headers = self._get_auth_headers("POST", endpoint, body)
+                        headers['Content-Type'] = 'application/json'
+                        response = requests.post(
+                            f"{self.server_url}{endpoint}",
+                            data=body,
+                            headers=headers,
+                            timeout=60,
+                            verify=_get_ssl_verify(),
+                        )
+                    if _is_collection_profile_expired_response(response):
+                        raise CollectionProfileExpiredError("Collection profile expired and could not be refreshed")
 
                 if response.status_code == 402:
                     try:
@@ -1358,6 +1467,18 @@ class DirectUploader:
                 error_solution="Please check your account balance on the web platform. After resolving, restart the collector to continue. Already processed files are preserved.",
                 is_recoverable=False,
                 is_credit_paused=True,
+            )
+
+        except CollectionProfileExpiredError as cpe:
+            logger.warning(f"[UPLOAD] Collection profile expired: {cpe}")
+            if encrypted_path and os.path.exists(encrypted_path):
+                os.remove(encrypted_path)
+            return UploadResult(
+                success=False,
+                error="Upload authorization profile expired. Please re-authenticate the collector.",
+                error_title="Upload Authorization Expired",
+                error_solution="Restart collection from the web platform to issue a fresh collector session.",
+                is_recoverable=False,
             )
 
         except Exception as e:

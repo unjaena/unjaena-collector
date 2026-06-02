@@ -67,6 +67,7 @@ def _debug_print(msg: str) -> None:
 
 
 logger = logging.getLogger(__name__)
+IOS_ENCRYPTION_SKIP_SENTINEL = "__UNJAENA_IOS_SKIP_ENCRYPTION__"
 
 
 def _validate_ios_file_hash(file_hash: str) -> bool:
@@ -595,9 +596,11 @@ class iOSDeviceConnector:
         self._encrypted_backup_obj = None      # iphone_backup_decrypt EncryptedBackup instance
         self._backup_failed_reason = None      # Cached backup failure (skip retries)
         self._password_callback = None         # GUI callback: callback(error_msg) -> password|None
+        self._encryption_skip_requested = False
 
-        # Timeout for all change_password() calls (seconds)
-        self._CHANGE_PASSWORD_TIMEOUT = 15
+        # Timeout for all change_password() calls (seconds). iOS can take
+        # longer than a normal service call while restarting backup services.
+        self._CHANGE_PASSWORD_TIMEOUT = 180
 
     def _clear_password(self):
         """Zero-out and release the forensic backup password from memory.
@@ -760,6 +763,59 @@ class iOSDeviceConnector:
         except Exception:
             pass
         return False
+
+    def _get_device_backup_encryption_state(self) -> Optional[bool]:
+        """Return current device backup encryption state, if readable."""
+        if not self._lockdown:
+            return None
+        try:
+            return bool(self._lockdown.get_value("com.apple.mobile.backup", "WillEncrypt"))
+        except Exception as e:
+            logger.warning(f"[iOS] Failed to read device backup encryption state: {e}")
+            try:
+                self._lockdown = create_using_usbmux(serial=self.udid)
+                return bool(self._lockdown.get_value("com.apple.mobile.backup", "WillEncrypt"))
+            except Exception as reconnect_error:
+                logger.warning(f"[iOS] Failed to read encryption state after reconnect: {reconnect_error}")
+                return None
+
+    def _verify_device_backup_encryption_state(
+        self,
+        expected: bool,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> bool:
+        """Verify that the device backup encryption state matches expectation."""
+        actual = self._get_device_backup_encryption_state()
+        if actual is expected:
+            return True
+
+        msg = (
+            f"iOS backup encryption state mismatch: expected {expected}, "
+            f"device reports {actual}"
+        )
+        logger.warning(f"[iOS] {msg}")
+        if progress_callback:
+            progress_callback(f"[ERROR] {msg}")
+        return False
+
+    def _read_backup_manifest_encrypted(self, backup_path: Path) -> Optional[bool]:
+        """Read IsEncrypted from a backup Manifest.plist."""
+        manifest_plist = Path(backup_path) / 'Manifest.plist'
+        if not manifest_plist.exists():
+            return None
+
+        try:
+            with open(manifest_plist, 'rb') as f:
+                manifest = plistlib.load(f)
+            return bool(manifest.get('IsEncrypted', False))
+        except Exception:
+            if BIPLIST_AVAILABLE:
+                try:
+                    manifest = biplist.readPlist(str(manifest_plist))
+                    return bool(manifest.get('IsEncrypted', False))
+                except Exception:
+                    pass
+        return None
 
     def collect_device_info(
         self,
@@ -930,7 +986,7 @@ class iOSDeviceConnector:
             else:
                 yield '', {
                     'artifact_type': 'mobile_ios_crash_logs',
-                    'status': 'no_data',
+                    'status': 'not_found',
                     'message': 'No crash reports found',
                 }
 
@@ -1047,10 +1103,11 @@ class iOSDeviceConnector:
         backup_dir.mkdir(exist_ok=True)
 
         try:
-            logger.info(f"[iOS] Creating Mobilebackup2Service (lockdown={type(self._lockdown).__name__})")
-            backup_service = Mobilebackup2Service(lockdown=self._lockdown)
-            will_encrypt = backup_service.will_encrypt
-            logger.info(f"[iOS] Mobilebackup2Service created, will_encrypt={will_encrypt}")
+            logger.info(f"[iOS] Reading backup encryption state (lockdown={type(self._lockdown).__name__})")
+            will_encrypt = self._get_device_backup_encryption_state()
+            if will_encrypt is None:
+                raise RuntimeError("Failed to read iOS backup encryption state")
+            logger.info(f"[iOS] Backup encryption state: will_encrypt={will_encrypt}")
 
             # =============================================================
             # Encryption handling — user provides password for all scenarios.
@@ -1061,26 +1118,78 @@ class iOSDeviceConnector:
             if self._forensic_backup_password:
                 logger.info("[iOS] Reusing cached backup password (already verified)")
             elif not will_encrypt:
-                # Encryption OFF → ask user for a temporary password to enable it.
-                # Encrypted backups contain more forensic data (HealthKit, WiFi, etc.)
+                # Encryption OFF -> ask user for a temporary password to enable it.
+                # Encrypted backups contain more forensic data.
+                if not self._password_callback:
+                    self._backup_failed_reason = (
+                        "iOS encrypted backup setup requires user confirmation. "
+                        "Run the collector UI and enter a temporary backup password."
+                    )
+                    yield '', {
+                        'artifact_type': 'mobile_ios_device_backup',
+                        'status': 'error',
+                        'error': self._backup_failed_reason,
+                    }
+                    return
+
                 if progress_callback:
                     progress_callback("Backup encryption required for complete forensic data...")
 
                 user_pw = self._request_encryption_password(str(backup_dir), progress_callback)
                 if user_pw:
+                    if progress_callback:
+                        progress_callback("Confirm the iOS passcode prompt on the device to enable encrypted backup...")
                     if self._change_password_with_timeout(str(backup_dir), "", user_pw):
                         self._encryption_action = 'we_enabled'
                         self._forensic_backup_password = user_pw
+                        if not self._verify_device_backup_encryption_state(True, progress_callback):
+                            self._backup_failed_reason = (
+                                "Failed to verify that iOS encrypted backup was enabled. "
+                                "Reconnect the device, keep it unlocked, confirm Trust, "
+                                "and run collection again."
+                            )
+                            logger.warning(f"[iOS] {self._backup_failed_reason}")
+                            if self._change_password_with_timeout(str(backup_dir), user_pw, ""):
+                                logger.info("[iOS] Encryption restored after verification failure")
+                            else:
+                                logger.warning("[iOS] Encryption restore failed after verification failure")
+                            self._encryption_action = None
+                            self._clear_password()
+                            yield '', {
+                                'artifact_type': 'mobile_ios_device_backup',
+                                'status': 'error',
+                                'error': self._backup_failed_reason,
+                            }
+                            return
                         logger.info("[iOS] Backup encryption enabled with user password")
                     else:
-                        logger.warning("[iOS] Failed to enable encryption, proceeding unencrypted")
+                        self._backup_failed_reason = (
+                            "Failed to enable iOS encrypted backup. "
+                            "Reconnect the device, keep it unlocked, confirm Trust, "
+                            "and run collection again."
+                        )
+                        logger.warning(f"[iOS] {self._backup_failed_reason}")
                         self._encryption_action = None
                         self._clear_password()
+                        yield '', {
+                            'artifact_type': 'mobile_ios_device_backup',
+                            'status': 'error',
+                            'error': self._backup_failed_reason,
+                        }
+                        return
                 else:
-                    # User skipped → proceed unencrypted
-                    logger.info("[iOS] User skipped encryption, proceeding unencrypted")
-                    self._encryption_action = None
-                    self._clear_password()
+                    if self._encryption_skip_requested:
+                        logger.info("[iOS] User skipped encryption, proceeding unencrypted")
+                        self._encryption_action = None
+                        self._clear_password()
+                    else:
+                        self._backup_failed_reason = "iOS encrypted backup setup was cancelled."
+                        yield '', {
+                            'artifact_type': 'mobile_ios_device_backup',
+                            'status': 'error',
+                            'error': self._backup_failed_reason,
+                        }
+                        return
             else:
                 # Encryption already ON → ask user for existing password
                 logger.info("[iOS] Encryption already ON — requesting existing password")
@@ -1154,6 +1263,17 @@ class iOSDeviceConnector:
                     actual_backup_path = subdir
                     break
 
+            manifest_encrypted = self._read_backup_manifest_encrypted(actual_backup_path)
+            if self._forensic_backup_password and manifest_encrypted is not True:
+                raise RuntimeError(
+                    "iOS backup was expected to be encrypted, but Manifest.plist "
+                    "does not report an encrypted backup."
+                )
+            if not self._forensic_backup_password and manifest_encrypted is True:
+                raise RuntimeError(
+                    "iOS backup is encrypted, but no backup password is available for extraction."
+                )
+
             total_size = sum(
                 f.stat().st_size for f in actual_backup_path.rglob('*') if f.is_file()
             )
@@ -1164,7 +1284,7 @@ class iOSDeviceConnector:
                 'size_bytes': total_size,
                 'size_mb': round(total_size / (1024 * 1024), 2),
                 'device_udid': self.udid,
-                'encrypted': bool(self._forensic_backup_password),
+                'encrypted': bool(manifest_encrypted),
                 'collected_at': datetime.utcnow().isoformat(),
                 'collection_method': 'pymobiledevice3',
             }
@@ -1240,7 +1360,7 @@ class iOSDeviceConnector:
         After collection, the collector restores encryption to OFF using this password.
         If crash occurs, the user knows the password and can manage it themselves.
 
-        Returns password or None if user chose to skip (proceed unencrypted).
+        Returns password or None. Skip and cancel are tracked separately.
         """
         if not self._password_callback:
             logger.warning("[iOS] No password callback set — cannot request encryption password")
@@ -1250,6 +1370,10 @@ class iOSDeviceConnector:
         password = self._password_callback(
             "ENCRYPTION_SETUP"  # Special marker for GUI to show appropriate dialog
         )
+        if password == IOS_ENCRYPTION_SKIP_SENTINEL:
+            self._encryption_skip_requested = True
+            return None
+        self._encryption_skip_requested = False
         return password if password else None
 
     # =========================================================================
@@ -1410,9 +1534,13 @@ class iOSDeviceConnector:
                     self._backup_path = Path(meta['backup_path'])
                     # Initialize decryptor for encrypted backups
                     if self._forensic_backup_password:
-                        self._init_encrypted_decryptor(
-                            meta['backup_path'], progress_callback
-                        )
+                        if not self._init_encrypted_decryptor(meta['backup_path'], progress_callback):
+                            yield '', {
+                                'artifact_type': artifact_type,
+                                'status': 'error',
+                                'error': self._backup_failed_reason or 'Failed to prepare encrypted backup access',
+                            }
+                            return
                 yield path, meta
 
         elif artifact_type == 'mobile_ios_unified_logs':
@@ -1517,21 +1645,19 @@ class iOSDeviceConnector:
             if progress_callback:
                 progress_callback("Using existing backup...")
 
-            # Reused backup may be encrypted — set up decryptor
-            manifest_db = backup_dir / 'Manifest.db'
-            is_encrypted = False
-            if manifest_db.exists():
-                try:
-                    with open(manifest_db, 'rb') as f:
-                        header = f.read(16)
-                    is_encrypted = not header.startswith(b'SQLite format 3')
-                except Exception:
-                    pass
+            # Reused backup may be encrypted; set up decryptor.
+            is_encrypted = self._read_backup_manifest_encrypted(backup_dir)
 
             if is_encrypted and not self._encrypted_backup_obj:
                 # Encrypted backup reuse requires password from current session
                 if self._forensic_backup_password:
-                    self._init_encrypted_decryptor(str(backup_dir), progress_callback)
+                    if not self._init_encrypted_decryptor(str(backup_dir), progress_callback):
+                        yield '', {
+                            'artifact_type': 'mobile_ios_device_backup',
+                            'status': 'error',
+                            'error': self._backup_failed_reason or 'Failed to prepare encrypted backup access',
+                        }
+                        return
 
             yield str(backup_dir), {
                 'artifact_type': 'mobile_ios_device_backup',
@@ -1550,7 +1676,13 @@ class iOSDeviceConnector:
             # Initialize decryptor for encrypted backups
             if self._forensic_backup_password and path:
                 backup_path = meta.get('backup_path', path)
-                self._init_encrypted_decryptor(backup_path, progress_callback)
+                if not self._init_encrypted_decryptor(backup_path, progress_callback):
+                    yield '', {
+                        'artifact_type': 'mobile_ios_device_backup',
+                        'status': 'error',
+                        'error': self._backup_failed_reason or 'Failed to prepare encrypted backup access',
+                    }
+                    return
 
             yield path, meta
 
@@ -1564,6 +1696,8 @@ class iOSDeviceConnector:
 
             if self._change_password_with_timeout(str(restore_dir), self._forensic_backup_password, ""):
                 logger.info("[iOS] Backup encryption restored to OFF")
+                if not self._verify_device_backup_encryption_state(False):
+                    logger.warning("[iOS] Backup encryption restore could not be verified")
             else:
                 logger.warning("[iOS] Encryption restore failed — device may still have forensic encryption")
                 logger.warning("[iOS] To manually restore: use iTunes/Finder to change backup password")

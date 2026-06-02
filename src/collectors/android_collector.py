@@ -817,12 +817,19 @@ class AndroidCollector:
 
                 if self.device_info:
                     self.device_serial = self.device_info.serial
-                    try:
-                        self._device = self._connect_device_usb(self.device_serial)
-                        logger.info(f"[Android] Connected via libusb: {_mask_serial(self.device_serial)}")
-                        return True
-                    except RuntimeError as e:
-                        logger.warning(f"[Android] libusb connection failed: {e}")
+                    if self.device_info.usb_debugging:
+                        try:
+                            self._device = self._connect_device_usb(self.device_serial)
+                            logger.info(f"[Android] Connected via libusb: {_mask_serial(self.device_serial)}")
+                            return True
+                        except RuntimeError as e:
+                            logger.warning(f"[Android] libusb connection failed: {e}")
+                    else:
+                        logger.info(
+                            "[Android] USB device detected but libusb adb-key access is not available; "
+                            "trying system adb fallback: %s",
+                            _mask_serial(self.device_serial),
+                        )
                 else:
                     logger.info(f"[Android] Device not found via libusb, trying system adb")
             except Exception as e:
@@ -838,6 +845,13 @@ class AndroidCollector:
         # Fallback: system adb mode
         adb_path = self._find_system_adb()
         if not adb_path:
+            if self.device_info and not self.device_info.usb_debugging:
+                raise RuntimeError(
+                    f"Android device {self.device_serial} is connected, but ADB shell access "
+                    f"is not available. Enable USB debugging, unlock the device, and approve "
+                    f"the 'Allow USB debugging?' prompt. Install Android SDK Platform-Tools "
+                    f"(adb.exe) if the prompt does not appear."
+                )
             raise RuntimeError(
                 f"Cannot connect to {self.device_serial}. "
                 f"libusb driver not compatible and system adb not found. "
@@ -852,22 +866,49 @@ class AndroidCollector:
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
             devices_output = result.stdout.decode('utf-8', errors='replace')
-            # Parse "serial\tstatus" lines
+            adb_entries = []
             for line in devices_output.strip().splitlines():
-                parts = line.split('\t')
-                if len(parts) == 2 and self.device_serial in parts[0]:
-                    status = parts[1].strip()
-                    if status == 'unauthorized':
-                        raise RuntimeError(
-                            f"Device {self.device_serial} is unauthorized. "
-                            f"Please check the device screen and tap 'Allow' on the "
-                            f"'Allow USB debugging?' dialog."
-                        )
-                    elif status == 'offline':
-                        raise RuntimeError(
-                            f"Device {self.device_serial} is offline. "
-                            f"Please reconnect the USB cable."
-                        )
+                if line.lower().startswith('list of devices'):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2:
+                    adb_entries.append((parts[0], parts[1].strip()))
+
+            matched_entry = next(
+                (
+                    (adb_serial, status)
+                    for adb_serial, status in adb_entries
+                    if self.device_serial and self.device_serial == adb_serial
+                ),
+                None,
+            )
+            if matched_entry is None and self.device_serial and ':' in self.device_serial and len(adb_entries) == 1:
+                adb_serial, status = adb_entries[0]
+                logger.info(
+                    "[Android] Replacing USB VID:PID placeholder %s with adb serial %s",
+                    _mask_serial(self.device_serial),
+                    _mask_serial(adb_serial),
+                )
+                self.device_serial = adb_serial
+                if self.device_info:
+                    self.device_info.serial = adb_serial
+                matched_entry = (adb_serial, status)
+
+            if matched_entry:
+                matched_serial, status = matched_entry
+                if status == 'unauthorized':
+                    raise RuntimeError(
+                        f"Device {matched_serial} is unauthorized. "
+                        f"Please check the device screen and tap 'Allow' on the "
+                        f"'Allow USB debugging?' dialog. If no prompt appears, "
+                        f"revoke USB debugging authorizations in Developer options, "
+                        f"reconnect USB, and try again."
+                    )
+                elif status == 'offline':
+                    raise RuntimeError(
+                        f"Device {matched_serial} is offline. "
+                        f"Please reconnect the USB cable."
+                    )
         except RuntimeError:
             raise
         except Exception as e2:
@@ -884,9 +925,12 @@ class AndroidCollector:
                 self._device = None  # No libusb device, use system adb fallback
                 self._system_adb_path = adb_path
 
-                # Populate device_info if not set (libusb enumeration may have skipped it)
-                if not self.device_info:
-                    self.device_info = self._build_device_info_from_adb(adb_path)
+                # Populate or refresh device_info. libusb may expose a connected
+                # device but fail adb-key auth, while system adb is already
+                # authorized. In that case keep the real adb serial/details.
+                adb_device_info = self._build_device_info_from_adb(adb_path)
+                if adb_device_info:
+                    self.device_info = adb_device_info
 
                 logger.info(
                     f"[Android] Connected via system adb fallback: {_mask_serial(self.device_serial)} "
@@ -895,6 +939,13 @@ class AndroidCollector:
                 return True
         except Exception as e2:
             logger.warning(f"[Android] System adb shell test failed: {e2}")
+
+        if self.device_info and not self.device_info.usb_debugging:
+            raise RuntimeError(
+                f"Android device {self.device_serial} is connected, but ADB shell access "
+                f"is not available. Enable USB debugging, unlock the device, and approve "
+                f"the 'Allow USB debugging?' prompt before starting collection."
+            )
 
         raise RuntimeError(
             f"Cannot connect to {self.device_serial}. "
@@ -1089,6 +1140,16 @@ class AndroidCollector:
             raise ValueError(f"Unknown artifact type: {artifact_type}")
 
         artifact_info = ANDROID_ARTIFACT_TYPES[artifact_type]
+        if progress_callback:
+            raw_progress_callback = progress_callback
+
+            def safe_progress_callback(message: str) -> None:
+                try:
+                    raw_progress_callback(str(message))
+                except Exception as e:
+                    logger.warning(f"[Android] Progress callback failed: {e}")
+
+            progress_callback = safe_progress_callback
 
         yield from self._collect_impl(
             artifact_type, artifact_info, progress_callback
@@ -1683,7 +1744,7 @@ class AndroidCollector:
         output, returncode = self._adb_shell(cmd)
 
         if returncode != 0 or not output.strip():
-            # Call log: Android 10+ restricts READ_CALL_LOG → try dumpsys fallback
+            # Call log: Android 10+ restricts READ_CALL_LOG; try dumpsys fallback.
             if 'call_log' in content_uri:
                 error_detail = output.strip()[:200] if output.strip() else 'Empty response'
                 logging.info(
@@ -1691,7 +1752,7 @@ class AndroidCollector:
                     f"(likely Android 10+ restriction): {error_detail}"
                 )
                 if progress_callback:
-                    progress_callback("Call log restricted — trying dumpsys telecom fallback")
+                    progress_callback("Call log restricted; trying dumpsys telecom fallback")
                 yield from self._collect_call_log_fallback(
                     artifact_type, output_dir, progress_callback
                 )

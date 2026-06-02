@@ -86,6 +86,7 @@ class CollectorWindow(QMainWindow):
         self.server_url = None
         self.ws_url = None
         self.collection_profile_id = None
+        self.collection_profile_signing_key = None
         self.collection_profile_targets = []
         self.profile_artifact_types = set()
         self.allowed_artifacts = []
@@ -1927,6 +1928,7 @@ class CollectorWindow(QMainWindow):
             self.case_id = result.case_id
             self.collection_token = result.collection_token
             self.collection_profile_id = getattr(result, 'collection_profile_id', None)
+            self.collection_profile_signing_key = getattr(result, 'signing_key', None)
             self.collection_profile_targets = getattr(result, 'collection_profile_targets', None) or []
             self.profile_artifact_types = set()
             for registry in (
@@ -2843,6 +2845,7 @@ class CollectorWindow(QMainWindow):
             # Request signing
             request_signer=self.request_signer,
             collection_profile_id=self.collection_profile_id,
+            collection_profile_signing_key=self.collection_profile_signing_key,
         )
         self.worker.progress_updated.connect(self._update_progress)
         self.worker.file_collected.connect(self._add_collected_file)
@@ -2944,7 +2947,13 @@ class CollectorWindow(QMainWindow):
             )
 
         if hasattr(self, 'worker') and self.worker:
-            self.worker._pw_response = result.password if result.success else None
+            if result.success:
+                self.worker._pw_response = result.password
+            elif error_msg == "ENCRYPTION_SETUP" and result.skip:
+                from collectors.ios_collector import IOS_ENCRYPTION_SKIP_SENTINEL
+                self.worker._pw_response = IOS_ENCRYPTION_SKIP_SENTINEL
+            else:
+                self.worker._pw_response = None
             if self.worker._pw_event:
                 self.worker._pw_event.set()
 
@@ -3227,6 +3236,7 @@ class CollectorWindow(QMainWindow):
         self.server_url = None
         self.ws_url = None
         self.collection_profile_id = None
+        self.collection_profile_signing_key = None
         self.collection_profile_targets = []
         self.profile_artifact_types = set()
         self.allowed_artifacts = []
@@ -3544,6 +3554,7 @@ class CollectionWorker(QThread):
         # Request signing
         request_signer=None,
         collection_profile_id: str = None,
+        collection_profile_signing_key: str = None,
     ):
         super().__init__()
         self.server_url = server_url
@@ -3557,6 +3568,7 @@ class CollectionWorker(QThread):
         self.config = config or {}
         self.request_signer = request_signer
         self.collection_profile_id = collection_profile_id
+        self.collection_profile_signing_key = collection_profile_signing_key
 
         # Selected devices list
         self.selected_devices = selected_devices or []
@@ -3601,6 +3613,16 @@ class CollectionWorker(QThread):
         # Heartbeat thread to keep collection session alive
         self._heartbeat_stop_event = None
         self._heartbeat_thread = None
+
+    def _refresh_collection_profile(self):
+        validator = TokenValidator(self.server_url)
+        profile = validator.fetch_collection_profile(
+            self.session_id,
+            self.collection_token,
+            self.collection_profile_signing_key,
+        )
+        self.collection_profile_id = profile.get('profile_id')
+        return self.collection_profile_id
 
     def _metadata_source_identity(self, file_path: str, metadata: dict) -> str:
         if not isinstance(metadata, dict):
@@ -4560,6 +4582,7 @@ class CollectionWorker(QThread):
                 config=self.config,
                 request_signer=self.request_signer,
                 profile_id=self.collection_profile_id,
+                profile_refresh_callback=self._refresh_collection_profile,
             )
             uploader = R2DirectUploader(
                 server_url=self.server_url,
@@ -4571,6 +4594,7 @@ class CollectionWorker(QThread):
                 request_signer=self.request_signer,
                 profile_id=self.collection_profile_id,
                 fallback_uploader=sync_uploader,
+                profile_refresh_callback=self._refresh_collection_profile,
             )
 
             success_count = 0

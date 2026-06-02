@@ -339,15 +339,15 @@ class DeviceListPanel(QWidget):
             self,
             "Select Forensic Image or Mobile Bundle",
             "",
-            "Forensic Images (*.E01 *.e01 *.Ex01 *.ex01 *.s01 *.S01 *.l01 *.L01 *.dd *.raw *.img *.bin *.001 *.vmdk *.vhd *.vhdx *.qcow2 *.vdi *.dmg *.DMG)"
-            ";;Mobile FFS Bundle (*.zip)"
+            "Forensic Images (*.E01 *.e01 *.Ex01 *.ex01 *.L01 *.l01 *.Lx01 *.lx01 *.S01 *.s01 *.dd *.raw *.img *.bin *.000 *.001 *.vmdk *.vhd *.vhdx *.qcow2 *.vdi *.dmg *.DMG *.ntfs *.fat *.fat12 *.fat16 *.fat32 *.exfat *.ext *.ext2 *.ext3 *.ext4 *.xfs *.btrfs *.hfs *.hfsx *.apfs *.ufs)"
+            ";;Mobile FFS Bundle (*.zip *.clbx)"
             ";;All Files (*)"
         )
         if not file_path:
             return
 
-        is_zip = file_path.lower().endswith(".zip")
-        if is_zip:
+        is_mobile_bundle = file_path.lower().endswith((".zip", ".clbx"))
+        if is_mobile_bundle:
             self._register_ffs_bundle(file_path)
         else:
             device = self.device_manager.add_image_file(file_path)
