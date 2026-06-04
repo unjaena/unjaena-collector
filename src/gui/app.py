@@ -733,7 +733,26 @@ class CollectorWindow(QMainWindow):
                     from collectors.mobile_ffs.path_specs import IOS_PATH_SPECS
                     return {spec.artifact_type for spec in IOS_PATH_SPECS}
                 from collectors.ios_collector import IOS_ARTIFACT_TYPES
-                return set(IOS_ARTIFACT_TYPES.keys())
+                include_device = source == "usb_backup"
+                supported = set()
+                for item_type, item_info in IOS_ARTIFACT_TYPES.items():
+                    if item_info.get('requires_device'):
+                        if include_device:
+                            supported.add(item_type)
+                        continue
+                    if (
+                        'files' in item_info
+                        or 'manifest_targets' in item_info
+                        or (
+                            'manifest_domain' in item_info
+                            and (
+                                'manifest_path' in item_info
+                                or 'manifest_paths' in item_info
+                            )
+                        )
+                    ):
+                        supported.add(item_type)
+                return supported
         except Exception:
             return set()
 
@@ -1686,7 +1705,7 @@ class CollectorWindow(QMainWindow):
                 f"✓ iOS USB: {ios_device.display_name} - backup-based extraction"
             )
             self.ios_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
-            self._set_ios_artifact_states("backup", "iOS USB backup extraction")
+            self._set_ios_artifact_states("usb_backup", "iOS USB backup extraction")
             return
 
         self.ios_info_label.setText("Select iOS backup, iOS device, or FFS bundle from device list")

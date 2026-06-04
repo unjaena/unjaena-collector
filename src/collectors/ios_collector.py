@@ -1950,6 +1950,18 @@ class iOSCollector:
             yield from self._collect_backup_metadata(artifact_dir, progress_callback)
             return
 
+        # Handle server-issued backup manifest targets. A single artifact type
+        # may map to multiple iOS backup domains, especially when the profile
+        # was derived from mobile filesystem specs.
+        if 'manifest_targets' in artifact_info:
+            yield from self._collect_manifest_targets(
+                artifact_type,
+                artifact_info['manifest_targets'],
+                artifact_dir,
+                progress_callback
+            )
+            return
+
         # Handle pattern-based collection
         if artifact_info.get('pattern'):
             yield from self._collect_pattern(
@@ -1981,6 +1993,58 @@ class iOSCollector:
                 artifact_dir,
                 progress_callback
             )
+
+    def _collect_manifest_targets(
+        self,
+        artifact_type: str,
+        targets: List[Dict[str, Any]],
+        artifact_dir: Path,
+        progress_callback: Optional[Callable[[str], None]]
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """Collect one artifact type from one or more backup manifest targets."""
+        seen_targets = set()
+        for target in targets or []:
+            domain = target.get('manifest_domain')
+            if not domain:
+                continue
+            paths = []
+            if 'manifest_paths' in target:
+                paths = list(target.get('manifest_paths') or [])
+            elif 'manifest_path' in target:
+                paths = [target.get('manifest_path')]
+            if not paths:
+                continue
+
+            is_pattern = bool(target.get('pattern')) or any(
+                '*' in str(path) or '?' in str(path)
+                for path in paths
+            )
+            if is_pattern:
+                pattern_info = {
+                    'manifest_domain': domain,
+                    'manifest_paths': paths,
+                    'pattern': True,
+                }
+                yield from self._collect_pattern(
+                    artifact_type,
+                    pattern_info,
+                    artifact_dir,
+                    progress_callback
+                )
+                continue
+
+            for relative_path in paths:
+                key = (domain, relative_path)
+                if key in seen_targets:
+                    continue
+                seen_targets.add(key)
+                yield from self._collect_file(
+                    artifact_type,
+                    domain,
+                    relative_path,
+                    artifact_dir,
+                    progress_callback
+                )
 
     def _collect_file(
         self,

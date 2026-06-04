@@ -1,10 +1,13 @@
 from contextlib import contextmanager
+from datetime import datetime
+from types import SimpleNamespace
 import shutil
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from collectors import ios_collector
 from collectors import ios_backup_decryptor
 from collectors.ios_backup_decryptor import iOSEncryptedBackupParser
 
@@ -138,4 +141,69 @@ def test_encrypted_parser_lists_manifest_globs(tmp_path):
     ]
     assert [item["relative_path"] for item in sms_files] == [
         "Library/SMS/sms.db"
+    ]
+
+
+def test_ios_collector_collects_server_manifest_targets(tmp_path, monkeypatch):
+    class FakeParser:
+        def __init__(self, root: Path):
+            self.exact_payload = root / "exact-source.db"
+            self.pattern_payload = root / "pattern-source.db"
+            self.exact_payload.write_bytes(b"exact")
+            self.pattern_payload.write_bytes(b"pattern")
+
+        def extract_file(self, domain, relative_path, output_path):
+            if domain == "HomeDomain" and relative_path == "Library/Data/example.db":
+                shutil.copy2(self.exact_payload, output_path)
+                return True
+            return False
+
+        def list_files(self, domain_filter=None, path_pattern=None):
+            if (
+                domain_filter == "AppDomain-com.example.app"
+                and path_pattern == "Documents/*"
+            ):
+                yield {
+                    "domain": "AppDomain-com.example.app",
+                    "relative_path": "Documents/cache/example.db",
+                    "backup_path": str(self.pattern_payload),
+                }
+
+    collector = ios_collector.iOSCollector(str(tmp_path / "out"))
+    collector.backup_info = SimpleNamespace(
+        encrypted=False,
+        device_name="Device",
+        device_id="UDID",
+        ios_version="1.0",
+        backup_date=datetime(2026, 1, 1),
+    )
+    collector.parser = FakeParser(tmp_path)
+
+    monkeypatch.setitem(
+        ios_collector.IOS_ARTIFACT_TYPES,
+        "mobile_ios_example",
+        {
+            "manifest_targets": [
+                {
+                    "manifest_domain": "HomeDomain",
+                    "manifest_path": "Library/Data/example.db",
+                },
+                {
+                    "manifest_domain": "AppDomain-com.example.app",
+                    "manifest_path": "Documents/*",
+                    "pattern": True,
+                },
+            ],
+        },
+    )
+
+    results = [
+        (Path(path).name, metadata["domain"])
+        for path, metadata in collector.collect("mobile_ios_example")
+        if path
+    ]
+
+    assert results == [
+        ("example.db", "HomeDomain"),
+        ("8742d779b350_example.db", "AppDomain-com.example.app"),
     ]
