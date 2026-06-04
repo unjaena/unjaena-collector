@@ -96,6 +96,7 @@ are auditing or modifying the source.
 ## Dependency Policy
 
 Dependencies are reviewed for license compatibility and security impact before
-release. The project license is AGPL-3.0-or-later because the distributed
-collector integrates GPL/AGPL-compatible components. See `LICENSES.md` for the
+release. The project source is AGPL-3.0-or-later, and distributed builds may
+include third-party components under GPL, AGPL, LGPL, MPL, BSD, MIT, Apache,
+PSF, public-domain, or other applicable terms. See `LICENSES.md` for the
 current notice file.

@@ -180,7 +180,7 @@ See `SECURITY.md` for vulnerability reporting and secret-handling guidance.
 
 ## License
 
-This repository is licensed under AGPL-3.0-or-later. The license choice is
-intentional because the distributed collector integrates GPL/AGPL-compatible
-components, including PyQt6, pymobiledevice3, and Dissect packages. See
-`LICENSE` and `LICENSES.md` for details.
+This repository's source code is licensed under AGPL-3.0-or-later. Distributed
+builds may include third-party components under their own license terms,
+including GPL, AGPL, LGPL, MPL, BSD, MIT, Apache, PSF, and public-domain
+components. See `LICENSE` and `LICENSES.md` for details.
