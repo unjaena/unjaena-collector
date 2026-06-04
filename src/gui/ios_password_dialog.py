@@ -539,7 +539,7 @@ class iOSBackupPasswordDialog(QDialog):
             "To reset the iOS backup password:\n\n"
             "  Settings > General > Transfer or Reset iPhone\n"
             "  > Reset > Reset All Settings\n\n"
-            "This preserves all data — only settings are reset.\n"
+            "This preserves all data; only settings are reset.\n"
             "After reset, run collection again."
         )
         self.result.success = False
@@ -566,6 +566,17 @@ class iOSBackupPasswordDialog(QDialog):
             #infoText {{
                 color: {COLORS['text_primary']};
                 font-size: 11px;
+            }}
+            #warningFrame {{
+                background-color: {COLORS['warning_bg']};
+                border: 1px solid {COLORS['warning']};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+            #warningText {{
+                color: {COLORS['warning']};
+                font-size: 11px;
+                font-weight: bold;
             }}
             #inputFrame {{
                 background-color: {COLORS['bg_secondary']};
@@ -636,7 +647,7 @@ class iOSEncryptionSetupDialog(QDialog):
 
     def _setup_ui(self):
         self.setWindowTitle("iOS Backup Encryption Setup")
-        self.setMinimumSize(500, 380)
+        self.setMinimumSize(560, 460)
         self.setModal(True)
         self.setStyleSheet(self._get_stylesheet())
 
@@ -657,25 +668,41 @@ class iOSEncryptionSetupDialog(QDialog):
         info_label = QLabel(
             "Encrypted backups contain more forensic data\n"
             "(HealthKit, WiFi passwords, saved accounts, etc.)\n\n"
-            "Enter a temporary password to enable backup encryption.\n"
-            "This password will be used to restore the device after collection.\n"
-            "The password is used locally only and is never transmitted."
+            "Step 1: create a temporary backup encryption password in this window.\n"
+            "Step 2: when iOS asks on the iPhone, unlock the device and enter\n"
+            "the iPhone device passcode on the iPhone screen.\n\n"
+            "The temporary backup password is used locally only and is never transmitted."
         )
         info_label.setObjectName("infoText")
         info_label.setWordWrap(True)
         info_layout.addWidget(info_label)
         layout.addWidget(info_frame)
 
+        # Device passcode warning
+        passcode_frame = QFrame()
+        passcode_frame.setObjectName("warningFrame")
+        passcode_layout = QVBoxLayout(passcode_frame)
+        passcode_label = QLabel(
+            "Important: the iPhone device passcode is not entered in this app.\n"
+            "After clicking Enable Encryption, watch the iPhone screen. If a\n"
+            "passcode prompt appears, enter the physical device passcode there\n"
+            "(commonly a 6-digit code)."
+        )
+        passcode_label.setObjectName("warningText")
+        passcode_label.setWordWrap(True)
+        passcode_layout.addWidget(passcode_label)
+        layout.addWidget(passcode_frame)
+
         # Password input area
         input_frame = QFrame()
         input_frame.setObjectName("inputFrame")
         input_layout = QVBoxLayout(input_frame)
 
-        input_layout.addWidget(QLabel("Temporary Encryption Password:"))
+        input_layout.addWidget(QLabel("Temporary Backup Encryption Password:"))
 
         pw_row = QHBoxLayout()
         self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("Enter a temporary password")
+        self.password_input.setPlaceholderText("Create a temporary backup password")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.returnPressed.connect(self._on_ok)
         pw_row.addWidget(self.password_input)
@@ -690,7 +717,7 @@ class iOSEncryptionSetupDialog(QDialog):
 
         # Note
         note_label = QLabel(
-            "Remember this password — if the collector crashes during collection,\n"
+            "Remember this temporary backup password. If collection is interrupted,\n"
             "you can use it in iTunes/Finder to manage backup encryption."
         )
         note_label.setObjectName("noteLabel")
@@ -714,7 +741,7 @@ class iOSEncryptionSetupDialog(QDialog):
         self.skip_btn.setMinimumWidth(220)
         button_layout.addWidget(self.skip_btn)
 
-        self.ok_btn = QPushButton("Enable Encryption")
+        self.ok_btn = QPushButton("Continue: Enable Encryption")
         self.ok_btn.setObjectName("unlockButton")
         self.ok_btn.clicked.connect(self._on_ok)
         self.ok_btn.setMinimumWidth(140)
@@ -769,6 +796,17 @@ class iOSEncryptionSetupDialog(QDialog):
             #infoText {{
                 color: {COLORS['text_primary']};
                 font-size: 11px;
+            }}
+            #warningFrame {{
+                background-color: {COLORS['warning_bg']};
+                border: 1px solid {COLORS['warning']};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+            #warningText {{
+                color: {COLORS['warning']};
+                font-size: 11px;
+                font-weight: bold;
             }}
             #inputFrame {{
                 background-color: {COLORS['bg_secondary']};

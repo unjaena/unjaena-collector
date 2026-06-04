@@ -87,6 +87,8 @@ connection or a supported offline extraction bundle.
 - Run with administrator/root privileges when the selected source requires raw
   disk, protected filesystem, or device access.
 - Keep the device connected and powered during mobile or large image workflows.
+- For iOS USB collection, keep the iPhone unlocked and be ready to enter the
+  physical device passcode on the iPhone screen if iOS prompts for it.
 - Verify release checksums before operating in sensitive environments.
 - Do not paste session tokens, credentials, private logs, or customer evidence
   into public issues or discussions.

@@ -1378,7 +1378,10 @@ class CollectorWindow(QMainWindow):
             warnings.append('Android non-root mode is selected. Root-only app databases will be skipped when unavailable.')
 
         if any(d.device_type == DeviceType.IOS_DEVICE for d in selected_devices):
-            warnings.append('iOS USB collection uses backup-based extraction. Keep the device unlocked and trusted until preparation completes.')
+            warnings.append(
+                'iOS USB collection uses backup-based extraction. Keep the device unlocked and trusted until preparation completes. '
+                'If iOS asks for the device passcode, enter the physical device passcode on the iPhone screen.'
+            )
 
         if not selected_artifacts:
             warnings.append('No artifacts are selected.')
@@ -2871,7 +2874,9 @@ class CollectorWindow(QMainWindow):
         if any(d.device_type == DeviceType.IOS_DEVICE for d in selected_devices):
             self._show_ios_status(
                 "Preparing iOS backup...\n"
-                "Connecting to device and checking encryption status."
+                "Connecting to device and checking encryption status.\n"
+                "Keep the iPhone unlocked. If a passcode prompt appears,\n"
+                "enter the device passcode on the iPhone screen."
             )
 
         return True

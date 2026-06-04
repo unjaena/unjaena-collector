@@ -1139,7 +1139,10 @@ class iOSDeviceConnector:
                 user_pw = self._request_encryption_password(str(backup_dir), progress_callback)
                 if user_pw:
                     if progress_callback:
-                        progress_callback("Confirm the iOS passcode prompt on the device to enable encrypted backup...")
+                        progress_callback(
+                            "Look at the iPhone now: enter the device passcode on the iPhone screen "
+                            "to allow encrypted backup."
+                        )
                     if self._change_password_with_timeout(str(backup_dir), "", user_pw):
                         self._encryption_action = 'we_enabled'
                         self._forensic_backup_password = user_pw
@@ -1147,7 +1150,7 @@ class iOSDeviceConnector:
                             self._backup_failed_reason = (
                                 "Failed to verify that iOS encrypted backup was enabled. "
                                 "Reconnect the device, keep it unlocked, confirm Trust, "
-                                "and run collection again."
+                                "enter the iPhone device passcode when prompted, and run collection again."
                             )
                             logger.warning(f"[iOS] {self._backup_failed_reason}")
                             if self._change_password_with_timeout(str(backup_dir), user_pw, ""):
@@ -1167,7 +1170,7 @@ class iOSDeviceConnector:
                         self._backup_failed_reason = (
                             "Failed to enable iOS encrypted backup. "
                             "Reconnect the device, keep it unlocked, confirm Trust, "
-                            "and run collection again."
+                            "enter the iPhone device passcode when prompted, and run collection again."
                         )
                         logger.warning(f"[iOS] {self._backup_failed_reason}")
                         self._encryption_action = None
