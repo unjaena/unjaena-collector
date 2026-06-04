@@ -4319,6 +4319,16 @@ class CollectionWorker(QThread):
                                     error_count += 1
                                     continue
 
+                                collected_path = Path(file_path)
+                                if not collected_path.is_file():
+                                    self.log_message.emit(
+                                        f"[SKIP] [{device_name}] {artifact_type}: "
+                                        f"non-file collection result ignored ({collected_path.name})",
+                                        False,
+                                    )
+                                    error_count += 1
+                                    continue
+
                                 # Add device info to metadata
                                 metadata['device_id'] = device.device_id
                                 metadata['device_name'] = device_name
@@ -4431,6 +4441,12 @@ class CollectionWorker(QThread):
                         for file_path, metadata in collector.collect(artifact_type, **collect_kwargs):
                             if self._cancelled:
                                 break
+                            if not file_path or not Path(file_path).is_file():
+                                self.log_message.emit(
+                                    f"[SKIP] {artifact_type}: non-file collection result ignored",
+                                    False,
+                                )
+                                continue
                             collected_raw_files.append((file_path, artifact_type, metadata))
                             file_count += 1
 
@@ -4495,6 +4511,12 @@ class CollectionWorker(QThread):
                             f"[SKIP] {filename}: file disappeared before "
                             f"preparation (likely quarantined by security software)",
                             True,
+                        )
+                        continue
+                    if not os.path.isfile(file_path):
+                        self.log_message.emit(
+                            f"[SKIP] {filename}: non-file path ignored before upload preparation",
+                            False,
                         )
                         continue
 

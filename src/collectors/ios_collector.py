@@ -41,6 +41,7 @@ import sqlite3
 import hashlib
 import shutil
 import plistlib
+import json
 import threading
 import logging
 from pathlib import Path
@@ -1541,7 +1542,43 @@ class iOSDeviceConnector:
                                 'error': self._backup_failed_reason or 'Failed to prepare encrypted backup access',
                             }
                             return
-                yield path, meta
+                if meta.get('status') == 'error':
+                    yield path, meta
+                    return
+
+                backup_path = Path(meta.get('backup_path', path)) if (path or meta.get('backup_path')) else None
+                if backup_path is not None and backup_path.is_dir():
+                    artifact_dir.mkdir(parents=True, exist_ok=True)
+                    summary_path = artifact_dir / 'ios_device_backup_summary.json'
+                    summary = dict(meta)
+                    summary['backup_path'] = str(backup_path)
+                    summary['backup_directory_uploaded'] = False
+                    summary['note'] = (
+                        'The backup directory is used locally for artifact extraction '
+                        'and is not uploaded as a single file.'
+                    )
+                    with open(summary_path, 'w', encoding='utf-8') as f:
+                        json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
+
+                    sha256 = hashlib.sha256()
+                    with open(summary_path, 'rb') as f:
+                        for chunk in iter(lambda: f.read(65536), b''):
+                            sha256.update(chunk)
+
+                    yield str(summary_path), {
+                        'artifact_type': artifact_type,
+                        'filename': summary_path.name,
+                        'size': summary_path.stat().st_size,
+                        'sha256': sha256.hexdigest(),
+                        'backup_path': str(backup_path),
+                        'backup_directory_uploaded': False,
+                        'collected_at': datetime.utcnow().isoformat(),
+                    }
+                    return
+
+                if path and Path(path).is_file():
+                    yield path, meta
+                    return
 
         elif artifact_type == 'mobile_ios_unified_logs':
             # sysdiagnose requires separate handling (not yet implemented)

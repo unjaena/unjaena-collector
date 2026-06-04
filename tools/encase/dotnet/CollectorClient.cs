@@ -12,6 +12,7 @@ namespace UnjaenaEncaseBridge
         private sealed class CollectionProfileTarget
         {
             public string ArtifactType;
+            public string Kind;
             public string[] Patterns;
             public long MaxBytes;
         }
@@ -218,33 +219,41 @@ namespace UnjaenaEncaseBridge
                 {
                     continue;
                 }
+                if (IsSourceFileTarget(target))
+                {
+                    continue;
+                }
                 if (target.MaxBytes > 0 && fileSize > 0 && fileSize > target.MaxBytes)
                 {
                     continue;
                 }
                 for (int j = 0; j < target.Patterns.Length; j++)
                 {
-                    string pattern = NormalizeMatchValue(target.Patterns[j]);
-                    if (IsBlank(pattern))
+                    string[] patternVariants = ExpandCollectionPatternVariants(target.Patterns[j]);
+                    for (int k = 0; k < patternVariants.Length; k++)
                     {
-                        continue;
-                    }
+                        string pattern = patternVariants[k];
+                        if (IsBlank(pattern))
+                        {
+                            continue;
+                        }
 
-                    bool pathPattern = pattern.IndexOf('/') >= 0 || pattern.IndexOf(':') >= 0;
-                    string candidate = pathPattern ? normalizedPath : normalizedName;
-                    if (WildcardMatch(candidate, pattern))
-                    {
-                        LastSucceeded = true;
-                        LastStatusCode = 200;
-                        LastError = null;
-                        return target.ArtifactType;
-                    }
-                    if (pathPattern && !pattern.StartsWith("*", StringComparison.Ordinal) && WildcardMatch(normalizedPath, "*" + pattern))
-                    {
-                        LastSucceeded = true;
-                        LastStatusCode = 200;
-                        LastError = null;
-                        return target.ArtifactType;
+                        bool pathPattern = pattern.IndexOf('/') >= 0 || pattern.IndexOf(':') >= 0;
+                        string candidate = pathPattern ? normalizedPath : normalizedName;
+                        if (WildcardMatch(candidate, pattern))
+                        {
+                            LastSucceeded = true;
+                            LastStatusCode = 200;
+                            LastError = null;
+                            return target.ArtifactType;
+                        }
+                        if (pathPattern && !pattern.StartsWith("*", StringComparison.Ordinal) && WildcardMatch(normalizedPath, "*" + pattern))
+                        {
+                            LastSucceeded = true;
+                            LastStatusCode = 200;
+                            LastError = null;
+                            return target.ArtifactType;
+                        }
                     }
                 }
             }
@@ -1051,6 +1060,7 @@ namespace UnjaenaEncaseBridge
                 }
                 CollectionProfileTarget target = new CollectionProfileTarget();
                 target.ArtifactType = artifactType;
+                target.Kind = JsonString(item, "kind");
                 target.Patterns = patterns;
                 target.MaxBytes = JsonLong(item, "max_bytes", -1L);
                 targets.Add(target);
@@ -1306,6 +1316,69 @@ namespace UnjaenaEncaseBridge
                 result = result.Replace("//", "/");
             }
             return result;
+        }
+
+        private static bool IsSourceFileTarget(CollectionProfileTarget target)
+        {
+            return target != null
+                && !IsBlank(target.Kind)
+                && string.Compare(NormalizeMatchValue(target.Kind), "source_file", StringComparison.OrdinalIgnoreCase) == 0;
+        }
+
+        private static string[] ExpandCollectionPatternVariants(string pattern)
+        {
+            string normalized = NormalizeMatchValue(pattern);
+            List<string> variants = new List<string>();
+            AddPatternVariant(variants, normalized);
+            AddWindowsEnvPatternVariant(variants, normalized, "%userprofile%", "c:/users/*");
+            AddWindowsEnvPatternVariant(variants, normalized, "%appdata%", "c:/users/*/appdata/roaming");
+            AddWindowsEnvPatternVariant(variants, normalized, "%localappdata%", "c:/users/*/appdata/local");
+            AddWindowsEnvPatternVariant(variants, normalized, "%programdata%", "c:/programdata");
+            AddWindowsEnvPatternVariant(variants, normalized, "%public%", "c:/users/public");
+            AddWindowsEnvPatternVariant(variants, normalized, "%temp%", "c:/users/*/appdata/local/temp");
+            AddWindowsEnvPatternVariant(variants, normalized, "%tmp%", "c:/users/*/appdata/local/temp");
+
+            int count = variants.Count;
+            for (int i = 0; i < count; i++)
+            {
+                AddDirectFilePatternVariant(variants, variants[i]);
+            }
+            return variants.ToArray();
+        }
+
+        private static void AddWindowsEnvPatternVariant(List<string> variants, string pattern, string token, string replacement)
+        {
+            if (IsBlank(pattern) || pattern.IndexOf(token, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return;
+            }
+            AddPatternVariant(variants, pattern.Replace(token, replacement));
+        }
+
+        private static void AddDirectFilePatternVariant(List<string> variants, string pattern)
+        {
+            if (IsBlank(pattern) || pattern.IndexOf("/**/", StringComparison.Ordinal) < 0)
+            {
+                return;
+            }
+            AddPatternVariant(variants, pattern.Replace("/**/", "/"));
+        }
+
+        private static void AddPatternVariant(List<string> variants, string pattern)
+        {
+            string normalized = NormalizeMatchValue(pattern);
+            if (IsBlank(normalized))
+            {
+                return;
+            }
+            for (int i = 0; i < variants.Count; i++)
+            {
+                if (string.Compare(variants[i], normalized, StringComparison.Ordinal) == 0)
+                {
+                    return;
+                }
+            }
+            variants.Add(normalized);
         }
 
         private static string PathLeaf(string path)
