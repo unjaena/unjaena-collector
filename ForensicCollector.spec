@@ -83,7 +83,8 @@ adb_binaries = find_adb_binaries()
 # =============================================================================
 
 # Common hidden imports (all platforms)
-# License: All listed packages are AGPL-3.0 / GPL-3.0 / MIT / BSD / Apache-2.0 compatible
+# License metadata is summarized in LICENSES.md. Recheck exact package versions
+# before release because several mobile and forensic dependencies are GPL/AGPL.
 common_hidden_imports = [
     # --- Android: adb-shell (Apache-2.0) ---
     'adb_shell',
@@ -187,27 +188,27 @@ common_hidden_imports = [
     'construct',           # MIT
     'construct_typed',     # MIT
     'bpylist2',            # MIT
-    'opack2',              # MIT
+    'opack2',              # GPL-3.0-or-later
     'srptools',            # MIT
     'hexdump',             # Public Domain
     'hyperframe',          # MIT
     'ifaddr',              # MIT
     'nest_asyncio',        # BSD-2
-    'parameter_decorators',# MIT
+    'parameter_decorators',# GPL-3.0
     'pycrashreport',       # GPL-3.0
     'pygnuutils',          # GPL-3.0
-    'la_panic',            # MIT
+    'la_panic',            # GPL-3.0-or-later
     'packaging',           # Apache-2.0/BSD
     'tqdm',                # MPL-2.0/MIT
     'ujson',               # BSD
     'wsproto',             # MIT
     'qh3',                 # MIT — QUIC/HTTP3 for iOS remote connections (native PYD)
     'click',               # BSD — CLI framework (pymobiledevice3 dep)
-    'developer_disk_image',# MIT — iOS developer disk image support
-    'ipsw_parser',         # MIT — iOS IPSW firmware parsing
+    'developer_disk_image',# GPL-3.0-or-later - iOS developer disk image support
+    'ipsw_parser',         # GPL-3.0-or-later - iOS IPSW firmware parsing
     'asn1crypto',          # MIT — ASN.1 parsing (dissect.apfs dep)
 
-    # --- iOS backup: biplist (BSD), iphone_backup_decrypt (MIT) ---
+    # --- iOS backup: biplist (BSD), iphone_backup_decrypt (license metadata not declared on PyPI) ---
     'biplist',
     'iphone_backup_decrypt',
     'collectors.ios_backup_decryptor',
@@ -267,13 +268,14 @@ extra_binaries = []
 extra_hiddenimports = []
 
 # Packages that require full collection (all submodules + data + binaries)
-# License compatibility verified: all AGPL-3.0 / GPL-3.0 / MIT / BSD / Apache-2.0
+# License compatibility is reviewed in LICENSES.md. Keep this list aligned with
+# requirements and recheck upstream metadata before each public release.
 collect_packages = [
     'certifi',             # MPL-2.0 — SSL CA certificates (cacert.pem required at runtime)
     'pymobiledevice3',     # GPL-3.0 — iOS device communication (161 submodules + resource files)
     'construct',           # MIT — binary data parsing (dynamic struct definitions)
     'srptools',            # MIT — SRP authentication protocol
-    'opack2',              # MIT — Apple opack serialization format
+    'opack2',              # GPL-3.0-or-later - Apple opack serialization format
     'bpylist2',            # MIT — Apple binary plist parsing
     'pycrashreport',       # GPL-3.0 — iOS crash report parsing
     'pygnuutils',          # GPL-3.0 — GNU utility wrappers
@@ -290,10 +292,10 @@ collect_packages = [
     'dissect.ffs',         # AGPL-3.0 — UFS/FFS filesystem parsing (FreeBSD)
     'dissect.ntfs',        # AGPL-3.0 — NTFS filesystem parsing
     'PyQt6',               # GPL-3.0 — GUI framework (3400+ data files: Qt6 DLLs, plugins, QML)
-    'qh3',                 # MIT — QUIC/HTTP3 (_hazmat.pyd native, pymobiledevice3 remote)
-    'aiohttp',             # Apache-2.0 — async HTTP (4 native .pyd extensions)
-    'charset_normalizer',  # MIT — encoding detection (2 native .pyd extensions, requests dep)
-    'cryptography',        # Apache-2.0/BSD — crypto primitives (_rust.pyd 9MB native)
+    'qh3',                 # BSD - QUIC/HTTP3 (_hazmat.pyd native, pymobiledevice3 remote)
+    'aiohttp',             # Apache-2.0 AND MIT - async HTTP (4 native .pyd extensions)
+    'charset_normalizer',  # MIT - encoding detection (2 native .pyd extensions, requests dep)
+    'cryptography',        # Apache-2.0 OR BSD-3-Clause - crypto primitives (_rust.pyd 9MB native)
 ]
 
 for pkg in collect_packages:

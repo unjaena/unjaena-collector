@@ -1,5 +1,7 @@
 # Forensic Collector - Cross-platform base dependencies
-# License: AGPL-3.0 (due to pymobiledevice3 dependency)
+# Project license: AGPL-3.0-or-later. These dependencies include GPL, AGPL,
+# LGPL, MPL, BSD, MIT, Apache, PSF, and public-domain components. Review
+# LICENSES.md and exact package metadata before each public release.
 #
 # IMPORTANT: Every package referenced in ForensicCollector.spec (hiddenimports
 # + collect_packages) MUST appear here or in a platform file.  If a package is
