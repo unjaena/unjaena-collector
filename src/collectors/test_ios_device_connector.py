@@ -13,6 +13,7 @@ def test_ios_encryption_setup_failure_does_not_fall_back_to_plain_backup(tmp_pat
     connector._lockdown = object()
     connector.set_password_callback(lambda marker: "temporary-password")
 
+    monkeypatch.setenv("UNJAENA_IOS_ALLOW_RUNTIME_ENCRYPTION", "1")
     monkeypatch.setattr(ios_collector, "PYMOBILEDEVICE3_AVAILABLE", True)
     monkeypatch.setattr(ios_collector, "Mobilebackup2Service", lambda lockdown: FakeBackupService())
     monkeypatch.setattr(connector, "_get_device_backup_encryption_state", lambda: False)
@@ -35,6 +36,7 @@ def test_ios_encryption_setup_cancel_does_not_fall_back_to_plain_backup(tmp_path
     connector._lockdown = object()
     connector.set_password_callback(lambda marker: None)
 
+    monkeypatch.setenv("UNJAENA_IOS_ALLOW_RUNTIME_ENCRYPTION", "1")
     monkeypatch.setattr(ios_collector, "PYMOBILEDEVICE3_AVAILABLE", True)
     monkeypatch.setattr(ios_collector, "Mobilebackup2Service", lambda lockdown: FakeBackupService())
     monkeypatch.setattr(connector, "_get_device_backup_encryption_state", lambda: False)
@@ -59,6 +61,7 @@ def test_ios_encryption_state_mismatch_after_enable_fails_without_plain_backup(
     connector._lockdown = object()
     connector.set_password_callback(lambda marker: "temporary-password")
 
+    monkeypatch.setenv("UNJAENA_IOS_ALLOW_RUNTIME_ENCRYPTION", "1")
     monkeypatch.setattr(ios_collector, "PYMOBILEDEVICE3_AVAILABLE", True)
     monkeypatch.setattr(ios_collector, "Mobilebackup2Service", lambda lockdown: FakeBackupService())
     monkeypatch.setattr(connector, "_get_device_backup_encryption_state", lambda: False)
@@ -74,6 +77,26 @@ def test_ios_encryption_state_mismatch_after_enable_fails_without_plain_backup(
     assert "Failed to verify that iOS encrypted backup was enabled" in meta["error"]
     assert connector._encryption_action is None
     assert connector._forensic_backup_password is None
+
+
+def test_ios_encryption_disabled_by_default_requires_pre_enabled_backup(
+    tmp_path: Path,
+    monkeypatch,
+):
+    connector = iOSDeviceConnector(str(tmp_path), udid="IOS-UDID-001")
+    connector._lockdown = object()
+    connector.set_password_callback(lambda marker: "temporary-password")
+
+    monkeypatch.setattr(ios_collector, "PYMOBILEDEVICE3_AVAILABLE", True)
+    monkeypatch.setattr(connector, "_get_device_backup_encryption_state", lambda: False)
+
+    results = list(connector.create_backup(tmp_path))
+
+    assert len(results) == 1
+    path, meta = results[0]
+    assert path == ""
+    assert meta["status"] == "error"
+    assert "does not enable encrypted backup during collection" in meta["error"]
 
 
 def test_ios_encrypted_backup_manifest_mismatch_fails_extraction(

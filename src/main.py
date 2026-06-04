@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-unJaena Collector - Main Entry Point
+Digital Forensics Collector - Main Entry Point
 
 This tool collects forensic artifacts from target systems
 and uploads them to the forensics server for analysis.
@@ -31,27 +31,21 @@ if getattr(sys, 'frozen', False):
 # P1 Security Enhancement: HTTPS/WSS Required
 # =============================================================================
 
-def _get_bundled_config() -> dict:
-    """Read build-time defaults from bundled config.json."""
+def _get_bundled_version() -> str:
+    """Read version from bundled config.json (set by build pipeline)."""
     try:
         if getattr(sys, 'frozen', False):
             base_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
         else:
             src_dir = os.path.dirname(os.path.abspath(__file__))
-            base_dir = os.path.dirname(src_dir)
+            base_dir = os.path.dirname(os.path.dirname(src_dir))
         config_path = os.path.join(base_dir, 'config.json')
         if os.path.exists(config_path):
             with open(config_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
+                return json.load(f).get('version', '0.0.0')
     except Exception:
         pass
-    return {}
-
-
-def _get_bundled_version() -> str:
-    """Read version from bundled config.json (set by build pipeline)."""
-    return str(_get_bundled_config().get('version') or '0.0.0')
+    return '0.0.0'
 
 
 def get_secure_config(cli_server_url: str = None) -> dict:
@@ -68,18 +62,12 @@ def get_secure_config(cli_server_url: str = None) -> dict:
     from core.url_security import normalize_server_urls
     from gui.server_setup_dialog import load_user_config
     user_config = load_user_config() or {}
-    bundled_config = _get_bundled_config()
 
-    dev_mode = (
-        os.environ.get('COLLECTOR_DEV_MODE', '').lower() == 'true'
-        or bool(bundled_config.get('dev_mode', False))
-    )
+    dev_mode = os.environ.get('COLLECTOR_DEV_MODE', 'false').lower() == 'true'
 
-    # Server URL: CLI arg > user config > build-time default.
-    # Production releases should open directly against app.unjaena.com,
-    # while development builds can still carry localhost defaults.
-    server_url = cli_server_url or user_config.get('server_url') or bundled_config.get('server_url', '')
-    ws_url = None if cli_server_url else (user_config.get('ws_url') or bundled_config.get('ws_url', ''))
+    # Server URL: CLI arg > user config > empty (triggers wizard in GUI)
+    server_url = cli_server_url or user_config.get('server_url', '')
+    ws_url = None if cli_server_url else user_config.get('ws_url', '')
 
     # Remote endpoints must use HTTPS/WSS. Loopback HTTP is allowed for local testing.
     if server_url:
@@ -89,7 +77,7 @@ def get_secure_config(cli_server_url: str = None) -> dict:
         'server_url': server_url,
         'ws_url': ws_url,
         'version': _get_bundled_version(),
-        'app_name': str(bundled_config.get('app_name') or 'unJaena Collector'),
+        'app_name': 'Digital Forensics Collector',
         'dev_mode': dev_mode,
         'is_release': getattr(sys, 'frozen', False),
     }
@@ -103,7 +91,7 @@ def get_secure_config(cli_server_url: str = None) -> dict:
 def _parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="unJaena Collector",
+        description="Digital Forensics Collector",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -249,8 +237,32 @@ def main_headless(args, config: dict):
     sys.exit(run_headless(args, config))
 
 
+def main_ios_change_password_helper():
+    """Internal helper process for iOS backup password changes.
+
+    The GUI process uses this helper so pymobiledevice3 backup encryption
+    setup cannot terminate the main collector process. Payload is read from
+    stdin to avoid exposing passwords in command-line arguments.
+    """
+    from pymobiledevice3.lockdown import create_using_usbmux
+    from pymobiledevice3.services.mobilebackup2 import Mobilebackup2Service
+
+    payload = json.load(sys.stdin)
+    lockdown = create_using_usbmux(serial=payload["udid"])
+    service = Mobilebackup2Service(lockdown=lockdown)
+    service.change_password(
+        backup_directory=payload["backup_dir"],
+        old=payload.get("old", ""),
+        new=payload.get("new", ""),
+    )
+
+
 def main():
     """Main entry point that dispatches to GUI or headless mode."""
+    if "--ios-change-password-helper" in sys.argv:
+        main_ios_change_password_helper()
+        return
+
     args = _parse_args()
 
     if args.headless:

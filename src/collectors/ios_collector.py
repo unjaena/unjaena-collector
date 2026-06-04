@@ -42,6 +42,8 @@ import hashlib
 import shutil
 import plistlib
 import json
+import subprocess
+import sys
 import threading
 import logging
 from pathlib import Path
@@ -599,9 +601,10 @@ class iOSDeviceConnector:
         self._password_callback = None         # GUI callback: callback(error_msg) -> password|None
         self._encryption_skip_requested = False
 
-        # Timeout for all change_password() calls (seconds). iOS can take
-        # longer than a normal service call while restarting backup services.
-        self._CHANGE_PASSWORD_TIMEOUT = 180
+        # Stall warning interval for change_password() calls (seconds). The
+        # operation must not return while the underlying request is still
+        # running, because iOS may still change the backup encryption state.
+        self._CHANGE_PASSWORD_TIMEOUT = 600
 
     def _clear_password(self):
         """Zero-out and release the forensic backup password from memory.
@@ -715,54 +718,112 @@ class iOSDeviceConnector:
 
     def _change_password_with_timeout(self, backup_dir: str, old_pw: str, new_pw: str) -> bool:
         """
-        Run change_password() in a thread with timeout.
+        Run change_password() in an isolated helper process.
 
-        Returns True on success. On timeout, reconnects lockdown and returns False.
+        Enabling encrypted backup can terminate the pymobiledevice3 caller on
+        some Windows/iOS combinations after the device-side passcode approval.
+        Keeping this operation in a helper process lets the main collector
+        reconnect, verify the resulting state, and continue or restore safely.
         """
-        result_box = {'success': False, 'error': None}
+        import time
+        if getattr(sys, 'frozen', False):
+            helper_cmd = [sys.executable, "--ios-change-password-helper"]
+        else:
+            helper_cmd = [
+                sys.executable,
+                str(Path(__file__).resolve().parents[1] / "main.py"),
+                "--ios-change-password-helper",
+            ]
 
-        def _do_change():
-            try:
-                svc = Mobilebackup2Service(lockdown=self._lockdown)
-                svc.change_password(
-                    backup_directory=backup_dir,
-                    old=old_pw,
-                    new=new_pw,
-                )
-                result_box['success'] = True
-            except Exception as e:
-                result_box['error'] = e
+        payload = json.dumps(
+            {
+                "udid": self.udid,
+                "backup_dir": str(backup_dir),
+                "old": old_pw or "",
+                "new": new_pw or "",
+            }
+        )
 
-        t = threading.Thread(target=_do_change, daemon=True)
-        t.start()
-        t.join(timeout=self._CHANGE_PASSWORD_TIMEOUT)
-
-        if t.is_alive():
-            logger.warning("[iOS] change_password() timed out — reconnecting lockdown")
-            try:
-                self._lockdown = create_using_usbmux(serial=self.udid)
-            except Exception:
-                pass
-            return False
-
-        if result_box['success']:
-            # Reconnect lockdown — change_password() invalidates the session.
-            # iOS backup daemon needs time to restart after encryption state change.
-            try:
-                import time
-                time.sleep(5)
-                self._lockdown = create_using_usbmux(serial=self.udid)
-                logger.info("[iOS] Lockdown reconnected after change_password()")
-            except Exception as e:
-                logger.warning(f"[iOS] Lockdown reconnect failed after change_password(): {e}")
-            return True
-
-        logger.info(f"[iOS] change_password() failed: {result_box['error']}")
-        # Reconnect lockdown after failed change_password (session may be stale)
         try:
-            self._lockdown = create_using_usbmux(serial=self.udid)
+            if self._lockdown and hasattr(self._lockdown, "close"):
+                self._lockdown.close()
         except Exception:
             pass
+        self._lockdown = None
+
+        creationflags = 0
+        if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+            creationflags = subprocess.CREATE_NO_WINDOW
+
+        try:
+            proc = subprocess.Popen(
+                helper_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+            )
+            assert proc.stdin is not None
+            proc.stdin.write(payload)
+            proc.stdin.close()
+        except Exception as e:
+            logger.warning(f"[iOS] change_password helper failed to start: {e}")
+            return False
+
+        next_warning = time.monotonic() + self._CHANGE_PASSWORD_TIMEOUT
+        while proc.poll() is None:
+            time.sleep(5)
+            if proc.poll() is None and time.monotonic() >= next_warning:
+                logger.warning(
+                    "[iOS] change_password() is still waiting for iPhone "
+                    "passcode approval / backup service restart; do not "
+                    "disconnect the device"
+                )
+                next_warning = time.monotonic() + 60
+
+        stdout = ""
+        stderr = ""
+        try:
+            if proc.stdout:
+                stdout = proc.stdout.read()
+            if proc.stderr:
+                stderr = proc.stderr.read()
+        except Exception:
+            pass
+
+        return_code = proc.returncode
+        if stdout.strip():
+            logger.debug(f"[iOS] change_password helper stdout: {stdout.strip()}")
+        if stderr.strip():
+            logger.info(f"[iOS] change_password helper stderr: {stderr.strip()}")
+
+        try:
+            time.sleep(5)
+            self._lockdown = create_using_usbmux(serial=self.udid)
+            logger.info("[iOS] Lockdown reconnected after change_password()")
+        except Exception as e:
+            logger.warning(f"[iOS] Lockdown reconnect failed after change_password(): {e}")
+
+        desired_state = None
+        if old_pw != new_pw:
+            desired_state = bool(new_pw)
+
+        if return_code == 0:
+            return True
+
+        if desired_state is not None:
+            actual_state = self._get_device_backup_encryption_state()
+            if actual_state == desired_state:
+                logger.warning(
+                    "[iOS] change_password helper exited abnormally, "
+                    f"but device backup encryption state is now {actual_state}"
+                )
+                return True
+
+        logger.info(f"[iOS] change_password helper failed with exit code {return_code}")
         return False
 
     def _get_device_backup_encryption_state(self) -> Optional[bool]:
@@ -1119,8 +1180,23 @@ class iOSDeviceConnector:
             if self._forensic_backup_password:
                 logger.info("[iOS] Reusing cached backup password (already verified)")
             elif not will_encrypt:
-                # Encryption OFF -> ask user for a temporary password to enable it.
-                # Encrypted backups contain more forensic data.
+                if os.environ.get("UNJAENA_IOS_ALLOW_RUNTIME_ENCRYPTION", "").lower() not in {"1", "true", "yes"}:
+                    self._backup_failed_reason = (
+                        "iOS encrypted backup is not enabled on this device. "
+                        "For production stability, the collector does not enable "
+                        "encrypted backup during collection. Enable encrypted "
+                        "backup in Apple Devices, Finder, or iTunes first, then "
+                        "run collection again with the backup password."
+                    )
+                    yield '', {
+                        'artifact_type': 'mobile_ios_device_backup',
+                        'status': 'error',
+                        'error': self._backup_failed_reason,
+                    }
+                    return
+
+                # Encryption OFF → ask user for a temporary password to enable it.
+                # Encrypted backups contain more forensic data (HealthKit, WiFi, etc.)
                 if not self._password_callback:
                     self._backup_failed_reason = (
                         "iOS encrypted backup setup requires user confirmation. "
@@ -1140,17 +1216,18 @@ class iOSDeviceConnector:
                 if user_pw:
                     if progress_callback:
                         progress_callback(
-                            "Look at the iPhone now: enter the device passcode on the iPhone screen "
-                            "to allow encrypted backup."
+                            "Confirm the iOS passcode prompt on the device to enable encrypted backup..."
                         )
                     if self._change_password_with_timeout(str(backup_dir), "", user_pw):
                         self._encryption_action = 'we_enabled'
                         self._forensic_backup_password = user_pw
+                        if progress_callback:
+                            progress_callback("Encrypted backup setting accepted; verifying device state...")
                         if not self._verify_device_backup_encryption_state(True, progress_callback):
                             self._backup_failed_reason = (
                                 "Failed to verify that iOS encrypted backup was enabled. "
                                 "Reconnect the device, keep it unlocked, confirm Trust, "
-                                "enter the iPhone device passcode when prompted, and run collection again."
+                                "and run collection again."
                             )
                             logger.warning(f"[iOS] {self._backup_failed_reason}")
                             if self._change_password_with_timeout(str(backup_dir), user_pw, ""):
@@ -1166,11 +1243,13 @@ class iOSDeviceConnector:
                             }
                             return
                         logger.info("[iOS] Backup encryption enabled with user password")
+                        if progress_callback:
+                            progress_callback("Encrypted backup setting verified")
                     else:
                         self._backup_failed_reason = (
                             "Failed to enable iOS encrypted backup. "
                             "Reconnect the device, keep it unlocked, confirm Trust, "
-                            "enter the iPhone device passcode when prompted, and run collection again."
+                            "and run collection again."
                         )
                         logger.warning(f"[iOS] {self._backup_failed_reason}")
                         self._encryption_action = None
@@ -1182,6 +1261,7 @@ class iOSDeviceConnector:
                         }
                         return
                 else:
+                    # User skipped → proceed unencrypted
                     if self._encryption_skip_requested:
                         logger.info("[iOS] User skipped encryption, proceeding unencrypted")
                         self._encryption_action = None
@@ -1230,8 +1310,12 @@ class iOSDeviceConnector:
                         self._lockdown = create_using_usbmux(serial=self.udid)
 
                     logger.info(f"[iOS] Creating Mobilebackup2Service (attempt {attempt})...")
+                    if progress_callback:
+                        progress_callback(f"Starting iOS backup service (attempt {attempt})...")
                     backup_service = Mobilebackup2Service(lockdown=self._lockdown)
                     logger.info(f"[iOS] Starting backup: full=True, dir={backup_dir}, encrypted={bool(self._forensic_backup_password)}")
+                    if progress_callback:
+                        progress_callback("Starting encrypted iOS backup transfer...")
 
                     def backup_progress(percentage: float):
                         if progress_callback:
@@ -1329,28 +1413,16 @@ class iOSDeviceConnector:
             logger.warning("[iOS] No password callback set — cannot request user password")
             return None
 
-        max_retries = 3
-        error_msg = None
-        for attempt in range(max_retries):
-            password = self._password_callback(error_msg)
-            if not password:
-                # User cancelled or clicked "I don't know"
-                return None
+        password = self._password_callback(None)
+        if not password:
+            return None
 
-            if progress_callback:
-                progress_callback("Verifying entered password...")
-
-            if self._change_password_with_timeout(backup_dir, password, password):
-                logger.info("[iOS] User password verified successfully")
-                return password
-
-            remaining = max_retries - attempt - 1
-            if remaining > 0:
-                error_msg = f"Incorrect password. {remaining} attempt(s) remaining."
-                logger.info(f"[iOS] User password rejected, {remaining} retries left")
-            else:
-                logger.warning("[iOS] User password rejected after all attempts")
-                return None
+        if progress_callback:
+            progress_callback(
+                "Backup password received; it will be verified after backup creation."
+            )
+        logger.info("[iOS] Existing backup password received for post-backup verification")
+        return password
 
     def _request_encryption_password(
         self,
@@ -1490,6 +1562,9 @@ class iOSDeviceConnector:
                     encrypted_backup=self._encrypted_backup_obj
                 )
                 collector.select_backup(str(self._backup_path))
+                manifest_count = getattr(collector.parser, 'manifest_file_count', None)
+                if progress_callback and manifest_count is not None:
+                    progress_callback(f"iOS backup Manifest.db ready: {manifest_count} files indexed")
                 self._backup_collector = collector  # Only set on success
             except Exception as e:
                 # On failure, do not set _backup_collector so next artifact can retry
@@ -1538,7 +1613,9 @@ class iOSDeviceConnector:
                     self._backup_path = Path(meta['backup_path'])
                     # Initialize decryptor for encrypted backups
                     if self._forensic_backup_password:
-                        if not self._init_encrypted_decryptor(meta['backup_path'], progress_callback):
+                        if not self._init_encrypted_decryptor(
+                            meta['backup_path'], progress_callback
+                        ):
                             yield '', {
                                 'artifact_type': artifact_type,
                                 'status': 'error',
@@ -1685,7 +1762,7 @@ class iOSDeviceConnector:
             if progress_callback:
                 progress_callback("Using existing backup...")
 
-            # Reused backup may be encrypted; set up decryptor.
+            # Reused backup may be encrypted — set up decryptor
             is_encrypted = self._read_backup_manifest_encrypted(backup_dir)
 
             if is_encrypted and not self._encrypted_backup_obj:

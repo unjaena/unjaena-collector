@@ -2966,11 +2966,21 @@ class CollectorWindow(QMainWindow):
         has_password = result.success and result.password
         result.clear_sensitive()
         if has_password:
-            self._show_ios_status(
-                "Verifying backup password...\n"
-                "This may take a few seconds.",
-                title="Verifying Password"
-            )
+            if error_msg == "ENCRYPTION_SETUP":
+                self._show_ios_status(
+                    "Check the iPhone screen now.\n"
+                    "Unlock the iPhone and enter the device passcode on the iPhone "
+                    "when prompted to enable encrypted backup.\n"
+                    "Do not enter the iPhone passcode in this collector window.",
+                    title="iPhone Passcode Required"
+                )
+            else:
+                self._show_ios_status(
+                    "Verifying backup password...\n"
+                    "This may take several minutes. Keep the iPhone unlocked "
+                    "and do not disconnect it.",
+                    title="Verifying Password"
+                )
 
     def _on_unlock_requested(self, error_msg: str):
         """
@@ -4204,6 +4214,10 @@ class CollectionWorker(QThread):
             self.log_message.emit("Starting artifact collection...", False)
             collected_raw_files = []  # (file_path, artifact_type, metadata)
             _ios_collectors = []  # Track iOS collectors for cleanup
+            ios_backup_target_count = 0
+            ios_backup_file_count = 0
+            ios_backup_no_match_count = 0
+            ios_backup_error_count = 0
 
             # If devices are selected, collect per device
             if self.selected_devices:
@@ -4271,11 +4285,27 @@ class CollectionWorker(QThread):
                             remaining
                         )
 
+                        is_ios_backup_artifact = False
                         try:
                             # Chunk streaming: process 100 at a time to prevent GUI freeze
                             CHUNK_SIZE = 100
                             file_count = 0
                             error_count = 0
+                            artifact_info = ARTIFACT_TYPES.get(artifact_type, {})
+                            is_ios_backup_artifact = (
+                                artifact_info.get('category') == 'ios'
+                                and artifact_type not in {
+                                    'mobile_ios_device_info',
+                                    'mobile_ios_syslog',
+                                    'mobile_ios_crash_logs',
+                                    'mobile_ios_installed_apps',
+                                    'mobile_ios_device_backup',
+                                    'mobile_ios_backup',
+                                    'mobile_ios_unified_logs',
+                                }
+                            )
+                            if is_ios_backup_artifact:
+                                ios_backup_target_count += 1
 
                             # iOS backup progress callback
                             def ios_progress_callback(msg: str):
@@ -4352,8 +4382,14 @@ class CollectionWorker(QThread):
 
                             if file_count == 0 and error_count == 0:
                                 self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: no matching files found", False)
+                                if is_ios_backup_artifact:
+                                    ios_backup_no_match_count += 1
                             elif file_count > 0:
                                 self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)}: {file_count} files collected", False)
+                                if is_ios_backup_artifact:
+                                    ios_backup_file_count += file_count
+                            elif is_ios_backup_artifact:
+                                ios_backup_error_count += error_count
 
                         except Exception as e:
                             import logging
@@ -4365,6 +4401,8 @@ class CollectionWorker(QThread):
                             else:
                                 self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)} failed: {e}", True)
                                 logging.debug(f"Collection error for {artifact_type} on {device_name}: {e}")
+                                if is_ios_backup_artifact:
+                                    ios_backup_error_count += 1
 
                     # Release scan cache before closing collector
                     if hasattr(collector, 'release_scan_cache'):
@@ -4480,6 +4518,25 @@ class CollectionWorker(QThread):
             if self._cancelled:
                 self.finished.emit(False, "Collection cancelled")
                 return
+
+            ios_quality_error = ""
+            if ios_backup_target_count > 0 and ios_backup_file_count == 0:
+                ios_quality_error = (
+                    "iOS backup extraction produced 0 app/artifact files "
+                    f"from {ios_backup_target_count} selected backup target(s). "
+                    "Only device metadata may have been collected. "
+                    "Check manifest_diagnostic.txt and verify that the encrypted "
+                    "backup Manifest.db was decrypted and that target apps have "
+                    "backup data on this device."
+                )
+                self.log_message.emit(f"[WARNING] {ios_quality_error}", True)
+            elif ios_backup_no_match_count > 0:
+                self.log_message.emit(
+                    "[WARNING] "
+                    f"{ios_backup_no_match_count} iOS backup target(s) had no matching files; "
+                    "check manifest_diagnostic.txt for APP_MISSING or PATH_ERR details.",
+                    True,
+                )
 
             # ========================================
             # STAGE 2: Prepare metadata (30%)
@@ -4708,8 +4765,10 @@ class CollectionWorker(QThread):
                 self.finished.emit(False, f"Collection cancelled: {success_count}/{total_upload} files uploaded before stop")
                 return
 
+            completed_ok = success_count == total_upload and not ios_quality_error
+
             # === Send upload completion signal (pipeline state transition trigger) ===
-            if success_count > 0:
+            if success_count > 0 and not ios_quality_error:
                 try:
                     complete_path = f"/api/v1/collector/collection/end/{self.session_id}"
                     complete_url = f"{self.server_url}{complete_path}"
@@ -4736,10 +4795,18 @@ class CollectionWorker(QThread):
                 except Exception as e:
                     self.log_message.emit(f"⚠ Session completion signal error: {e}", True)
 
-            self.progress_updated.emit(3, 100, 100, "Complete!", "")
+            self.progress_updated.emit(3, 100, 100, "Complete!" if completed_ok else "Completed with warnings", "")
+            final_message = (
+                f"Collection complete: {success_count}/{total_upload} files uploaded "
+                f"(elapsed: {elapsed_str})"
+            )
+            if ios_quality_error:
+                final_message = f"{final_message}; {ios_quality_error}"
+            elif success_count != total_upload:
+                final_message = f"{final_message}; one or more uploads failed"
             self.finished.emit(
-                True,
-                f"Collection complete: {success_count}/{total_upload} files uploaded (elapsed: {elapsed_str})"
+                completed_ok,
+                final_message
             )
 
         except Exception as e:

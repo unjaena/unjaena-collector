@@ -36,6 +36,30 @@ except ImportError:
     pass
 
 
+def _like_pattern_from_glob(pattern: str) -> str:
+    """Convert a simple backup glob pattern to an escaped SQLite LIKE pattern."""
+    out = []
+    for ch in str(pattern or ""):
+        if ch == "*":
+            out.append("%")
+        elif ch == "?":
+            out.append("_")
+        elif ch in ("\\", "%", "_"):
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _manifest_file_count(cursor) -> int:
+    """Return the number of file records in a decrypted iOS Manifest.db."""
+    cursor.execute("SELECT COUNT(*) FROM Files")
+    row = cursor.fetchone()
+    if not row:
+        return 0
+    return int(row[0] or 0)
+
+
 # ============================================================================
 # Global temp directory cleanup (atexit fallback)
 # ============================================================================
@@ -85,9 +109,14 @@ class iOSEncryptedBackupParser:
         self.backup = encrypted_backup
         self._temp_dir = None
         self._manifest_db_path = None
-        self._prepare_manifest()
+        self.manifest_file_count = 0
+        self._manifest_error = ""
+        if not self._prepare_manifest():
+            raise RuntimeError(
+                self._manifest_error or "Unable to open decrypted iOS Manifest.db"
+            )
 
-    def _prepare_manifest(self):
+    def _prepare_manifest(self) -> bool:
         """Extract decrypted Manifest.db using public API (save_manifest_file)."""
         try:
             self._temp_dir = Path(tempfile.mkdtemp(prefix='ios_edecrypt_'))
@@ -98,15 +127,42 @@ class iOSEncryptedBackupParser:
             # Use public API: save_manifest_file() (iphone_backup_decrypt >=0.5)
             if hasattr(self.backup, 'save_manifest_file'):
                 self.backup.save_manifest_file(str(manifest_dest))
+            else:
+                self._manifest_error = (
+                    "Encrypted backup library cannot export Manifest.db"
+                )
+                logger.warning(f"[iOS Decrypt] {self._manifest_error}")
+                return False
 
             if manifest_dest.exists() and manifest_dest.stat().st_size > 0:
+                conn = sqlite3.connect(str(manifest_dest))
+                try:
+                    cursor = conn.cursor()
+                    self.manifest_file_count = _manifest_file_count(cursor)
+                finally:
+                    conn.close()
+
+                if self.manifest_file_count <= 0:
+                    self._manifest_error = "Decrypted Manifest.db contains no files"
+                    logger.warning(f"[iOS Decrypt] {self._manifest_error}")
+                    return False
+
                 self._manifest_db_path = manifest_dest
-                logger.debug(f"[iOS Decrypt] Manifest.db extracted ({manifest_dest.stat().st_size} bytes)")
+                logger.debug(
+                    "[iOS Decrypt] Manifest.db extracted "
+                    f"({manifest_dest.stat().st_size} bytes, "
+                    f"{self.manifest_file_count} files)"
+                )
+                return True
             else:
-                logger.warning("[iOS Decrypt] save_manifest_file() produced no output")
+                self._manifest_error = "Encrypted backup Manifest.db export produced no output"
+                logger.warning(f"[iOS Decrypt] {self._manifest_error}")
+                return False
 
         except Exception as e:
-            logger.warning(f"[iOS Decrypt] Manifest extraction failed: {e}")
+            self._manifest_error = f"Encrypted backup Manifest.db extraction failed: {e}"
+            logger.warning(f"[iOS Decrypt] {self._manifest_error}")
+            return False
 
     def extract_file(self, domain: str, relative_path: str, output_path: Path) -> bool:
         """
@@ -169,19 +225,17 @@ class iOSEncryptedBackupParser:
             params = []
 
             if domain_filter:
-                if '*' in domain_filter:
+                if '*' in domain_filter or '?' in domain_filter:
                     query += " AND domain LIKE ? ESCAPE '\\'"
-                    escaped = domain_filter.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-                    params.append(escaped.replace('*', '%'))
+                    params.append(_like_pattern_from_glob(domain_filter))
                 else:
                     query += ' AND domain = ?'
                     params.append(domain_filter)
 
             if path_pattern:
-                if '*' in path_pattern:
+                if '*' in path_pattern or '?' in path_pattern:
                     query += " AND relativePath LIKE ? ESCAPE '\\'"
-                    escaped = path_pattern.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-                    params.append(escaped.replace('*', '%'))
+                    params.append(_like_pattern_from_glob(path_pattern))
                 else:
                     query += ' AND relativePath = ?'
                     params.append(path_pattern)
@@ -282,6 +336,21 @@ def create_encrypted_backup(backup_path: str, password: str) -> tuple:
             backup_directory=str(backup_path),
             passphrase=password
         )
+        try:
+            with backup.manifest_db_cursor() as cursor:
+                count = _manifest_file_count(cursor)
+            if count <= 0:
+                return None, (
+                    "Unable to decrypt iOS backup manifest. "
+                    "Verify the backup password, keep the iPhone unlocked, "
+                    "and run collection again."
+                )
+        except Exception:
+            return None, (
+                "Unable to decrypt iOS backup manifest. "
+                "Verify the backup password, keep the iPhone unlocked, "
+                "and run collection again."
+            )
         return backup, ""
 
     except Exception as e:
