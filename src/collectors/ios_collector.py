@@ -592,7 +592,7 @@ class iOSDeviceConnector:
         self._backup_path: Optional[Path] = None
         self._backup_collector: Optional['iOSCollector'] = None
 
-        # Encryption state — simplified to 4 variables
+        # Encryption state simplified to 4 variables
         # _encryption_action: None=not yet decided, 'we_enabled'=we turned it ON, 'was_already_on'
         self._encryption_action = None
         self._forensic_backup_password = None  # Password for decryption (forensic or user-provided)
@@ -617,11 +617,11 @@ class iOSDeviceConnector:
         pw = self._forensic_backup_password
         if pw:
             if isinstance(pw, bytearray):
-                # bytearray is mutable — can be zeroed in-place
+                # bytearray is mutable and can be zeroed in-place
                 for i in range(len(pw)):
                     pw[i] = 0
             elif isinstance(pw, str):
-                # str is immutable — best effort: create bytearray copy, zero it,
+                # str is immutable; best effort: create bytearray copy, zero it,
                 # and ensure the str reference is dropped for GC
                 try:
                     pw_bytes = bytearray(pw.encode('utf-8'))
@@ -1115,10 +1115,11 @@ class iOSDeviceConnector:
         """
         Create new iOS backup from device.
 
-        Three scenarios:
-          A. will_encrypt=False → auto-enable forensic encryption → backup → close() restores
-          B. will_encrypt=True + forensic_pw matches → our previous encryption → backup
-          C. will_encrypt=True + forensic_pw fails → user password via callback → backup
+        Production flow:
+          A. will_encrypt=False -> ask for a temporary password, enable encrypted
+             backup, create the backup, then restore backup encryption to OFF in close().
+          B. will_encrypt=True -> request the existing backup password, create the
+             backup, then decrypt Manifest.db.
         """
         if not PYMOBILEDEVICE3_AVAILABLE:
             yield '', {
@@ -1172,7 +1173,7 @@ class iOSDeviceConnector:
             logger.info(f"[iOS] Backup encryption state: will_encrypt={will_encrypt}")
 
             # =============================================================
-            # Encryption handling — user provides password for all scenarios.
+            # Encryption handling: user provides password for all scenarios.
             # No auto-generated keys: user always knows the password,
             # so they can recover if the collector crashes mid-collection.
             # =============================================================
@@ -1180,24 +1181,7 @@ class iOSDeviceConnector:
             if self._forensic_backup_password:
                 logger.info("[iOS] Reusing cached backup password (already verified)")
             elif not will_encrypt:
-                if os.environ.get("UNJAENA_IOS_ALLOW_RUNTIME_ENCRYPTION", "").lower() not in {"1", "true", "yes"}:
-                    self._backup_failed_reason = (
-                        "iOS encrypted backup is not enabled on this device. "
-                        "For production stability, the collector does not enable "
-                        "encrypted backup during collection. Enable encrypted "
-                        "backup in Apple Devices, Finder, or iTunes first, then "
-                        "run collection again with the backup password."
-                    )
-                    if progress_callback:
-                        progress_callback(self._backup_failed_reason)
-                    yield '', {
-                        'artifact_type': 'mobile_ios_device_backup',
-                        'status': 'error',
-                        'error': self._backup_failed_reason,
-                    }
-                    return
-
-                # Encryption OFF → ask user for a temporary password to enable it.
+                # Encryption OFF: ask user for a temporary password to enable it.
                 # Encrypted backups contain more forensic data (HealthKit, WiFi, etc.)
                 if not self._password_callback:
                     self._backup_failed_reason = (
@@ -1263,7 +1247,7 @@ class iOSDeviceConnector:
                         }
                         return
                 else:
-                    # User skipped → proceed unencrypted
+                    # User skipped: proceed unencrypted
                     if self._encryption_skip_requested:
                         logger.info("[iOS] User skipped encryption, proceeding unencrypted")
                         self._encryption_action = None
@@ -1277,15 +1261,15 @@ class iOSDeviceConnector:
                         }
                         return
             else:
-                # Encryption already ON → ask user for existing password
-                logger.info("[iOS] Encryption already ON — requesting existing password")
+                # Encryption already ON: ask user for existing password
+                logger.info("[iOS] Encryption already ON; requesting existing password")
                 user_pw = self._request_user_password(str(backup_dir), progress_callback)
                 if user_pw:
                     self._encryption_action = 'was_already_on'
                     self._forensic_backup_password = user_pw
                 else:
                     self._backup_failed_reason = (
-                        "Backup password unknown — cannot proceed.\n"
+                        "Backup password unknown; cannot proceed.\n"
                         "Reset via: Settings > General > Transfer or Reset iPhone "
                         "> Reset > Reset All Settings (data preserved)"
                     )
@@ -1305,7 +1289,7 @@ class iOSDeviceConnector:
             for attempt in range(1, max_attempts + 1):
                 try:
                     if attempt > 1:
-                        logger.info(f"[iOS] Backup retry {attempt}/{max_attempts} — reconnecting lockdown...")
+                        logger.info(f"[iOS] Backup retry {attempt}/{max_attempts}; reconnecting lockdown...")
                         if progress_callback:
                             progress_callback(f"Retrying backup (attempt {attempt})...")
                         time.sleep(3)
@@ -1317,7 +1301,8 @@ class iOSDeviceConnector:
                     backup_service = Mobilebackup2Service(lockdown=self._lockdown)
                     logger.info(f"[iOS] Starting backup: full=True, dir={backup_dir}, encrypted={bool(self._forensic_backup_password)}")
                     if progress_callback:
-                        progress_callback("Starting encrypted iOS backup transfer...")
+                        transfer_mode = "encrypted" if self._forensic_backup_password else "unencrypted"
+                        progress_callback(f"Starting {transfer_mode} iOS backup transfer...")
 
                     def backup_progress(percentage: float):
                         if progress_callback:
@@ -1389,7 +1374,7 @@ class iOSDeviceConnector:
             # Restore encryption if we enabled it
             if self._encryption_action == 'we_enabled' and self._forensic_backup_password and self._lockdown:
                 if self._change_password_with_timeout(str(backup_dir), self._forensic_backup_password, ""):
-                    logger.info("[iOS] Backup failed — encryption restored to OFF")
+                    logger.info("[iOS] Backup failed; encryption restored to OFF")
                 else:
                     logger.warning("[iOS] Backup failed AND encryption restore failed")
                 self._encryption_action = None
@@ -1412,7 +1397,7 @@ class iOSDeviceConnector:
         Returns verified password or None if cancelled.
         """
         if not self._password_callback:
-            logger.warning("[iOS] No password callback set — cannot request user password")
+            logger.warning("[iOS] No password callback set; cannot request user password")
             return None
 
         password = self._password_callback(None)
@@ -1441,7 +1426,7 @@ class iOSDeviceConnector:
         Returns password or None. Skip and cancel are tracked separately.
         """
         if not self._password_callback:
-            logger.warning("[iOS] No password callback set — cannot request encryption password")
+            logger.warning("[iOS] No password callback set; cannot request encryption password")
             return None
 
         # Use password callback with a message indicating this is for new encryption
@@ -1685,7 +1670,7 @@ class iOSDeviceConnector:
         """
         Initialize EncryptedBackup decryptor for encrypted iOS backups.
 
-        Password must already be confirmed in create_backup() — this method
+        Password must already be confirmed in create_backup(); this method
         simply runs key derivation key derivation with the known password.
 
         Returns True if decryptor was initialized successfully.
@@ -1764,7 +1749,7 @@ class iOSDeviceConnector:
             if progress_callback:
                 progress_callback("Using existing backup...")
 
-            # Reused backup may be encrypted — set up decryptor
+            # Reused backup may be encrypted; set up decryptor
             is_encrypted = self._read_backup_manifest_encrypted(backup_dir)
 
             if is_encrypted and not self._encrypted_backup_obj:
@@ -1818,7 +1803,7 @@ class iOSDeviceConnector:
                 if not self._verify_device_backup_encryption_state(False):
                     logger.warning("[iOS] Backup encryption restore could not be verified")
             else:
-                logger.warning("[iOS] Encryption restore failed — device may still have forensic encryption")
+                logger.warning("[iOS] Encryption restore failed; device may still have forensic encryption")
                 logger.warning("[iOS] To manually restore: use iTunes/Finder to change backup password")
 
         # Clean up EncryptedBackup resources
@@ -1886,7 +1871,7 @@ class iOSCollector:
 
         # Use encrypted parser if EncryptedBackup provided.
         # Also use it if backup is encrypted (Manifest.plist IsEncrypted=True).
-        # The _encrypted_backup check is the primary signal — the EncryptedBackup
+        # The _encrypted_backup check is the primary signal; the EncryptedBackup
         # object already holds the derived key and can decrypt Manifest.db.
         if self._encrypted_backup:
             from collectors.ios_backup_decryptor import iOSEncryptedBackupParser
@@ -2271,7 +2256,7 @@ class iOSCollector:
             lines.append(f"Encrypted: {self.backup_info.encrypted}")
         lines.append("=" * 80)
 
-        # ── Section 1: Domain summary ──
+        # Section 1: Domain summary
         domain_stats: Dict[str, int] = {}
         total_files = 0
         try:
@@ -2283,18 +2268,18 @@ class iOSCollector:
             lines.append(f"\n[ERROR] Failed to list manifest files: {e}")
             # Still try to write what we have
 
-        lines.append(f"\n{'─' * 80}")
+        lines.append(f"\n{'-' * 80}")
         lines.append(f"SECTION 1: Backup Domain Summary ({total_files} total files)")
-        lines.append(f"{'─' * 80}")
+        lines.append(f"{'-' * 80}")
         for domain in sorted(domain_stats.keys()):
             lines.append(f"  {domain:<60} {domain_stats[domain]:>6} files")
 
-        # ── Section 2: Per-artifact path verification ──
-        lines.append(f"\n{'─' * 80}")
+        # Section 2: Per-artifact path verification
+        lines.append(f"\n{'-' * 80}")
         lines.append("SECTION 2: Artifact Path Verification")
-        lines.append(f"{'─' * 80}")
+        lines.append(f"{'-' * 80}")
         lines.append(f"  {'Artifact Type':<45} {'Status':<12} {'Details'}")
-        lines.append(f"  {'─' * 75}")
+        lines.append(f"  {'-' * 75}")
 
         found_count = 0
         missing_count = 0
@@ -2352,7 +2337,7 @@ class iOSCollector:
                 # Check if domain exists at all
                 domain_file_count = domain_stats.get(domain, 0)
                 if domain_file_count == 0:
-                    # Domain not present — likely app not installed
+                    # Domain not present; likely app not installed
                     is_app = domain.startswith('AppDomain')
                     label = 'APP_MISSING' if is_app else 'MISSING'
                     lines.append(f"  {atype:<45} {label:<12} domain={domain} not in backup")
@@ -2361,7 +2346,7 @@ class iOSCollector:
                     else:
                         missing_count += 1
                 else:
-                    # Domain exists but configured path not found — PATH MISMATCH
+                    # Domain exists but configured path not found: PATH MISMATCH
                     lines.append(f"  {atype:<45} {'PATH_ERR':<12} domain has {domain_file_count} files but path not found")
                     missing_count += 1
 
@@ -2380,25 +2365,25 @@ class iOSCollector:
                     except Exception:
                         pass
 
-        lines.append(f"\n{'─' * 80}")
+        lines.append(f"\n{'-' * 80}")
         lines.append(f"SUMMARY: {found_count} OK, {missing_count} path errors/missing, {app_missing_count} apps not installed")
-        lines.append(f"{'─' * 80}")
+        lines.append(f"{'-' * 80}")
 
-        # ── Section 3: System domain file listing (for troubleshooting) ──
+        # Section 3: System domain file listing (for troubleshooting)
         system_domains = ['HomeDomain', 'RootDomain', 'SystemPreferencesDomain',
                           'HealthDomain', 'MediaDomain', 'WirelessDomain',
                           'KeychainDomain', 'CameraRollDomain',
                           'AppDomainGroup-group.com.apple.notes']
-        lines.append(f"\n{'─' * 80}")
+        lines.append(f"\n{'-' * 80}")
         lines.append("SECTION 3: System Domain File Listings (for path troubleshooting)")
-        lines.append(f"{'─' * 80}")
+        lines.append(f"{'-' * 80}")
 
         for sd in system_domains:
             if sd not in domain_stats:
-                lines.append(f"\n  [{sd}] — NOT PRESENT")
+                lines.append(f"\n  [{sd}] - NOT PRESENT")
                 continue
 
-            lines.append(f"\n  [{sd}] — {domain_stats[sd]} files:")
+            lines.append(f"\n  [{sd}] - {domain_stats[sd]} files:")
             try:
                 file_list = []
                 for fi in self.parser.list_files(domain_filter=sd):
