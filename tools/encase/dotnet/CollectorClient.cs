@@ -144,6 +144,49 @@ namespace UnjaenaEncaseBridge
             }
         }
 
+        public string ValidateSession(
+            string host,
+            uint port,
+            bool useSsl,
+            string sessionId,
+            string collectionToken)
+        {
+            return ValidateSession(host, PortToInt(port), useSsl, sessionId, collectionToken);
+        }
+
+        public string ValidateSession(
+            string host,
+            int port,
+            bool useSsl,
+            string sessionId,
+            string collectionToken)
+        {
+            ClearState();
+
+            if (IsBlank(host) || IsBlank(sessionId) || IsBlank(collectionToken))
+            {
+                return ErrorJson("invalid_argument", "host, sessionId, and collectionToken are required.");
+            }
+
+            string profileId = GetCollectionProfileId();
+            string url = BuildUrl(host, port, useSsl, "/api/v1/collector/validate-session");
+            string body =
+                "{"
+                + "\"session_id\":\"" + JsonEscape(sessionId) + "\","
+                + "\"collection_token\":\"" + JsonEscape(collectionToken) + "\","
+                + "\"profile_id\":" + JsonStringOrNull(profileId)
+                + "}";
+
+            string response = PostJson(url, body);
+            if (LastSucceeded && !JsonBool(response, "valid"))
+            {
+                LastSucceeded = false;
+                LastStatusCode = 409;
+                LastError = ResponseErrorSummary(response);
+            }
+            return response;
+        }
+
         public string MatchProfileArtifact(
             string path,
             string name,
@@ -314,7 +357,10 @@ namespace UnjaenaEncaseBridge
                 + "\"target_system_info\":{"
                 + "\"client\":\"encase_enscript\","
                 + "\"transport\":\"embedded_dotnet\","
-                + "\"hardware_id\":\"" + JsonEscape(hardwareId ?? string.Empty) + "\""
+                + "\"hardware_id\":\"" + JsonEscape(hardwareId ?? string.Empty) + "\","
+                + "\"operator_role\":\"device_owner\","
+                + "\"operator_legal_basis\":\"data_subject_consent\","
+                + "\"international_transfer_ack\":true"
                 + "},"
                 + "\"signature_type\":\"checkbox\","
                 + "\"signature_data\":\"encase_operator_explicit_collection_consent\""
