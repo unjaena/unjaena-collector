@@ -4218,6 +4218,8 @@ class CollectionWorker(QThread):
             ios_backup_file_count = 0
             ios_backup_no_match_count = 0
             ios_backup_error_count = 0
+            ios_backup_blocking_error = ""
+            ios_backup_blocked_target_count = 0
 
             # If devices are selected, collect per device
             if self.selected_devices:
@@ -4306,6 +4308,9 @@ class CollectionWorker(QThread):
                             )
                             if is_ios_backup_artifact:
                                 ios_backup_target_count += 1
+                                if ios_backup_blocking_error:
+                                    ios_backup_blocked_target_count += 1
+                                    continue
 
                             # iOS backup progress callback
                             def ios_progress_callback(msg: str):
@@ -4350,7 +4355,19 @@ class CollectionWorker(QThread):
                                     elif 'Root access required' in error_msg or 'not rooted' in error_msg:
                                         self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: requires elevated access", False)
                                     elif error_msg not in ['Unknown artifact type: ' + artifact_type]:
-                                        self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)}: collection warning", True)
+                                        self.log_message.emit(
+                                            f"{self._target_label(artifact_type, item_index, total_items, device_name)}: {error_msg}",
+                                            True,
+                                        )
+                                        if is_ios_backup_artifact and not ios_backup_blocking_error:
+                                            blocking_markers = (
+                                                'iOS encrypted backup is not enabled',
+                                                'Unable to decrypt iOS backup manifest',
+                                                'Failed to read iOS backup encryption state',
+                                                'Failed to prepare encrypted backup access',
+                                            )
+                                            if any(marker in error_msg for marker in blocking_markers):
+                                                ios_backup_blocking_error = error_msg
                                     error_count += 1
                                     continue
 
@@ -4520,7 +4537,19 @@ class CollectionWorker(QThread):
                 return
 
             ios_quality_error = ""
-            if ios_backup_target_count > 0 and ios_backup_file_count == 0:
+            if ios_backup_blocking_error:
+                ios_quality_error = (
+                    "iOS backup extraction was not started: "
+                    f"{ios_backup_blocking_error}"
+                )
+                if ios_backup_blocked_target_count:
+                    self.log_message.emit(
+                        f"[SKIP] {ios_backup_blocked_target_count} iOS backup target(s) skipped "
+                        "after the blocking backup error.",
+                        False,
+                    )
+                self.log_message.emit(f"[WARNING] {ios_quality_error}", True)
+            elif ios_backup_target_count > 0 and ios_backup_file_count == 0:
                 ios_quality_error = (
                     "iOS backup extraction produced 0 app/artifact files "
                     f"from {ios_backup_target_count} selected backup target(s). "

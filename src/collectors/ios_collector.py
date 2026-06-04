@@ -1188,6 +1188,8 @@ class iOSDeviceConnector:
                         "backup in Apple Devices, Finder, or iTunes first, then "
                         "run collection again with the backup password."
                     )
+                    if progress_callback:
+                        progress_callback(self._backup_failed_reason)
                     yield '', {
                         'artifact_type': 'mobile_ios_device_backup',
                         'status': 'error',
