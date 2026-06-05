@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace UnjaenaEncaseBridge
 {
@@ -216,10 +217,6 @@ namespace UnjaenaEncaseBridge
             {
                 CollectionProfileTarget target = targets[i];
                 if (target == null || IsBlank(target.ArtifactType) || target.Patterns == null)
-                {
-                    continue;
-                }
-                if (IsSourceFileTarget(target))
                 {
                     continue;
                 }
@@ -1318,13 +1315,6 @@ namespace UnjaenaEncaseBridge
             return result;
         }
 
-        private static bool IsSourceFileTarget(CollectionProfileTarget target)
-        {
-            return target != null
-                && !IsBlank(target.Kind)
-                && string.Compare(NormalizeMatchValue(target.Kind), "source_file", StringComparison.OrdinalIgnoreCase) == 0;
-        }
-
         private static string[] ExpandCollectionPatternVariants(string pattern)
         {
             string normalized = NormalizeMatchValue(pattern);
@@ -1342,6 +1332,7 @@ namespace UnjaenaEncaseBridge
             for (int i = 0; i < count; i++)
             {
                 AddDirectFilePatternVariant(variants, variants[i]);
+                AddWindowsUserDriveOptionalPatternVariants(variants, variants[i]);
             }
             return variants.ToArray();
         }
@@ -1362,6 +1353,25 @@ namespace UnjaenaEncaseBridge
                 return;
             }
             AddPatternVariant(variants, pattern.Replace("/**/", "/"));
+        }
+
+        private static void AddWindowsUserDriveOptionalPatternVariants(List<string> variants, string pattern)
+        {
+            string normalized = NormalizeMatchValue(pattern);
+            string suffix = null;
+            if (normalized.StartsWith("c:/users/", StringComparison.Ordinal))
+            {
+                suffix = normalized.Substring(3);
+            }
+            else if (normalized.StartsWith("c:/documents and settings/", StringComparison.Ordinal))
+            {
+                suffix = normalized.Substring(3);
+            }
+            if (!IsBlank(suffix))
+            {
+                AddPatternVariant(variants, suffix);
+                AddPatternVariant(variants, "/" + suffix);
+            }
         }
 
         private static void AddPatternVariant(List<string> variants, string pattern)
@@ -1403,46 +1413,92 @@ namespace UnjaenaEncaseBridge
                 return false;
             }
 
-            int textIndex = 0;
-            int patternIndex = 0;
-            int starIndex = -1;
-            int matchIndex = 0;
-
-            while (textIndex < text.Length)
+            try
             {
-                if (patternIndex < pattern.Length
-                    && (pattern[patternIndex] == '?' || pattern[patternIndex] == text[textIndex]))
-                {
-                    textIndex++;
-                    patternIndex++;
-                    continue;
-                }
-
-                if (patternIndex < pattern.Length && pattern[patternIndex] == '*')
-                {
-                    starIndex = patternIndex;
-                    matchIndex = textIndex;
-                    patternIndex++;
-                    continue;
-                }
-
-                if (starIndex != -1)
-                {
-                    patternIndex = starIndex + 1;
-                    matchIndex++;
-                    textIndex = matchIndex;
-                    continue;
-                }
-
+                string regex = "^" + WildcardPatternToRegex(pattern) + "$";
+                return Regex.IsMatch(text, regex, RegexOptions.CultureInvariant);
+            }
+            catch
+            {
                 return false;
             }
+        }
 
-            while (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+        private static string WildcardPatternToRegex(string pattern)
+        {
+            StringBuilder regex = new StringBuilder();
+            for (int i = 0; i < pattern.Length; i++)
             {
-                patternIndex++;
+                char ch = pattern[i];
+                if (ch == '*')
+                {
+                    regex.Append(".*");
+                    continue;
+                }
+                if (ch == '?')
+                {
+                    regex.Append('.');
+                    continue;
+                }
+                if (ch == '[')
+                {
+                    int end = FindCharacterClassEnd(pattern, i + 1);
+                    if (end > i + 1)
+                    {
+                        regex.Append(ConvertCharacterClassToRegex(pattern.Substring(i + 1, end - i - 1)));
+                        i = end;
+                        continue;
+                    }
+                }
+                regex.Append(Regex.Escape(ch.ToString()));
             }
+            return regex.ToString();
+        }
 
-            return patternIndex == pattern.Length;
+        private static int FindCharacterClassEnd(string pattern, int start)
+        {
+            for (int i = start; i < pattern.Length; i++)
+            {
+                if (pattern[i] == ']')
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        private static string ConvertCharacterClassToRegex(string value)
+        {
+            StringBuilder result = new StringBuilder();
+            result.Append('[');
+            int start = 0;
+            if (value.Length > 0 && (value[0] == '!' || value[0] == '^'))
+            {
+                result.Append('^');
+                start = 1;
+            }
+            for (int i = start; i < value.Length; i++)
+            {
+                char ch = value[i];
+                if (ch == '\\')
+                {
+                    result.Append("\\\\");
+                }
+                else if (ch == ']')
+                {
+                    result.Append("\\]");
+                }
+                else if (ch == '^' && i == start)
+                {
+                    result.Append("\\^");
+                }
+                else
+                {
+                    result.Append(ch);
+                }
+            }
+            result.Append(']');
+            return result.ToString();
         }
 
         private string ErrorJson(string error, string message)
