@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,9 @@ class HeadlessCollector:
             # Stage 2: Compute hashes for integrity verification
             logger.info("[Stage 2/3] Computing file hashes...")
             hashed_files = self._compute_hashes(collected_files)
+            if not hashed_files:
+                logger.error("No collected files passed upload-readiness checks.")
+                return False
             logger.info(f"[Stage 2/3] Hashed {len(hashed_files)} files")
 
             # Stage 3: Upload to server
@@ -127,7 +130,7 @@ class HeadlessCollector:
             logger.error(f"Collection failed: {e}", exc_info=True)
             return False
 
-    def _collect(self) -> List[str]:
+    def _collect(self) -> List[Tuple[str, str, Dict[str, Any]]]:
         """Stage 1: Collect artifacts to output directory."""
         collected = []
 
@@ -160,11 +163,14 @@ class HeadlessCollector:
                     break
                 logger.info(f"  [{i}/{len(self.artifacts)}] Collecting: {artifact_type}")
                 try:
-                    files = collector.collect(artifact_type)
-                    if files:
-                        for file_path in files:
-                            collected.append((file_path, artifact_type))
-                        logger.info(f"    -> {len(files)} files")
+                    file_count = 0
+                    for item in collector.collect(artifact_type) or []:
+                        normalized = self._normalize_collected_item(item, artifact_type)
+                        if normalized:
+                            collected.append(normalized)
+                            file_count += 1
+                    if file_count:
+                        logger.info(f"    -> {file_count} files")
                     else:
                         logger.info(f"    -> 0 files (none found)")
                 except Exception as e:
@@ -172,7 +178,7 @@ class HeadlessCollector:
 
             return collected
 
-    def _collect_with_local_collector(self, collector) -> List[str]:
+    def _collect_with_local_collector(self, collector) -> List[Tuple[str, str, Dict[str, Any]]]:
         """Collect artifacts using LocalSystemCollector (macOS/Linux)."""
         collected = []
 
@@ -182,13 +188,15 @@ class HeadlessCollector:
             logger.info(f"  [{i}/{len(self.artifacts)}] Collecting: {artifact_type}")
             file_count = 0
             try:
-                for file_path, metadata in collector.collect(artifact_type):
-                    if not file_path or metadata.get('status') in ('error', 'not_found'):
+                for item in collector.collect(artifact_type) or []:
+                    normalized = self._normalize_collected_item(item, artifact_type)
+                    if not normalized:
+                        metadata = item[1] if isinstance(item, tuple) and len(item) > 1 and isinstance(item[1], dict) else {}
                         error_msg = metadata.get('error', 'Unknown')
-                        if metadata.get('status') != 'not_found':
+                        if metadata.get('status') not in ('not_found', 'skipped'):
                             logger.warning(f"    -> {artifact_type}: {error_msg}")
                         continue
-                    collected.append((file_path, artifact_type))
+                    collected.append(normalized)
                     file_count += 1
                 if file_count > 0:
                     logger.info(f"    -> {file_count} files")
@@ -206,7 +214,57 @@ class HeadlessCollector:
 
         return collected
 
-    def _compute_hashes(self, files: List[str]) -> List[str]:
+    def _normalize_collected_item(
+        self,
+        item: Any,
+        artifact_type: str,
+    ) -> Optional[Tuple[str, str, Dict[str, Any]]]:
+        """Normalize collector outputs to (path, artifact_type, metadata)."""
+        metadata: Dict[str, Any] = {}
+        upload_artifact_type = artifact_type
+        filepath = item
+
+        if isinstance(item, tuple):
+            if len(item) >= 2 and isinstance(item[1], dict):
+                filepath = item[0]
+                metadata = dict(item[1] or {})
+                upload_artifact_type = metadata.get("upload_artifact_type") or artifact_type
+            else:
+                filepath = item[0] if item else None
+                if len(item) >= 2 and isinstance(item[1], str):
+                    upload_artifact_type = item[1]
+                if len(item) >= 3 and isinstance(item[2], dict):
+                    metadata = dict(item[2] or {})
+
+        status = metadata.get("status")
+        if status in ("error", "not_found", "skipped", "not_implemented"):
+            return None
+
+        if not filepath or not isinstance(filepath, (str, os.PathLike)):
+            logger.warning(f"    -> {artifact_type}: invalid collector output path")
+            return None
+
+        filepath = os.fspath(filepath)
+        if not os.path.isfile(filepath):
+            logger.warning(f"    -> {artifact_type}: collected path is not a readable file: {filepath}")
+            return None
+
+        metadata.setdefault("original_path", filepath)
+        metadata.setdefault("artifact_type", upload_artifact_type)
+        return filepath, upload_artifact_type, metadata
+
+    def _unpack_upload_entry(
+        self,
+        entry: Any,
+    ) -> Tuple[str, str, Dict[str, Any]]:
+        if isinstance(entry, tuple):
+            filepath = entry[0]
+            artifact_type = entry[1] if len(entry) >= 2 else "unknown"
+            metadata = entry[2] if len(entry) >= 3 and isinstance(entry[2], dict) else {}
+            return os.fspath(filepath), artifact_type, dict(metadata or {})
+        return os.fspath(entry), "unknown", {}
+
+    def _compute_hashes(self, files: List[Tuple[str, str, Dict[str, Any]]]) -> List[Tuple[str, str, Dict[str, Any]]]:
         """Stage 2: Compute SHA-256 hashes for integrity verification.
 
         Note: Upload security is handled by DirectUploader during Stage 3.
@@ -219,20 +277,28 @@ class HeadlessCollector:
         for i, entry in enumerate(files, 1):
             if self._cancelled:
                 break
-            filepath, artifact_type = entry if isinstance(entry, tuple) else (entry, "unknown")
+            filepath, artifact_type, metadata = self._unpack_upload_entry(entry)
             if i % 50 == 0 or i == len(files):
                 logger.info(f"  Hashing [{i}/{len(files)}]")
             try:
                 calculator.calculate_file_hash(filepath)
-                verified.append((filepath, artifact_type))
+                with open(filepath, "rb") as readable:
+                    readable.read(1)
+                if os.path.getsize(filepath) <= 0:
+                    raise ValueError("empty file")
+                verified.append((filepath, artifact_type, metadata))
             except Exception as e:
                 logger.warning(f"  Hash failed: {os.path.basename(filepath)}: {e}")
 
         return verified
 
-    def _upload(self, files: List[str]) -> bool:
+    def _upload(self, files: List[Tuple[str, str, Dict[str, Any]]]) -> bool:
         """Stage 3: Upload files via presigned URLs."""
         from core.uploader import DirectUploader
+
+        if not files:
+            logger.error("No files to upload.")
+            return False
 
         uploader = DirectUploader(
             server_url=self.server_url,
@@ -255,11 +321,14 @@ class HeadlessCollector:
         completed = [0]
 
         def _upload_one(entry):
-            filepath, artifact_type = entry if isinstance(entry, tuple) else (entry, "unknown")
+            filepath, artifact_type, metadata = self._unpack_upload_entry(entry)
+            upload_metadata = dict(metadata or {})
+            upload_metadata.setdefault("source", "headless_collector")
+            upload_metadata.setdefault("original_path", filepath)
             result = uploader.upload_file(
                 file_path=filepath,
                 artifact_type=artifact_type,
-                metadata={"source": "headless_collector", "original_path": filepath},
+                metadata=upload_metadata,
             )
             with lock:
                 completed[0] += 1
@@ -270,10 +339,10 @@ class HeadlessCollector:
         max_workers = min(5, len(files))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
-            for filepath in files:
+            for entry in files:
                 if self._cancelled:
                     break
-                futures.append(executor.submit(_upload_one, filepath))
+                futures.append(executor.submit(_upload_one, entry))
 
             for future in as_completed(futures):
                 if self._cancelled:

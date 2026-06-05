@@ -3994,6 +3994,20 @@ class CollectionWorker(QThread):
             )
         return filtered
 
+    @staticmethod
+    def _upload_batch_ready_for_completion(
+        total_upload: int,
+        success_count: int,
+        preparation_error_count: int,
+        ios_quality_error: Optional[str],
+    ) -> bool:
+        return (
+            total_upload > 0
+            and success_count == total_upload
+            and preparation_error_count == 0
+            and not ios_quality_error
+        )
+
     def _create_collector_for_device(self, device, output_dir: str):
         """
         Create appropriate collector for device type
@@ -4681,6 +4695,7 @@ class CollectionWorker(QThread):
             upload_dedupe_index = {}
             duplicate_uploads_skipped = 0
             total_files = len(collected_raw_files)
+            preparation_error_count = 0
 
             for j, (file_path, artifact_type, metadata) in enumerate(collected_raw_files):
                 if self._cancelled:
@@ -4699,21 +4714,40 @@ class CollectionWorker(QThread):
                 )
 
                 try:
-                    # File may have been removed between Stage 1 (collect) and
-                    # Stage 2 (prepare) by real-time antivirus / EDR software
-                    # scanning the temp directory. Skip gracefully instead of
-                    # failing the whole batch.
                     if not os.path.exists(file_path):
+                        preparation_error_count += 1
                         self.log_message.emit(
-                            f"[SKIP] {filename}: file disappeared before "
-                            f"preparation (likely quarantined by security software)",
+                            f"[ERROR] {filename}: file disappeared before "
+                            "upload preparation",
                             True,
                         )
                         continue
                     if not os.path.isfile(file_path):
+                        preparation_error_count += 1
                         self.log_message.emit(
-                            f"[SKIP] {filename}: non-file path ignored before upload preparation",
-                            False,
+                            f"[ERROR] {filename}: non-file path cannot be uploaded",
+                            True,
+                        )
+                        continue
+
+                    actual_size = os.path.getsize(file_path)
+                    if actual_size <= 0:
+                        preparation_error_count += 1
+                        self.log_message.emit(
+                            f"[ERROR] {filename}: empty file cannot be uploaded",
+                            True,
+                        )
+                        continue
+
+                    try:
+                        with open(file_path, 'rb') as readable:
+                            readable.read(1)
+                    except OSError as access_error:
+                        preparation_error_count += 1
+                        self.log_message.emit(
+                            f"[ERROR] {filename}: file is not readable before upload "
+                            f"({access_error})",
+                            True,
                         )
                         continue
 
@@ -4726,12 +4760,7 @@ class CollectionWorker(QThread):
                         hash_result = hash_calculator.calculate_file_hash(file_path)
                         original_hash = hash_result.sha256_hash
 
-                    # Prefer cached size from Stage 1; avoid filesystem stat
-                    # when possible so AV-quarantined files don't take down
-                    # the whole preparation step.
-                    original_size = metadata.get('size')
-                    if original_size is None:
-                        original_size = os.path.getsize(file_path)
+                    original_size = actual_size
 
                     # Add required metadata fields for server
                     metadata['original_hash'] = original_hash
@@ -4762,12 +4791,13 @@ class CollectionWorker(QThread):
                         continue
 
                 except FileNotFoundError:
+                    preparation_error_count += 1
                     self.log_message.emit(
-                        f"[SKIP] {filename}: file removed mid-pipeline "
-                        f"(quarantined by AV/EDR)",
+                        f"[ERROR] {filename}: file removed mid-pipeline",
                         True,
                     )
                 except Exception as e:
+                    preparation_error_count += 1
                     self.log_message.emit(f"Preparation failed ({filename}): {e}", True)
 
             if duplicate_uploads_skipped > 20:
@@ -4784,6 +4814,13 @@ class CollectionWorker(QThread):
             if self._cancelled:
                 self.finished.emit(False, "Preparation cancelled")
                 return
+
+            if preparation_error_count:
+                self.log_message.emit(
+                    f"[ERROR] Preparation failed for {preparation_error_count} file(s); "
+                    "analysis will not be started.",
+                    True,
+                )
 
             # ========================================
             # STAGE 3: Upload (40%)
@@ -4900,10 +4937,16 @@ class CollectionWorker(QThread):
                 self.finished.emit(False, f"Collection cancelled: {success_count}/{total_upload} files uploaded before stop")
                 return
 
-            completed_ok = success_count == total_upload and not ios_quality_error
+            upload_batch_ok = self._upload_batch_ready_for_completion(
+                total_upload=total_upload,
+                success_count=success_count,
+                preparation_error_count=preparation_error_count,
+                ios_quality_error=ios_quality_error,
+            )
+            completion_signal_ok = False
 
             # === Send upload completion signal (pipeline state transition trigger) ===
-            if success_count > 0 and not ios_quality_error:
+            if upload_batch_ok:
                 try:
                     complete_path = f"/api/v1/collector/collection/end/{self.session_id}"
                     complete_url = f"{self.server_url}{complete_path}"
@@ -4924,11 +4967,20 @@ class CollectionWorker(QThread):
                         verify=_get_ssl_verify(),
                     )
                     if complete_response.ok:
+                        completion_signal_ok = True
                         self.log_message.emit("✓ Collection session completion signal sent", False)
                     else:
                         self.log_message.emit(f"⚠ Session completion signal failed: {complete_response.status_code}", True)
                 except Exception as e:
                     self.log_message.emit(f"⚠ Session completion signal error: {e}", True)
+            elif success_count > 0:
+                self.log_message.emit(
+                    "Collection completion signal was not sent because the upload batch "
+                    "was incomplete or failed quality checks.",
+                    True,
+                )
+
+            completed_ok = upload_batch_ok and completion_signal_ok
 
             self.progress_updated.emit(3, 100, 100, "Complete!" if completed_ok else "Completed with warnings", "")
             final_message = (
@@ -4937,8 +4989,15 @@ class CollectionWorker(QThread):
             )
             if ios_quality_error:
                 final_message = f"{final_message}; {ios_quality_error}"
+            elif preparation_error_count:
+                final_message = (
+                    f"{final_message}; preparation failed for "
+                    f"{preparation_error_count} file(s)"
+                )
             elif success_count != total_upload:
                 final_message = f"{final_message}; one or more uploads failed"
+            elif upload_batch_ok and not completion_signal_ok:
+                final_message = f"{final_message}; session completion signal failed"
             self.finished.emit(
                 completed_ok,
                 final_message
