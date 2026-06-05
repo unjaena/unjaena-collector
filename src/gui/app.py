@@ -3895,7 +3895,90 @@ class CollectionWorker(QThread):
             return {'windows', 'android', 'ios', 'linux', 'macos'}
         return set()
 
+    def _mobile_ffs_available_artifacts(self, device) -> set:
+        meta = device.metadata or {}
+        present = set(meta.get("present_artifacts") or [])
+        if meta.get("present_artifact_scan_complete"):
+            return present
+        if present:
+            return present
+
+        try:
+            if device.device_type == DeviceType.MOBILE_FFS_BUNDLE_ANDROID:
+                from collectors.mobile_ffs.path_specs import ANDROID_PATH_SPECS
+                return {spec.artifact_type for spec in ANDROID_PATH_SPECS}
+            if device.device_type == DeviceType.MOBILE_FFS_BUNDLE_IOS:
+                from collectors.mobile_ffs.path_specs import IOS_PATH_SPECS
+                return {spec.artifact_type for spec in IOS_PATH_SPECS}
+        except Exception:
+            return set()
+        return set()
+
+    def _artifact_category_for_device(self, artifact_type: str, device) -> str:
+        category = self._artifact_category(artifact_type)
+        if category == "ai_activity" and artifact_type.startswith("ai_mobile_"):
+            if device.device_type == DeviceType.MOBILE_FFS_BUNDLE_ANDROID:
+                return "android"
+            if device.device_type == DeviceType.MOBILE_FFS_BUNDLE_IOS:
+                return "ios"
+        return category
+
     def _artifacts_for_device(self, device) -> List[str]:
+        if device.device_type in (
+            DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
+            DeviceType.MOBILE_FFS_BUNDLE_IOS,
+        ):
+            platform = (
+                "android"
+                if device.device_type == DeviceType.MOBILE_FFS_BUNDLE_ANDROID
+                else "ios"
+            )
+            available = self._mobile_ffs_available_artifacts(device)
+            if not available:
+                self.log_message.emit(
+                    f"[WARN] [{device.display_name}] FFS present-artifact scan unavailable; "
+                    "using selected mobile artifacts as-is.",
+                    True,
+                )
+                return [
+                    artifact_type for artifact_type in self.artifacts
+                    if self._artifact_category_for_device(artifact_type, device) == platform
+                ]
+
+            try:
+                from collectors.mobile_ffs_collector import expand_mobile_ffs_selection
+            except Exception:
+                expand_mobile_ffs_selection = None
+
+            filtered = []
+            seen = set()
+            mobile_selected = 0
+            for artifact_type in self.artifacts:
+                if self._artifact_category_for_device(artifact_type, device) != platform:
+                    continue
+                mobile_selected += 1
+                if expand_mobile_ffs_selection:
+                    candidates = expand_mobile_ffs_selection(
+                        artifact_type,
+                        available,
+                        platform=platform,
+                    )
+                else:
+                    candidates = [artifact_type] if artifact_type in available else []
+                for candidate in candidates:
+                    if candidate not in seen:
+                        filtered.append(candidate)
+                        seen.add(candidate)
+
+            skipped = max(mobile_selected - len(seen), 0)
+            if skipped:
+                self.log_message.emit(
+                    f"[SKIP] [{device.display_name}] {skipped} selected mobile artifact "
+                    "type(s) are not present or not supported by this FFS bundle.",
+                    False,
+                )
+            return filtered
+
         categories = self._device_artifact_categories(device)
         if not categories:
             return list(self.artifacts)
@@ -4404,7 +4487,11 @@ class CollectionWorker(QThread):
                                 metadata['device_id'] = device.device_id
                                 metadata['device_name'] = device_name
                                 metadata['device_type'] = device.device_type.name
-                                collected_raw_files.append((file_path, artifact_type, metadata))
+                                upload_artifact_type = metadata.get(
+                                    'upload_artifact_type',
+                                    artifact_type,
+                                )
+                                collected_raw_files.append((file_path, upload_artifact_type, metadata))
                                 file_count += 1
 
                                 # Rate-limit UI signals to prevent progressive slowdown

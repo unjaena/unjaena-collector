@@ -13,8 +13,10 @@ session.
 from __future__ import annotations
 
 import logging
+import re
+import shutil
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 from .mobile_ffs import (
     CellebriteAdapter,
@@ -26,6 +28,72 @@ from .mobile_ffs import (
 )
 
 logger = logging.getLogger(__name__)
+
+ANDROID_FFS_ALIASES = {
+    "mobile_android_sms_provider": "mobile_android_sms",
+    "mobile_android_call_provider": "mobile_android_call",
+    "mobile_android_contacts_provider": "mobile_android_contacts",
+}
+
+ANDROID_FFS_SYSTEM_EXPANSION = {
+    "mobile_android_app_install_history",
+    "mobile_android_batterystats",
+    "mobile_android_bluetooth_pairings",
+    "mobile_android_dropbox_logs",
+    "mobile_android_locksettings",
+    "mobile_android_wifi",
+}
+
+ANDROID_FFS_APP_EXCLUDE = {
+    "mobile_android_sms",
+    "mobile_android_call",
+    "mobile_android_contacts",
+    "mobile_android_calendar_provider",
+    "mobile_android_media",
+    *ANDROID_FFS_SYSTEM_EXPANSION,
+}
+
+ANDROID_FFS_GENERIC_EXPANSIONS = {
+    "mobile_android_system_info": ANDROID_FFS_SYSTEM_EXPANSION,
+    "mobile_android_location": {"mobile_android_google_maps"},
+}
+
+
+def canonicalize_mobile_ffs_artifact(artifact_type: str) -> str:
+    """Return the FFS canonical artifact id for live-device aliases."""
+    return ANDROID_FFS_ALIASES.get(artifact_type, artifact_type)
+
+
+def expand_mobile_ffs_selection(
+    artifact_type: str,
+    available_types: Iterable[str],
+    *,
+    platform: str = "android",
+) -> List[str]:
+    """Expand generic/live mobile selections into FFS-routable ids."""
+    available = set(available_types or ())
+    canonical = canonicalize_mobile_ffs_artifact(artifact_type)
+
+    if canonical in available:
+        return [canonical]
+
+    if platform.lower() != "android":
+        return []
+
+    if canonical == "mobile_android_app":
+        return sorted(
+            t for t in available
+            if (
+                (t.startswith("mobile_android_") or t.startswith("ai_mobile_"))
+                and t not in ANDROID_FFS_APP_EXCLUDE
+            )
+        )
+
+    expanded = ANDROID_FFS_GENERIC_EXPANSIONS.get(canonical)
+    if expanded:
+        return sorted(t for t in expanded if t in available)
+
+    return []
 
 
 class MobileFFSBundleCollector:
@@ -55,6 +123,7 @@ class MobileFFSBundleCollector:
         )
         for ra in adapter.iter_known_artifacts():
             self._artifacts_by_type.setdefault(ra.artifact_type, []).append(ra)
+        self._install_android_aliases()
         logger.info(
             "FFS bundle opened: %s platform=%s artifact_types=%d",
             self.zip_path.name, self._platform, len(self._artifacts_by_type),
@@ -67,6 +136,54 @@ class MobileFFSBundleCollector:
             self._artifacts_by_type.clear()
             self._zip_entries = set()
 
+    def _install_android_aliases(self) -> None:
+        if self._platform != "android":
+            return
+
+        exact_types = set(self._artifacts_by_type)
+        for alias, canonical in ANDROID_FFS_ALIASES.items():
+            if canonical in self._artifacts_by_type:
+                self._artifacts_by_type.setdefault(alias, self._artifacts_by_type[canonical])
+
+        for generic, expansion in ANDROID_FFS_GENERIC_EXPANSIONS.items():
+            ras = [
+                ra
+                for artifact_type in sorted(expansion)
+                for ra in self._artifacts_by_type.get(artifact_type, [])
+            ]
+            if ras:
+                self._artifacts_by_type.setdefault(generic, ras)
+
+        app_like = [
+            ra
+            for artifact_type in sorted(exact_types)
+            if (
+                (artifact_type.startswith("mobile_android_") or artifact_type.startswith("ai_mobile_"))
+                and artifact_type not in ANDROID_FFS_APP_EXCLUDE
+            )
+            for ra in self._artifacts_by_type.get(artifact_type, [])
+        ]
+        if app_like:
+            self._artifacts_by_type.setdefault("mobile_android_app", app_like)
+
+    def _stage_upload_file(self, artifact_type: str, entry) -> Path:
+        source_name = entry.zip_entry_path.replace("\\", "/").rsplit("/", 1)[-1]
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", source_name).strip("._")
+        if not safe_name:
+            safe_name = "artifact.bin"
+        safe_name = safe_name[:96]
+
+        prefix = (entry.source_sha256 or "unknown")[:16]
+        upload_dir = self.output_dir / "ffs_bundle" / "_upload" / artifact_type
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        candidate = upload_dir / f"{prefix}_{safe_name}"
+
+        if not candidate.exists():
+            shutil.move(str(entry.extracted_path), str(candidate))
+        elif entry.extracted_path.exists():
+            entry.extracted_path.unlink()
+        return candidate
+
     def collect(
         self, artifact_type: str, **_ignored
     ) -> Iterator[Tuple[str, dict]]:
@@ -76,11 +193,15 @@ class MobileFFSBundleCollector:
         if self._adapter is None:
             self.open()
 
+        requested_artifact_type = artifact_type
         ras = self._artifacts_by_type.get(artifact_type)
         if not ras:
             yield "", {
-                "status": "not_implemented",
-                "error": f"Artifact '{artifact_type}' not in FFS path-spec table",
+                "status": "skipped",
+                "error": (
+                    f"Artifact '{artifact_type}' is not supported by this "
+                    "FFS bundle profile"
+                ),
             }
             return
 
@@ -111,9 +232,11 @@ class MobileFFSBundleCollector:
                 if entry.zip_entry_path in sidecars:
                     continue
                 ra = wanted[entry.zip_entry_path]
-                yield str(entry.extracted_path), {
+                upload_path = self._stage_upload_file(ra.artifact_type, entry)
+                metadata = {
                     "status": "success",
                     "source_path": entry.zip_entry_path,
+                    "extracted_source_path": str(entry.extracted_path),
                     "sha256": entry.source_sha256,
                     "crc32": entry.source_crc32,
                     "source_size": entry.source_size,
@@ -127,6 +250,10 @@ class MobileFFSBundleCollector:
                     "bundle_format": "cellebrite_clbx",
                     "bundle_path": str(self.zip_path),
                 }
+                if requested_artifact_type != ra.artifact_type:
+                    metadata["requested_artifact_type"] = requested_artifact_type
+                    metadata["upload_artifact_type"] = ra.artifact_type
+                yield str(upload_path), metadata
         except ContainerSafetyError as e:
             yield "", {
                 "status": "error",
