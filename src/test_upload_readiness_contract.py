@@ -86,3 +86,56 @@ def test_upload_completion_requires_all_preconditions():
     assert ready(2, 2, 1, None) is False
     assert ready(2, 2, 0, "quality warning") is False
     assert ready(0, 0, 0, None) is False
+
+
+def test_ios_backup_sources_are_staged_before_upload(tmp_path):
+    pytest.importorskip("PyQt6")
+    app = _load_module("collector_gui_app_stage_under_test", "gui/app.py")
+
+    source_dir = tmp_path / "mobile_ios_example"
+    source_dir.mkdir()
+    source_file = source_dir / "artifact.db"
+    source_file.write_bytes(b"ios backup database")
+    metadata = {
+        "collection_method": "ios_backup_extraction",
+        "domain": "AppDomain-com.example.app",
+        "original_path": "Library/Application Support/artifact.db",
+    }
+
+    staged = Path(app.CollectionWorker._stage_stable_upload_copy(
+        output_dir=str(tmp_path),
+        file_path=str(source_file),
+        artifact_type="mobile_ios_example",
+        metadata=metadata,
+        original_hash="a" * 64,
+    ))
+
+    assert staged.name == "artifact.db"
+    assert "_upload_queue" in staged.parts
+    assert staged.read_bytes() == b"ios backup database"
+    assert metadata["upload_staged"] is True
+
+    source_file.unlink()
+    assert staged.read_bytes() == b"ios backup database"
+
+
+def test_ffs_bundle_sources_are_not_restaged():
+    pytest.importorskip("PyQt6")
+    app = _load_module("collector_gui_app_stage_policy_under_test", "gui/app.py")
+
+    assert app.CollectionWorker._requires_stable_upload_copy(
+        "mobile_ios_example",
+        {"collection_method": "ios_backup_extraction"},
+    ) is True
+    assert app.CollectionWorker._requires_stable_upload_copy(
+        "mobile_ios_device_info",
+        {"collection_method": "pymobiledevice3"},
+    ) is True
+    assert app.CollectionWorker._requires_stable_upload_copy(
+        "mobile_ios_installed_apps",
+        {},
+    ) is True
+    assert app.CollectionWorker._requires_stable_upload_copy(
+        "mobile_ios_example",
+        {"collection_method": "ffs_bundle"},
+    ) is False

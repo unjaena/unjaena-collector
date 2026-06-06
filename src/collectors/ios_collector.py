@@ -69,6 +69,14 @@ def _debug_print(msg: str) -> None:
         print(msg)
 
 
+def _sha256_file(path: Path) -> str:
+    sha256 = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(65536), b''):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
 logger = logging.getLogger(__name__)
 IOS_ENCRYPTION_SKIP_SENTINEL = "__UNJAENA_IOS_SKIP_ENCRYPTION__"
 
@@ -905,7 +913,7 @@ class iOSDeviceConnector:
             local_path = output_dir / filename
             local_path.write_text(output, encoding='utf-8')
 
-            sha256 = hashlib.sha256(output.encode('utf-8')).hexdigest()
+            sha256 = _sha256_file(local_path)
 
             yield str(local_path), {
                 'artifact_type': 'mobile_ios_device_info',
@@ -975,7 +983,7 @@ class iOSDeviceConnector:
             local_path = output_dir / filename
             local_path.write_text(output_text, encoding='utf-8')
 
-            sha256 = hashlib.sha256(output_text.encode('utf-8')).hexdigest()
+            sha256 = _sha256_file(local_path)
 
             yield str(local_path), {
                 'artifact_type': 'mobile_ios_syslog',
@@ -1087,7 +1095,7 @@ class iOSDeviceConnector:
             local_path = output_dir / filename
             local_path.write_text(output, encoding='utf-8')
 
-            sha256 = hashlib.sha256(output.encode('utf-8')).hexdigest()
+            sha256 = _sha256_file(local_path)
 
             yield str(local_path), {
                 'artifact_type': 'mobile_ios_installed_apps',
@@ -2467,7 +2475,7 @@ class iOSCollector:
             with open(diag_path, 'w', encoding='utf-8') as f:
                 f.write(report_content)
 
-            sha256 = hashlib.sha256(report_content.encode('utf-8')).hexdigest()
+            sha256 = _sha256_file(diag_path)
 
             logger.info(f"[iOS] Manifest diagnostic: {found_count} OK, {missing_count} errors, {app_missing_count} apps N/A")
 

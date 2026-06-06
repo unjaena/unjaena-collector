@@ -4008,6 +4008,70 @@ class CollectionWorker(QThread):
             and not ios_quality_error
         )
 
+    @staticmethod
+    def _is_ios_runtime_collector(collector) -> bool:
+        module_name = type(collector).__module__.lower()
+        class_name = type(collector).__name__.lower()
+        return (
+            module_name.endswith("ios_collector")
+            or class_name in {"ioscollector", "iosdeviceconnector"}
+        )
+
+    @staticmethod
+    def _requires_stable_upload_copy(artifact_type: str, metadata: dict) -> bool:
+        method = str(metadata.get('collection_method', '')).lower()
+        if method == 'ffs_bundle':
+            return False
+        if method in {'ios_backup_extraction', 'pymobiledevice3', 'ios_backup'}:
+            return True
+        return artifact_type.startswith('mobile_ios_')
+
+    @staticmethod
+    def _stable_upload_path(output_dir: str, artifact_type: str, file_path: str, original_hash: str) -> Path:
+        safe_artifact = ''.join(
+            c if c.isalnum() or c in ('_', '-', '.') else '_'
+            for c in artifact_type
+        )
+        hash_dir = original_hash[:16] if original_hash else 'unhashed'
+        return Path(output_dir) / '_upload_queue' / safe_artifact / hash_dir / Path(file_path).name
+
+    @classmethod
+    def _stage_stable_upload_copy(
+        cls,
+        output_dir: str,
+        file_path: str,
+        artifact_type: str,
+        metadata: dict,
+        original_hash: str,
+    ) -> str:
+        import os
+        import shutil
+
+        source_path = Path(file_path)
+        staged_path = cls._stable_upload_path(
+            output_dir=output_dir,
+            artifact_type=artifact_type,
+            file_path=file_path,
+            original_hash=original_hash,
+        )
+        staged_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            if source_path.resolve() == staged_path.resolve():
+                return str(source_path)
+        except OSError:
+            pass
+
+        shutil.copy2(source_path, staged_path)
+        if not staged_path.is_file():
+            raise FileNotFoundError(str(staged_path))
+        if os.path.getsize(staged_path) != os.path.getsize(source_path):
+            staged_path.unlink(missing_ok=True)
+            raise OSError(f"staged copy size mismatch for {source_path.name}")
+
+        metadata['upload_staged'] = True
+        return str(staged_path)
+
     def _create_collector_for_device(self, device, output_dir: str):
         """
         Create appropriate collector for device type
@@ -4360,8 +4424,11 @@ class CollectionWorker(QThread):
                         self.log_message.emit(f"{device_name}: Collector creation failed", True)
                         continue
 
-                    # Track iOS collectors for cleanup (encrypted backup temp files)
-                    if hasattr(collector, 'close'):
+                    # iOS backup/device collectors keep decryptor resources open until
+                    # uploads finish; closing them immediately can invalidate extracted
+                    # backup files before the upload worker reads them.
+                    close_after_upload = self._is_ios_runtime_collector(collector)
+                    if close_after_upload and hasattr(collector, 'close'):
                         _ios_collectors.append(collector)
 
                     # Pre-warm MFT scan cache so all artifact types use cached data.
@@ -4387,6 +4454,9 @@ class CollectionWorker(QThread):
                     device_artifacts = per_device_artifacts.get(device.device_id, [])
                     if not device_artifacts:
                         self.log_message.emit(f"[{device_name}] No applicable artifacts selected for this source.", False)
+                        if hasattr(collector, 'close') and not close_after_upload:
+                            collector.close()
+                        continue
 
                     for artifact_type in device_artifacts:
                         if self._cancelled:
@@ -4554,7 +4624,7 @@ class CollectionWorker(QThread):
                         )
 
                     # Cleanup collector
-                    if hasattr(collector, 'close'):
+                    if hasattr(collector, 'close') and not close_after_upload:
                         collector.close()
 
             else:
@@ -4751,18 +4821,16 @@ class CollectionWorker(QThread):
                         )
                         continue
 
-                    # Reuse hash from Stage 1 (already computed during collection).
-                    # Preferring the cached hash also avoids reopening the file,
-                    # which would fail if AV quarantined it mid-pipeline.
-                    original_hash = metadata.get('hash_sha256', '')
-                    if not original_hash:
-                        # Fallback: compute hash only if Stage 1 didn't provide it
-                        hash_result = hash_calculator.calculate_file_hash(file_path)
-                        original_hash = hash_result.sha256_hash
-
-                    original_size = actual_size
+                    hash_result = hash_calculator.calculate_file_hash(file_path)
+                    original_hash = hash_result.sha256_hash
+                    original_size = hash_result.file_size
 
                     # Add required metadata fields for server
+                    cached_hash = metadata.get('hash_sha256') or metadata.get('sha256')
+                    if cached_hash and cached_hash != original_hash:
+                        metadata['collector_reported_hash'] = cached_hash
+                    metadata['hash_sha256'] = original_hash
+                    metadata['sha256'] = original_hash
                     metadata['original_hash'] = original_hash
                     metadata['original_size'] = original_size
                     metadata['collection_time'] = datetime.utcnow().isoformat()
@@ -4773,10 +4841,20 @@ class CollectionWorker(QThread):
                         'original_hash': original_hash,
                     }
 
+                    upload_file_path = file_path
+                    if self._requires_stable_upload_copy(artifact_type, metadata):
+                        upload_file_path = self._stage_stable_upload_copy(
+                            output_dir=output_dir,
+                            file_path=file_path,
+                            artifact_type=artifact_type,
+                            metadata=metadata,
+                            original_hash=original_hash,
+                        )
+
                     queued = self._queue_prepared_upload(
                         encrypted_files,
                         upload_dedupe_index,
-                        file_path,
+                        upload_file_path,
                         artifact_type,
                         metadata,
                         original_hash,
