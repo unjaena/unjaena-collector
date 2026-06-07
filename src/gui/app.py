@@ -95,6 +95,7 @@ class CollectorWindow(QMainWindow):
         self._collection_starting = False
         self._collection_running = False
         self.request_signer = None
+        self._close_after_worker_finish = False
 
         # Unified device manager
         self.device_manager = UnifiedDeviceManager()
@@ -2910,30 +2911,62 @@ class CollectorWindow(QMainWindow):
         except Exception:
             pass  # Never block the app for update check failures
 
+    def _confirm_abort_collection(self, action: str = "cancel") -> bool:
+        """Ask before destructive collection abort/reset."""
+        if action == "close":
+            title = "Stop Collection and Close?"
+            action_text = "close the collector"
+        else:
+            title = "Cancel Collection?"
+            action_text = "cancel the collection"
+        confirm = QMessageBox.question(
+            self,
+            title,
+            "Collection is still running.\n\n"
+            "If you stop now, the server-side case work will be cancelled "
+            "and any partial uploaded data will be removed.\n\n"
+            f"Do you want to {action_text}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return confirm == QMessageBox.StandardButton.Yes
+
+    def _shutdown_ws_worker(self, reason: str = 'user_close'):
+        """Stop collector control WebSocket without touching evidence data."""
+        if hasattr(self, '_ws_worker') and self._ws_worker.isRunning():
+            try:
+                self._ws_worker.request_shutdown(reason)
+            except Exception:
+                pass
+            try:
+                self._ws_worker.stop()
+                self._ws_worker.wait(2000)
+            except Exception:
+                pass
+
     def _cancel_collection(self):
         """Cancel ongoing collection"""
         if hasattr(self, 'worker') and self.worker.isRunning():
-            confirm = QMessageBox.question(
-                self,
-                "Cancel Collection",
-                "Are you sure you want to cancel the collection?\n"
-                "All progress will be lost.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if confirm != QMessageBox.StandardButton.Yes:
+            try:
+                if self.worker.can_close_without_abort():
+                    QMessageBox.information(
+                        self,
+                        "Upload Complete",
+                        "All files have been uploaded. Server processing will continue; "
+                        "you can close this window without cancelling the case.",
+                    )
+                    return
+            except Exception:
+                pass
+            if not self._confirm_abort_collection("cancel"):
                 return
 
             self._close_ios_status()
             self.worker.cancel()
             self._log("Collection cancelled by user")
 
-            # [Security] Notify server of cancellation (clear Redis active collection state)
-            # Must run BEFORE _clear_session_data() since it needs session_id/collection_token
-            self._notify_server_cancel()
-
-            # Immediately clear session data so user must enter new token
-            # Prevents accidentally re-authenticating with the old (used) token
+            # Immediately clear session data so user must enter new token.
+            # worker.cancel() sends the destructive server abort exactly once.
             self._clear_session_data()
             self.token_status.setText("Cancelled - New token required")
             self.token_status.setStyleSheet("color: #ffc107;")
@@ -3137,6 +3170,7 @@ class CollectorWindow(QMainWindow):
 
     def _collection_finished(self, success: bool, message: str):
         """Handle collection completion"""
+        close_after_finish = getattr(self, '_close_after_worker_finish', False)
         self._collection_starting = False
         self._collection_running = False
 
@@ -3172,6 +3206,27 @@ class CollectorWindow(QMainWindow):
         # After collection complete/cancelled, must re-authenticate with new token
         self._clear_session_data()
         self._set_artifacts_waiting_for_source()
+
+        if close_after_finish:
+            if success:
+                self._collection_completed = True
+                self._log(f"Collection completed: {message}")
+                self._log("")
+                self._log("All evidence has been uploaded to the server.")
+                self._log("Return to your web browser and start AI Analysis.")
+                self._log("")
+                self._log("New token required for new collection.")
+            else:
+                self._log(f"Collection failed: {message}", error=True)
+                self._log("New token required for new collection.")
+            self.status_bar.showMessage("Ready - New token required")
+            self.token_status.setText("New token required")
+            self.token_status.setStyleSheet("color: #ffc107;")
+            self._shutdown_ws_worker('collection_finished')
+            app = QApplication.instance()
+            if app:
+                app.quit()
+            return
 
         if success:
             self._collection_completed = True
@@ -3370,32 +3425,37 @@ class CollectorWindow(QMainWindow):
             self.log_text.append(log_hint)
 
     def closeEvent(self, event):
-        """Cleanup on window close"""
-        # Stop device monitoring
-        self.device_manager.stop_monitoring()
-
-        # [2026-04-27 Track 3] Send graceful shutdown intent over WS first,
-        # then stop the worker thread. The server uses this to immediately
-        # release the case slot (instead of waiting for the server's idle timeout).
-        if hasattr(self, '_ws_worker') and self._ws_worker.isRunning():
-            try:
-                self._ws_worker.request_shutdown('user_close')
-            except Exception:
-                pass
-            try:
-                self._ws_worker.stop()
-                self._ws_worker.wait(2000)
-            except Exception:
-                pass
-
-        # Cancel ongoing collection
+        """Cleanup on window close."""
         if hasattr(self, 'worker') and self.worker.isRunning():
+            try:
+                if self.worker.can_close_without_abort():
+                    self._close_after_worker_finish = True
+                    self._close_ios_status()
+                    self.device_manager.stop_monitoring()
+                    self.hide()
+                    self._log(
+                        "Upload complete. Finalizing the server handoff before exiting."
+                    )
+                    event.ignore()
+                    return
+            except Exception:
+                pass
+
+            if not self._confirm_abort_collection("close"):
+                event.ignore()
+                return
+
+            self._close_ios_status()
+            self.device_manager.stop_monitoring()
+            self._shutdown_ws_worker('user_cancel_close')
             self.worker.cancel()
             self.worker.wait(3000)  # Wait max 3 seconds
-        elif not getattr(self, '_collection_completed', False):
-            # Notify server only if collection was NOT completed
-            # (closed after token auth but before collection start/finish)
-            self._notify_server_cancel()
+        else:
+            self.device_manager.stop_monitoring()
+            self._shutdown_ws_worker('user_close')
+            if not getattr(self, '_collection_completed', False):
+                # Closed after token auth but before collection start/finish.
+                self._notify_server_cancel()
 
         super().closeEvent(event)
 
@@ -3599,6 +3659,9 @@ class CollectionWorker(QThread):
         self.artifacts = artifacts
         self.consent_record = consent_record  # P0 legal requirement
         self._cancelled = False
+        self._upload_batch_complete = False
+        self._completion_signal_in_flight = False
+        self._server_completion_accepted = False
         self.config = config or {}
         self.request_signer = request_signer
         self.collection_profile_id = collection_profile_id
@@ -3777,6 +3840,9 @@ class CollectionWorker(QThread):
 
     def cancel(self):
         """Cancel the collection"""
+        if self._server_completion_accepted:
+            self._stop_heartbeat()
+            return
         self._cancelled = True
         self._stop_heartbeat()
         # Unblock password callback if waiting
@@ -3785,6 +3851,19 @@ class CollectionWorker(QThread):
             self._pw_event.set()
         # Send abort signal to server (clear active collection flag)
         self._abort_session()
+
+    def is_completion_signal_in_flight(self) -> bool:
+        return self._completion_signal_in_flight and not self._server_completion_accepted
+
+    def is_server_completion_accepted(self) -> bool:
+        return self._server_completion_accepted
+
+    def can_close_without_abort(self) -> bool:
+        return (
+            self._upload_batch_complete
+            or self._completion_signal_in_flight
+            or self._server_completion_accepted
+        )
 
     def _abort_session(self):
         """Notify server of session abort (clear active collection flag)"""
@@ -5021,11 +5100,13 @@ class CollectionWorker(QThread):
                 preparation_error_count=preparation_error_count,
                 ios_quality_error=ios_quality_error,
             )
+            self._upload_batch_complete = upload_batch_ok
             completion_signal_ok = False
 
             # === Send upload completion signal (pipeline state transition trigger) ===
             if upload_batch_ok:
                 try:
+                    self._completion_signal_in_flight = True
                     complete_path = f"/api/v1/collector/collection/end/{self.session_id}"
                     complete_url = f"{self.server_url}{complete_path}"
                     complete_headers = {
@@ -5046,11 +5127,14 @@ class CollectionWorker(QThread):
                     )
                     if complete_response.ok:
                         completion_signal_ok = True
+                        self._server_completion_accepted = True
                         self.log_message.emit("✓ Collection session completion signal sent", False)
                     else:
                         self.log_message.emit(f"⚠ Session completion signal failed: {complete_response.status_code}", True)
                 except Exception as e:
                     self.log_message.emit(f"⚠ Session completion signal error: {e}", True)
+                finally:
+                    self._completion_signal_in_flight = False
             elif success_count > 0:
                 self.log_message.emit(
                     "Collection completion signal was not sent because the upload batch "
