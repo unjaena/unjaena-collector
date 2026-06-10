@@ -2744,7 +2744,7 @@ class ArtifactCollector:
                 filename = entry.filename
                 filename_lower = filename.lower()
 
-                # Extension exclude filter supplied by the server profile
+                # Extension exclude filter (e.g., Telegram: skip media files)
                 if normalized_exclude_ext and '.' in filename_lower:
                     file_ext = '.' + filename_lower.rsplit('.', 1)[-1]
                     if file_ext in normalized_exclude_ext:
@@ -2829,7 +2829,7 @@ class ArtifactCollector:
         Digital forensics principles:
         - Apply extension filter (include or exclude)
         - Include deleted files
-        - Support user_path as string or list for server-profile layouts
+        - Support user_path as string or list (e.g., WeChat dual layout)
         """
         users_dir = Path(r'C:\Users')
 
@@ -2998,7 +2998,7 @@ class ArtifactCollector:
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         Collect artifacts from user profile directories using MFT.
-        Supports user_path as string or list for server-profile layouts.
+        Supports user_path as string or list (e.g., WeChat dual layout).
         """
         users_dir = Path(r'C:\Users')
 
@@ -3045,7 +3045,7 @@ class ArtifactCollector:
                                 if not any(file_name.endswith(ext.lower()) for ext in extensions):
                                     continue
 
-                            # Extension exclude filter supplied by the server profile
+                            # Extension exclude filter (e.g., Telegram media)
                             if exclude_ext_set and '.' in file_name:
                                 file_ext = '.' + file_name.rsplit('.', 1)[-1]
                                 if file_ext in exclude_ext_set:

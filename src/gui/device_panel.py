@@ -58,7 +58,7 @@ class DeviceListPanel(QWidget):
         super().__init__(parent)
         self.device_manager = device_manager
         self.device_checkboxes: Dict[str, QCheckBox] = {}
-        self._scan_seen = False
+        self.setAcceptDrops(True)
         self._setup_ui()
         self._connect_signals()
 
@@ -74,12 +74,32 @@ class DeviceListPanel(QWidget):
         header.setContentsMargins(0, 0, 0, 0)
 
         refresh_btn = QPushButton("Refresh")
-        refresh_btn.setFixedHeight(20)
+        refresh_btn.setFixedHeight(24)
         refresh_btn.clicked.connect(self._on_refresh_clicked)
         header.addWidget(refresh_btn)
 
-        add_btn = QPushButton("+ Add Image / Bundle")
-        add_btn.setFixedHeight(20)
+        add_btn = QPushButton("+ Add Disk Image / FFS")
+        add_btn.setFixedHeight(24)
+        add_btn.setObjectName("addEvidenceButton")
+        add_btn.setStyleSheet(f"""
+            QPushButton#addEvidenceButton {{
+                background-color: {COLORS['bg_elevated']};
+                border: 1px solid {COLORS['brand_primary']};
+                border-radius: 4px;
+                color: {COLORS['brand_accent']};
+                font-weight: 700;
+                padding: 4px 12px;
+            }}
+            QPushButton#addEvidenceButton:hover {{
+                background-color: rgba(212, 165, 116, 0.16);
+                border-color: {COLORS['brand_accent']};
+                color: {COLORS['text_primary']};
+            }}
+            QPushButton#addEvidenceButton:pressed {{
+                background-color: rgba(212, 165, 116, 0.24);
+                border-color: {COLORS['brand_secondary']};
+            }}
+        """)
         add_btn.clicked.connect(self._on_add_image_clicked)
         header.addWidget(add_btn)
 
@@ -93,22 +113,22 @@ class DeviceListPanel(QWidget):
 
         layout.addLayout(header)
 
+        self.evidence_hint = QLabel(
+            "Add E01/RAW/VDI/VMDK/VHD/DMG/QCOW2 or a mobile FFS ZIP/CLBX, "
+            "then select the evidence source below."
+        )
+        self.evidence_hint.setWordWrap(True)
+        self.evidence_hint.setStyleSheet(
+            f"color: {COLORS['text_tertiary']}; font-size: 9px;"
+        )
+        layout.addWidget(self.evidence_hint)
+
         # Device list (no scroll — typically 1-5 items)
         self.devices_container = QWidget()
         self.devices_layout = QVBoxLayout(self.devices_container)
         self.devices_layout.setContentsMargins(0, 0, 0, 0)
         self.devices_layout.setSpacing(2)
         layout.addWidget(self.devices_container)
-
-        self.empty_label = QLabel("Scanning local disks and connected devices...")
-        self.empty_label.setWordWrap(True)
-        self.empty_label.setStyleSheet(
-            f"color: {COLORS['text_secondary']}; font-size: 10px; "
-            f"background: {COLORS['bg_secondary']}; "
-            f"border: 1px dashed {COLORS['border_subtle']}; "
-            f"border-radius: 4px; padding: 8px;"
-        )
-        layout.addWidget(self.empty_label)
 
         # Mobile connection guide (always visible)
         self.mobile_guide = QLabel()
@@ -129,31 +149,6 @@ class DeviceListPanel(QWidget):
         self.device_manager.device_added.connect(self._on_device_added)
         self.device_manager.device_removed.connect(self._on_device_removed)
         self.device_manager.device_updated.connect(self._on_device_updated)
-        self.device_manager.scan_started.connect(self._on_scan_started)
-        self.device_manager.scan_completed.connect(self._on_scan_completed)
-
-    def _on_scan_started(self):
-        self._update_empty_state(scanning=True)
-
-    def _on_scan_completed(self):
-        self._scan_seen = True
-        self._update_empty_state(scanning=False)
-        self._update_mobile_guide()
-
-    def _update_empty_state(self, scanning: bool = False):
-        if self.device_checkboxes:
-            self.empty_label.setVisible(False)
-            return
-        self.empty_label.setVisible(True)
-        if scanning and not self._scan_seen:
-            self.empty_label.setText("Scanning local disks and connected devices...")
-        elif scanning:
-            self.empty_label.setText("Refreshing connected evidence sources...")
-        else:
-            self.empty_label.setText(
-                "No local evidence source detected. Run the collector as administrator "
-                "for physical disks, connect a USB/mobile device, or use + Add Image / Bundle."
-            )
 
     # =========================================================================
     # Mobile Connection Guide
@@ -242,7 +237,7 @@ class DeviceListPanel(QWidget):
         # --- E01/RAW hint ---
         sections.append(
             f"<span style='color:{dim};'>"
-            "● <b>Images/Bundles</b>: Use <b>+ Add Image / Bundle</b> above"
+            "● <b>E01/RAW</b>: Use <b>+ Add E01/RAW</b> button above"
             "</span>"
         )
 
@@ -300,7 +295,6 @@ class DeviceListPanel(QWidget):
         self.device_checkboxes[device.device_id] = cb
         self.devices_layout.addWidget(cb)
         self._update_summary()
-        self._update_empty_state(scanning=False)
         self._update_mobile_guide()
 
     def _on_device_removed(self, device_id: str):
@@ -310,7 +304,6 @@ class DeviceListPanel(QWidget):
             self.devices_layout.removeWidget(cb)
             cb.deleteLater()
             self._update_summary()
-            self._update_empty_state(scanning=False)
             self._update_mobile_guide()
 
     def _on_device_updated(self, device: UnifiedDeviceInfo):
@@ -330,14 +323,13 @@ class DeviceListPanel(QWidget):
     def _on_refresh_clicked(self):
         """Refresh"""
         self.device_manager.refresh()
-        self._update_empty_state(scanning=True)
         self._update_mobile_guide()
 
     def _on_add_image_clicked(self):
         """Add image or mobile FFS bundle"""
         file_path, selected_filter = QFileDialog.getOpenFileName(
             self,
-            "Select Forensic Image or Mobile Bundle",
+            "Select Disk Image or Mobile FFS Bundle",
             "",
             "Forensic Images (*.E01 *.e01 *.Ex01 *.ex01 *.L01 *.l01 *.Lx01 *.lx01 *.S01 *.s01 *.dd *.raw *.img *.bin *.000 *.001 *.vmdk *.vhd *.vhdx *.qcow2 *.vdi *.dmg *.DMG *.ntfs *.fat *.fat12 *.fat16 *.fat32 *.exfat *.ext *.ext2 *.ext3 *.ext4 *.xfs *.btrfs *.hfs *.hfsx *.apfs *.ufs)"
             ";;Mobile FFS Bundle (*.zip *.clbx)"
@@ -346,6 +338,10 @@ class DeviceListPanel(QWidget):
         if not file_path:
             return
 
+        self._register_evidence_file(file_path)
+
+    def _register_evidence_file(self, file_path: str):
+        """Register a supported image or mobile FFS bundle."""
         is_mobile_bundle = file_path.lower().endswith((".zip", ".clbx"))
         if is_mobile_bundle:
             self._register_ffs_bundle(file_path)
@@ -353,6 +349,43 @@ class DeviceListPanel(QWidget):
             device = self.device_manager.add_image_file(file_path)
             if device:
                 self.image_file_requested.emit()
+
+    def dragEnterEvent(self, event):
+        """Accept supported evidence files dropped onto the source panel."""
+        if self._event_has_supported_file(event):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
+        """Register a dropped evidence file."""
+        urls = event.mimeData().urls()
+        if not urls:
+            event.ignore()
+            return
+        file_path = urls[0].toLocalFile()
+        if not self._is_supported_evidence_file(file_path):
+            event.ignore()
+            return
+        self._register_evidence_file(file_path)
+        event.acceptProposedAction()
+
+    def _event_has_supported_file(self, event) -> bool:
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        return bool(urls and self._is_supported_evidence_file(urls[0].toLocalFile()))
+
+    @staticmethod
+    def _is_supported_evidence_file(file_path: str) -> bool:
+        lower = file_path.lower()
+        suffixes = (
+            ".e01", ".ex01", ".l01", ".lx01", ".s01",
+            ".dd", ".raw", ".img", ".bin", ".000", ".001",
+            ".vmdk", ".vhd", ".vhdx", ".qcow2", ".vdi", ".dmg",
+            ".ntfs", ".fat", ".fat12", ".fat16", ".fat32", ".exfat",
+            ".ext", ".ext2", ".ext3", ".ext4", ".xfs", ".btrfs",
+            ".hfs", ".hfsx", ".apfs", ".ufs", ".zip", ".clbx",
+        )
+        return lower.endswith(suffixes)
 
     def _register_ffs_bundle(self, file_path: str) -> None:
         """Register a mobile FFS bundle off the GUI thread (large zip
@@ -434,7 +467,6 @@ class DeviceListPanel(QWidget):
         """Device display label"""
         type_icons = {
             DeviceType.WINDOWS_PHYSICAL_DISK: "💿",
-            DeviceType.WINDOWS_LOGICAL_DRIVE: "🗄",
             DeviceType.MACOS_LOCAL_SYSTEM: "🖥",
             DeviceType.LINUX_LOCAL_SYSTEM: "🖥",
             DeviceType.E01_IMAGE: "📀",
@@ -457,13 +489,6 @@ class DeviceListPanel(QWidget):
             if all_volumes:
                 volumes_str = ', '.join(f"{v}:" for v in all_volumes)
                 label = f"{label} [{volumes_str}]"
-
-        if device.device_type == DeviceType.WINDOWS_LOGICAL_DRIVE:
-            fs_type = device.metadata.get('filesystem') or ''
-            drive_type = device.metadata.get('drive_type') or ''
-            details = ' / '.join(part for part in (drive_type, fs_type) if part)
-            if details:
-                label = f"{label} [{details}]"
 
         if device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
                                         DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
@@ -524,15 +549,6 @@ class DeviceListPanel(QWidget):
             fs_type = device.metadata.get('filesystem_type', 'Unknown')
             lines.append(f"Filesystem: {fs_type}")
             lines.append(f"Detected OS: {detected_os.upper()}")
-
-        if device.device_type == DeviceType.WINDOWS_LOGICAL_DRIVE:
-            m = device.metadata
-            lines.append(f"Volume: {m.get('volume', '?')}:")
-            lines.append(f"Drive type: {m.get('drive_type', 'Unknown')}")
-            lines.append(f"Filesystem: {m.get('filesystem', 'Unknown')}")
-            if m.get('volume_label'):
-                lines.append(f"Label: {m.get('volume_label')}")
-            lines.append("Collection: Windows local filesystem / MFT where accessible")
 
         if device.device_type == DeviceType.ANDROID_DEVICE:
             m = device.metadata

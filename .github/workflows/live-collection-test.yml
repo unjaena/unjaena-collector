@@ -8,7 +8,6 @@ on:
       - 'src/**'
       - 'requirements/**'
       - 'tools/public_preflight.py'
-      - 'tools/gui_workflow_smoke.py'
       - 'tools/encase/**'
       - 'README.md'
       - 'SECURITY.md'
@@ -31,10 +30,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - name: Install GUI system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libxcb-cursor0 libxcb-xinerama0
       - name: Install runtime dependencies
         run: |
           pip install -r requirements/base.txt
@@ -42,9 +37,7 @@ jobs:
       - name: Public preflight
         run: python tools/public_preflight.py
       - name: Compile source
-        run: PYTHONPATH=src python -m compileall -q src build.py tools/public_preflight.py tools/gui_workflow_smoke.py
-      - name: GUI workflow smoke
-        run: QT_QPA_PLATFORM=offscreen PYTHONPATH=src python tools/gui_workflow_smoke.py
+        run: PYTHONPATH=src python -m compileall -q src build.py tools/public_preflight.py
       - name: Import upload stack
         run: |
           PYTHONPATH=src python - <<'PY'

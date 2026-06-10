@@ -379,7 +379,10 @@ class macOSCollector:
     # ==================================================================
     # Process Memory Dump
     # ==================================================================
-    MEMDUMP_TARGET_PROCESSES = {}
+    MEMDUMP_TARGET_PROCESSES = {
+        'WeChat': 'wechat',
+        'LINE': 'line',
+    }
 
     def dump_process_memory(
         self,
@@ -390,7 +393,7 @@ class macOSCollector:
         Dump process memory for specified running applications.
 
         Uses macOS-native tools (vmmap + memory read via lldb) to create
-        memory dumps of server-authorized running processes. Requires root/sudo.
+        memory dumps of running messenger processes. Requires root/sudo.
 
         This method ONLY collects raw memory. No protected application-data
         interpretation is performed here.
@@ -398,7 +401,7 @@ class macOSCollector:
         Args:
             output_dir: Directory for dump files. Defaults to the platform temp directory.
             target_processes: Dict of {process_name: output_label}
-                             (default: no public built-in targets)
+                             (default: MEMDUMP_TARGET_PROCESSES)
 
         Returns:
             List of dicts with dump results (path, pid, size, success)
@@ -445,8 +448,8 @@ class macOSCollector:
         4. Write concatenated regions to output file
 
         Args:
-            process_name: Name of the server-authorized process
-            output_label: Server-authorized label for the output file
+            process_name: Name of the process (e.g., 'WeChat')
+            output_label: Label for output file (e.g., 'wechat')
             dump_dir: Output directory
 
         Returns:

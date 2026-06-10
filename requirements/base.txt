@@ -1,7 +1,5 @@
 # Forensic Collector - Cross-platform base dependencies
-# Project license: AGPL-3.0-or-later. These dependencies include GPL, AGPL,
-# LGPL, MPL, BSD, MIT, Apache, PSF, and public-domain components. Review
-# LICENSES.md and exact package metadata before each public release.
+# License: AGPL-3.0 (due to pymobiledevice3 dependency)
 #
 # IMPORTANT: Every package referenced in ForensicCollector.spec (hiddenimports
 # + collect_packages) MUST appear here or in a platform file.  If a package is
@@ -14,17 +12,17 @@
 # risks. CI/CD release builds should use the lock file for deterministic output.
 # To update the lock file, install from this file first, then freeze.
 
-# -- GUI ----------------------------------------------------------------------
+# ── GUI ──────────────────────────────────────────────────────────────────────
 PyQt6>=6.6.0,<6.8.0            # 6.8+ Qt6Core.dll crashes on some Windows 11 (c0000409)
 
-# -- HTTP Client --------------------------------------------------------------
+# ── HTTP Client ──────────────────────────────────────────────────────────────
 requests>=2.31.0
 urllib3>=1.21.1                # requests dependency (native PYD in spec)
 charset-normalizer>=2.0       # requests dependency (native PYD in spec)
 idna>=2.5                     # requests dependency
 certifi>=2017.4.17            # SSL CA certificates (used by token_validator.py)
 
-# -- Async HTTP + WebSocket ---------------------------------------------------
+# ── Async HTTP + WebSocket ───────────────────────────────────────────────────
 aiohttp>=3.9.0
 aiosignal>=1.4.0              # aiohttp dependency
 aiohappyeyeballs>=2.5.0       # aiohttp dependency
@@ -35,36 +33,36 @@ propcache>=0.2.0              # aiohttp dependency (native PYD)
 attrs>=17.3.0                 # aiohttp dependency
 websockets>=12.0
 
-# -- Crypto -------------------------------------------------------------------
+# ── Crypto ───────────────────────────────────────────────────────────────────
 cryptography>=41.0.1          # secure_upload.py (AESGCM, HKDF)
 rsa>=4.0                      # adb-shell auth + pymobiledevice3 dep
 pycryptodome>=3.20.0          # iphone-backup-decrypt dependency (imports as Crypto)
 
 
-# -- Disk encryption (BitLocker + LUKS) ---------------------------------------
+# ── Disk encryption (BitLocker + LUKS) ───────────────────────────────────────
 dissect.fve>=4.2              # BitLocker/LUKS; dissect.apfs requires >=4.2
 dissect.hypervisor>=3.14      # VMDK/VHD/VHDX/QCOW2/VDI disk images
 
-# -- Filesystem parsing (pure Python) ----------------------------------------
+# ── Filesystem parsing (pure Python) ────────────────────────────────────────
 dissect.extfs>=3.12           # ext2/ext3/ext4
 dissect.fat>=3.12             # FAT12/FAT16/FAT32/exFAT
 dissect.xfs>=3.12             # XFS
 dissect.btrfs>=1.8            # Btrfs (1.x series on PyPI)
 dissect.ffs>=3.12             # UFS/FFS
-dissect.apfs>=1.0             # APFS (macOS) - PyPI versions are 0.x/1.x, NOT 3.x
+dissect.apfs>=1.0             # APFS (macOS) — PyPI versions are 0.x/1.x, NOT 3.x
 dissect.ntfs>=3.12            # NTFS
 dissect.volume>=3.2           # Volume/partition parsing (spec hidden import)
 
-# -- dissect shared dependencies ----------------------------------------------
+# ── dissect shared dependencies ──────────────────────────────────────────────
 dissect.cstruct>=4.0          # Binary structure parsing; all dissect pkgs require >=4
 dissect.util>=3.23            # Utility functions; dissect.apfs requires >=3.23
 asn1crypto>=1.5.0             # ASN.1 parsing (dissect.apfs dep)
 
-# -- Forensic filesystem (native) --------------------------------------------
+# ── Forensic filesystem (native) ────────────────────────────────────────────
 lzfse>=0.4.0                  # macOS APFS/LZFSE decompression (disk_backends.py)
 libfshfs-python>=20240221     # HFS+ filesystem parsing (imports as pyfshfs)
 
-# -- pymobiledevice3 + transitive deps ---------------------------------------
+# ── pymobiledevice3 + transitive deps ───────────────────────────────────────
 # pymobiledevice3 has 30+ dependencies. Most are installed transitively, but
 # PyInstaller collect_all/hiddenimports requires them to be physically present.
 # Pinning them here guarantees they survive pip resolver changes.
@@ -90,5 +88,5 @@ click>=8.0.0                  # CLI framework
 developer-disk-image>=0.0.2   # iOS developer disk image
 ipsw-parser>=1.5.0            # iOS IPSW firmware parsing
 
-# -- Utilities ----------------------------------------------------------------
+# ── Utilities ────────────────────────────────────────────────────────────────
 python-dateutil>=2.8.0        # Date parsing (may be used by pymobiledevice3)

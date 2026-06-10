@@ -33,6 +33,7 @@ from collectors.base_mft_collector import (
     DOCUMENT_EXTENSIONS,
     EMAIL_EXTENSIONS,
     IMAGE_EXTENSIONS,
+    SOURCE_CODE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
 

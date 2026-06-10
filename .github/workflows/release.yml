@@ -36,9 +36,6 @@ jobs:
           pip install -r requirements/windows.txt
           pip install pyinstaller
 
-      - name: Run release gate
-        run: python tools/release_gate.py --actual-local
-
       - name: Prepare config with version
         shell: bash
         env:
@@ -55,7 +52,7 @@ jobs:
                   c['server_url'] = server_url
                   c['ws_url'] = ws_url
           else:
-              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'unJaena Collector'}
+              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'Digital Intelligence Collector'}
           c['version'] = '${VERSION}'
           with open('config.production.json', 'w', encoding='utf-8') as f: json.dump(c, f, indent=4)
           print(f'[CONFIG] version={c[\"version\"]}, server_url={c.get(\"server_url\",\"N/A\")}')
@@ -80,13 +77,13 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#collector-v}"
-          mv unJaena-Collector.exe "unJaena-Collector-${VERSION}-windows-x64.exe"
+          mv IntelligenceCollector.exe "IntelligenceCollector-${VERSION}-windows-x64.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: windows-x64
-          path: dist/unJaena-Collector-*-windows-x64.exe
+          path: dist/IntelligenceCollector-*-windows-x64.exe
 
   # =========================================================================
   # Linux x64  -  .tar.gz (PyInstaller onefile)
@@ -104,16 +101,13 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libusb-1.0-0-dev libxcb-cursor0 libxcb-xinerama0 libgl1 libegl1
+          sudo apt-get install -y libusb-1.0-0-dev libxcb-cursor0 libxcb-xinerama0 libgl1
 
       - name: Install Python dependencies
         run: |
           pip install -r requirements/base.txt
           pip install -r requirements/linux.txt
           pip install pyinstaller
-
-      - name: Run release gate
-        run: python tools/release_gate.py --actual-local
 
       - name: Prepare config with version
         env:
@@ -130,7 +124,7 @@ jobs:
                   c['server_url'] = server_url
                   c['ws_url'] = ws_url
           else:
-              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'unJaena Collector'}
+              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'Digital Intelligence Collector'}
           c['version'] = '${VERSION}'
           with open('config.production.json', 'w', encoding='utf-8') as f: json.dump(c, f, indent=4)
           print(f'[CONFIG] version={c[\"version\"]}, server_url={c.get(\"server_url\",\"N/A\")}')
@@ -143,14 +137,14 @@ jobs:
         working-directory: dist
         run: |
           VERSION="${GITHUB_REF_NAME#collector-v}"
-          chmod +x unjaena-collector
-          tar czf "unJaena-Collector-${VERSION}-linux-x64.tar.gz" unjaena-collector
+          chmod +x IntelligenceCollector
+          tar czf "IntelligenceCollector-${VERSION}-linux-x64.tar.gz" IntelligenceCollector
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: linux-x64
-          path: dist/unJaena-Collector-*-linux-x64.tar.gz
+          path: dist/IntelligenceCollector-*-linux-x64.tar.gz
 
   # =========================================================================
   # macOS dual-arch (Apple Silicon + Intel)  -  two .dmg per release
@@ -181,13 +175,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install libusb || true
+          brew install libusb create-dmg || true
           pip install -r requirements/base.txt
           pip install -r requirements/macos.txt
           pip install pyinstaller
-
-      - name: Run release gate
-        run: python tools/release_gate.py --actual-local
 
       - name: Prepare config with version
         env:
@@ -204,7 +195,7 @@ jobs:
                   c['server_url'] = server_url
                   c['ws_url'] = ws_url
           else:
-              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'unJaena Collector'}
+              c = {'server_url':server_url,'ws_url':ws_url,'dev_mode':False,'allow_insecure':False,'app_name':'Digital Intelligence Collector'}
           c['version'] = '${VERSION}'
           with open('config.production.json', 'w', encoding='utf-8') as f: json.dump(c, f, indent=4)
           print(f'[CONFIG] version={c[\"version\"]}, server_url={c.get(\"server_url\",\"N/A\")}')
@@ -242,15 +233,15 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
-          if [ -d "unJaena Collector.app" ]; then
-            echo "[SIGN] Signing unJaena Collector.app..."
+          if [ -d "IntelligenceCollector.app" ]; then
+            echo "[SIGN] Signing IntelligenceCollector.app..."
             codesign --deep --force --options runtime \
               --entitlements ../entitlements.plist \
               --sign "$MACOS_SIGNING_IDENTITY" \
-              "unJaena Collector.app"
+              IntelligenceCollector.app
 
             echo "[SIGN] Verifying signature..."
-            codesign --verify --deep --strict --verbose=2 "unJaena Collector.app"
+            codesign --verify --deep --strict --verbose=2 IntelligenceCollector.app
             echo "[SIGN] Done."
           else
             echo "[SIGN] No .app bundle found, skipping signing"
@@ -262,32 +253,25 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           VERSION="${GITHUB_REF_NAME#collector-v}"
-          DMG_NAME="unJaena-Collector-${VERSION}-macos-${ARCH}.dmg"
+          DMG_NAME="IntelligenceCollector-${VERSION}-macos-${ARCH}.dmg"
 
-          if [ -d "unJaena Collector.app" ]; then
-            # hdiutil can intermittently return "Resource busy" on hosted
-            # macOS Intel runners immediately after signing large PyQt apps.
-            # Retry after flushing and clearing stale diskimages-helper state
-            # instead of publishing a release without the Intel DMG.
-            rm -f "${DMG_NAME}"
-            for attempt in 1 2 3; do
-              echo "[DMG] Creating ${DMG_NAME} (attempt ${attempt}/3)"
-              if hdiutil create -volname "unJaena Collector" \
-                -srcfolder "unJaena Collector.app" \
-                -ov -format UDZO \
-                "${DMG_NAME}"; then
-                break
-              fi
-              echo "[DMG] hdiutil create failed; waiting before retry"
-              sync || true
-              pkill -f diskimages-helper || true
-              sleep $((attempt * 10))
-              rm -f "${DMG_NAME}"
-            done
-            test -f "${DMG_NAME}"
+          if [ -d "IntelligenceCollector.app" ]; then
+            create-dmg \
+              --volname "Intelligence Collector" \
+              --window-size 600 400 \
+              --icon-size 100 \
+              --icon "IntelligenceCollector.app" 175 190 \
+              --app-drop-link 425 190 \
+              --no-internet-enable \
+              "${DMG_NAME}" \
+              "IntelligenceCollector.app" 2>/dev/null || \
+            hdiutil create -volname "IntelligenceCollector" \
+              -srcfolder IntelligenceCollector.app \
+              -ov -format UDZO \
+              "${DMG_NAME}"
           else
-            chmod +x unjaena-collector
-            tar czf "unJaena-Collector-${VERSION}-macos-${ARCH}.tar.gz" unjaena-collector
+            chmod +x IntelligenceCollector
+            tar czf "IntelligenceCollector-${VERSION}-macos-${ARCH}.tar.gz" IntelligenceCollector
           fi
 
       # Split notarization into submit + poll + staple so the job survives
@@ -304,7 +288,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ARCH: ${{ matrix.arch }}
         run: |
-          DMG_FILE=$(ls unJaena-Collector-*-macos-${ARCH}.dmg 2>/dev/null | head -1)
+          DMG_FILE=$(ls IntelligenceCollector-*-macos-${ARCH}.dmg 2>/dev/null | head -1)
           if [ -z "$DMG_FILE" ] || [ -z "$APPLE_ID" ]; then
             echo "[NOTARIZE] Skipped (no DMG or credentials missing)"
             echo "dmg_file=" >> "$GITHUB_OUTPUT"
@@ -391,8 +375,8 @@ jobs:
         with:
           name: macos-${{ matrix.arch }}
           path: |
-            dist/unJaena-Collector-*-macos-${{ matrix.arch }}.dmg
-            dist/unJaena-Collector-*-macos-${{ matrix.arch }}.tar.gz
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.dmg
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.tar.gz
 
       # Unstapled DMG + submission id  -  consumed by notary-staple.yml.
       # Kept out of the GitHub Release so users never download an unsigned
@@ -409,8 +393,8 @@ jobs:
           name: macos-${{ matrix.arch }}-pending
           retention-days: 14
           path: |
-            dist/unJaena-Collector-*-macos-${{ matrix.arch }}.dmg
-            dist/unJaena-Collector-*-macos-${{ matrix.arch }}.tar.gz
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.dmg
+            dist/IntelligenceCollector-*-macos-${{ matrix.arch }}.tar.gz
             dist/submission_id.txt
 
   # =========================================================================
@@ -446,7 +430,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          name: "unJaena Collector ${{ github.ref_name }}"
+          name: "Intelligence Collector ${{ github.ref_name }}"
           generate_release_notes: true
           files: |
             release-assets/**/*.exe

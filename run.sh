@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "============================================"
-echo "  unJaena Collector - Linux/macOS"
+echo "  Digital Forensics Collector - Linux/macOS"
 echo "============================================"
 echo
 

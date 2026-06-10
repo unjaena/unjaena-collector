@@ -71,6 +71,26 @@ except ImportError:
 SERVER_TO_COLLECTOR_MAPPING = {}
 
 
+class TokenValidationWorker(QThread):
+    """Run token validation away from the UI thread."""
+
+    result_ready = pyqtSignal(object)
+    error_ready = pyqtSignal(str)
+
+    def __init__(self, server_url: str, token: str):
+        super().__init__()
+        self.server_url = server_url
+        self.token = token
+
+    def run(self):
+        try:
+            validator = TokenValidator(self.server_url)
+            self.result_ready.emit(validator.validate(self.token))
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Token validation worker failed")
+            self.error_ready.emit(str(exc) or exc.__class__.__name__)
+        finally:
+            self.token = ""
 
 
 class CollectorWindow(QMainWindow):
@@ -86,15 +106,14 @@ class CollectorWindow(QMainWindow):
         self.server_url = None
         self.ws_url = None
         self.collection_profile_id = None
-        self.collection_profile_signing_key = None
         self.collection_profile_targets = []
         self.profile_artifact_types = set()
         self.allowed_artifacts = []
         self._allow_all_artifacts = False
         self._mapped_allowed_artifacts = set()
-        self._collection_starting = False
-        self._collection_running = False
         self.request_signer = None
+        self._token_validation_worker = None
+        self._token_validation_in_progress = False
         self._close_after_worker_finish = False
 
         # Unified device manager
@@ -194,29 +213,25 @@ class CollectorWindow(QMainWindow):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
 
-        # Step 0: Device Selection
-        device_group = QGroupBox("0. Select Devices")
-        self.device_group = device_group
-        device_layout = QVBoxLayout(device_group)
-        device_layout.setContentsMargins(6, 14, 6, 6)
-        device_layout.setSpacing(4)
-
-        self.device_panel = DeviceListPanel(self.device_manager)
-        self.device_manager.selection_changed.connect(self._on_device_selection_changed)
-        self.device_panel.image_file_requested.connect(self._on_image_file_added)
-        device_layout.addWidget(self.device_panel)
-
-        layout.addWidget(device_group)
+        # Quick start status
+        quick_group = QGroupBox("Quick Start")
+        quick_layout = QVBoxLayout(quick_group)
+        quick_layout.setContentsMargins(6, 14, 6, 6)
+        quick_layout.setSpacing(4)
+        self.workflow_status = QLabel("")
+        self.workflow_status.setWordWrap(True)
+        self.workflow_status.setTextFormat(Qt.TextFormat.RichText)
+        quick_layout.addWidget(self.workflow_status)
+        layout.addWidget(quick_group)
 
         # Step 1: Token
-        token_group = QGroupBox("1. Session Token")
-        self.token_group = token_group
+        token_group = QGroupBox("1. Authenticate")
         token_layout = QVBoxLayout(token_group)
         token_layout.setContentsMargins(6, 14, 6, 6)
         token_layout.setSpacing(4)
 
         self.token_input = QLineEdit()
-        self.token_input.setPlaceholderText("Paste your session token here")
+        self.token_input.setPlaceholderText("Paste the session token from the web case")
         self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
         token_layout.addWidget(self.token_input)
 
@@ -226,6 +241,31 @@ class CollectorWindow(QMainWindow):
         self.show_token_btn.setCheckable(True)
         self.show_token_btn.clicked.connect(self._toggle_token_visibility)
         self.validate_btn = QPushButton("Validate Token")
+        self.validate_btn.setObjectName("validateTokenButton")
+        self.validate_btn.setStyleSheet(f"""
+            QPushButton#validateTokenButton {{
+                background-color: {COLORS['bg_elevated']};
+                border: 1px solid {COLORS['brand_primary']};
+                border-radius: 4px;
+                color: {COLORS['brand_accent']};
+                font-weight: 700;
+                padding: 4px 12px;
+            }}
+            QPushButton#validateTokenButton:hover:!disabled {{
+                background-color: rgba(212, 165, 116, 0.16);
+                border-color: {COLORS['brand_accent']};
+                color: {COLORS['text_primary']};
+            }}
+            QPushButton#validateTokenButton:pressed {{
+                background-color: rgba(212, 165, 116, 0.24);
+                border-color: {COLORS['brand_secondary']};
+            }}
+            QPushButton#validateTokenButton:disabled {{
+                background-color: {COLORS['bg_tertiary']};
+                border: 1px solid {COLORS['border_muted']};
+                color: {COLORS['text_tertiary']};
+            }}
+        """)
         self.validate_btn.clicked.connect(self._validate_token)
         token_btn_layout.addWidget(self.show_token_btn)
         token_btn_layout.addWidget(self.validate_btn)
@@ -234,14 +274,47 @@ class CollectorWindow(QMainWindow):
         self.token_status = QLabel("")
         token_layout.addWidget(self.token_status)
 
+        self.token_progress = QProgressBar()
+        self.token_progress.setRange(0, 0)
+        self.token_progress.setTextVisible(False)
+        self.token_progress.setFixedHeight(6)
+        self.token_progress.setVisible(False)
+        token_layout.addWidget(self.token_progress)
+
         layout.addWidget(token_group)
 
-        # Step 2: Artifacts (tab-based)
-        artifacts_group = QGroupBox("2. Select Artifacts")
-        self.artifacts_group = artifacts_group
+        # Step 2: Evidence source
+        device_group = QGroupBox("2. Select Evidence Source")
+        device_layout = QVBoxLayout(device_group)
+        device_layout.setContentsMargins(6, 14, 6, 6)
+        device_layout.setSpacing(4)
+
+        self.device_panel = DeviceListPanel(self.device_manager)
+        self.device_panel.selection_changed.connect(self._on_device_selection_changed)
+        self.device_panel.image_file_requested.connect(self._on_image_file_added)
+        device_layout.addWidget(self.device_panel)
+
+        layout.addWidget(device_group)
+
+        # Step 3: Artifacts (tab-based)
+        artifacts_group = QGroupBox("3. Collection Scope")
         artifacts_outer_layout = QVBoxLayout(artifacts_group)
         artifacts_outer_layout.setContentsMargins(6, 14, 6, 6)
         artifacts_outer_layout.setSpacing(4)
+
+        self.beginner_scope_label = QLabel(
+            "Recommended artifacts are selected after authentication."
+        )
+        self.beginner_scope_label.setWordWrap(True)
+        self.beginner_scope_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px;"
+        )
+        artifacts_outer_layout.addWidget(self.beginner_scope_label)
+
+        self.advanced_scope_cb = QCheckBox("Show advanced artifact options")
+        self.advanced_scope_cb.setChecked(False)
+        self.advanced_scope_cb.stateChanged.connect(self._toggle_advanced_scope)
+        artifacts_outer_layout.addWidget(self.advanced_scope_cb)
 
         # Create tab widget
         self.artifacts_tab = QTabWidget()
@@ -273,36 +346,28 @@ class CollectorWindow(QMainWindow):
         self.artifact_checks: Dict[str, QCheckBox] = {}
 
         self._build_artifact_tabs()
+        self.artifacts_tab.setVisible(False)
 
         artifacts_outer_layout.addWidget(self.artifacts_tab)
-
-        self.source_scope_label = QLabel("Select an evidence source to load the applicable collection scope.")
-        self.source_scope_label.setWordWrap(True)
-        self.source_scope_label.setStyleSheet(
-            f"background: {COLORS['bg_secondary']}; color: {COLORS['text_tertiary']}; "
-            f"font-size: 9px; border-radius: 4px; padding: 4px 8px;"
-        )
-        artifacts_outer_layout.addWidget(self.source_scope_label)
 
         # Select All + Include Deleted option
         select_all_layout = QHBoxLayout()
         self.select_all_cb = QCheckBox("Select All (current tab)")
-        self.select_all_cb.setEnabled(False)
-        self.select_all_cb.setToolTip("Authenticate a token and select an evidence source first")
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
+        self.select_all_cb.setVisible(False)
         select_all_layout.addWidget(self.select_all_cb)
         select_all_layout.addStretch()
         self.include_deleted_cb = QCheckBox("Include deleted files")
         self.include_deleted_cb.setChecked(True)
-        self.include_deleted_cb.setEnabled(False)
-        self.include_deleted_cb.setToolTip("Recover and collect deleted files from MFT after an evidence source is selected")
+        self.include_deleted_cb.setToolTip("Recover and collect deleted files from MFT (slower but more thorough)")
+        self.include_deleted_cb.stateChanged.connect(self._on_artifact_selection_changed)
         select_all_layout.addWidget(self.include_deleted_cb)
         artifacts_outer_layout.addLayout(select_all_layout)
 
         layout.addWidget(artifacts_group)
 
-        # Step 3: Progress (stage-based progress display)
-        progress_group = QGroupBox("3. Collection Progress")
+        # Step 4: Progress (stage-based progress display)
+        progress_group = QGroupBox("4. Collection Progress")
         progress_outer_layout = QVBoxLayout(progress_group)
         progress_outer_layout.setContentsMargins(6, 14, 6, 6)
         progress_outer_layout.setSpacing(4)
@@ -439,6 +504,9 @@ class CollectorWindow(QMainWindow):
         # Fill remaining space with stretch
         layout.addStretch()
 
+        self._update_scope_summary()
+        self._update_workflow_status()
+
         # Set panel to scroll area
         scroll_area.setWidget(panel)
         return scroll_area
@@ -489,14 +557,104 @@ class CollectorWindow(QMainWindow):
         if self.artifacts_tab.count():
             self.artifacts_tab.setCurrentIndex(min(current_index, self.artifacts_tab.count() - 1))
 
-        self._wire_artifact_checkbox_state_handlers()
-
-    def _wire_artifact_checkbox_state_handlers(self) -> None:
         for cb in self.artifact_checks.values():
             cb.stateChanged.connect(self._on_artifact_selection_changed)
 
-    def _on_artifact_selection_changed(self, _state: int = 0) -> None:
+    def _toggle_advanced_scope(self, state):
+        """Show or hide detailed artifact controls."""
+        visible = state == Qt.CheckState.Checked.value
+        self.artifacts_tab.setVisible(visible)
+        self.select_all_cb.setVisible(visible)
+        self._update_scope_summary()
+        self._update_workflow_status()
+
+    def _on_artifact_selection_changed(self, *_args):
+        """Keep beginner summaries and start button in sync."""
+        self._update_scope_summary()
         self._update_collect_button_state()
+
+    def _update_scope_summary(self):
+        """Update the compact collection scope summary."""
+        if not hasattr(self, 'beginner_scope_label'):
+            return
+
+        checked = sum(1 for cb in self.artifact_checks.values() if cb.isChecked())
+        enabled = sum(1 for cb in self.artifact_checks.values() if cb.isEnabled())
+        deleted_text = (
+            "Deleted files included where supported."
+            if getattr(self, 'include_deleted_cb', None) and self.include_deleted_cb.isChecked()
+            else "Deleted files excluded."
+        )
+
+        if not self.collection_token:
+            text = (
+                "Authenticate first. The server profile will enable the allowed "
+                "artifact set automatically."
+            )
+        elif checked:
+            text = (
+                f"Recommended scope ready: {checked} selected artifact type(s)"
+                f" out of {enabled} allowed. {deleted_text}"
+            )
+        else:
+            text = (
+                f"No artifact type selected. Open advanced options to choose artifacts. "
+                f"{enabled} artifact type(s) are allowed."
+            )
+        self.beginner_scope_label.setText(text)
+
+    def _format_workflow_step(self, number: int, title: str, done: bool, detail: str) -> str:
+        color = COLORS['success'] if done else COLORS['text_tertiary']
+        state = "Done" if done else "Needed"
+        return (
+            f"<span style='color:{color};'><b>{number}. {title}</b> - {state}</span>"
+            f"<br><span style='color:{COLORS['text_secondary']};'>{detail}</span>"
+        )
+
+    def _update_workflow_status(self):
+        """Show the current beginner workflow state."""
+        if not hasattr(self, 'workflow_status'):
+            return
+
+        token_done = bool(self.collection_token)
+        selected_devices = self.device_manager.get_selected_devices()
+        source_done = bool(selected_devices)
+        artifact_count = sum(1 for cb in self.artifact_checks.values() if cb.isChecked())
+        scope_done = artifact_count > 0
+
+        if self._token_validation_in_progress:
+            token_detail = "Validating session token..."
+        elif token_done:
+            case_label = (self.case_id[:8] + "...") if self.case_id else "validated"
+            token_detail = f"Authenticated case: {case_label}"
+        else:
+            token_detail = "Paste the session token from the web case and validate it."
+
+        if source_done:
+            if len(selected_devices) == 1:
+                source_detail = selected_devices[0].display_name
+            else:
+                source_detail = f"{len(selected_devices)} evidence source(s) selected."
+        else:
+            source_detail = "Select a local drive, connected device, image file, or FFS bundle."
+
+        if scope_done:
+            scope_detail = f"{artifact_count} artifact type(s) selected."
+        elif token_done:
+            scope_detail = "Open advanced options to choose artifacts."
+        else:
+            scope_detail = "Collection scope is enabled after authentication."
+
+        ready_done = token_done and source_done and scope_done
+        ready_detail = "Ready to start collection." if ready_done else "Complete the required steps above."
+
+        html = "<br><br>".join([
+            self._format_workflow_step(1, "Authenticate", token_done, token_detail),
+            self._format_workflow_step(2, "Evidence", source_done, source_detail),
+            self._format_workflow_step(3, "Scope", scope_done, scope_detail),
+            self._format_workflow_step(4, "Start", ready_done, ready_detail),
+        ])
+        self.workflow_status.setText(html)
 
     def _create_windows_tab(self) -> QWidget:
         """Create Windows artifacts tab"""
@@ -516,13 +674,13 @@ class CollectorWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(2)
 
-        # Group Windows artifacts by subcategory. Server-issued profile
-        # rows may use generic policy categories such as "forensic" while
-        # still representing Windows targets; normalize through the same
-        # category resolver used by source scoping and collection.
+        # Group Windows artifacts by subcategory
         subcategory_items: dict = {}
         for artifact_type, info in ARTIFACT_TYPES.items():
-            if self._artifact_category(artifact_type) != 'windows':
+            category = info.get('category', 'windows')
+            if category != 'windows' and 'category' in info:
+                continue
+            if artifact_type.startswith('mobile_'):
                 continue
             subcat = info.get('subcategory', 'system')
             subcategory_items.setdefault(subcat, []).append((artifact_type, info))
@@ -1087,10 +1245,12 @@ class CollectorWindow(QMainWindow):
     def _on_device_added(self, device):
         """Device added (DeviceListPanel handles automatically)"""
         self._log(f"Device detected: {device.display_name}")
+        self._update_workflow_status()
 
     def _on_device_removed(self, device_id: str):
         """Device removed (DeviceListPanel handles automatically)"""
         self._log(f"Device removed: {device_id}")
+        self._update_collect_button_state()
 
     def _on_device_selection_changed(self):
         """Device selection changed"""
@@ -1113,330 +1273,6 @@ class CollectorWindow(QMainWindow):
 
         self._update_collect_button_state()
 
-    def _target_label(self, artifact_type: str, index: int = None, total: int = None, device_name: str = None) -> str:
-        base = "Selected target"
-        if index is not None and total:
-            base = f"Selected target {index}/{total}"
-        if device_name:
-            return f"[{device_name}] {base}"
-        return base
-
-    def _artifact_category(self, artifact_type: str) -> str:
-        """Return the platform category for an artifact type."""
-        info = ARTIFACT_TYPES.get(artifact_type, {})
-        category = str(info.get('category') or '').lower()
-        if category in ('windows', 'android', 'ios', 'linux', 'macos', 'ai_activity'):
-            return category
-        lowered = str(artifact_type or '').lower()
-        if lowered.startswith(('mobile_ios_', 'ios_')):
-            return 'ios'
-        if lowered.startswith(('mobile_android_', 'android_')):
-            return 'android'
-        if lowered.startswith('linux_'):
-            return 'linux'
-        if lowered.startswith('macos_'):
-            return 'macos'
-        return 'windows'
-
-    def _disk_image_device_types(self) -> tuple:
-        return (
-            DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
-            DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
-            DeviceType.VHDX_IMAGE, DeviceType.QCOW2_IMAGE,
-            DeviceType.VDI_IMAGE, DeviceType.DMG_IMAGE,
-        )
-
-    def _all_source_categories(self) -> set:
-        return {'windows', 'android', 'ios', 'linux', 'macos'}
-
-    def _source_categories_for_device(self, device) -> set:
-        """Return artifact categories that should run for one evidence source."""
-        device_type = getattr(device, 'device_type', None)
-        metadata = getattr(device, 'metadata', None) or {}
-        if device_type in (DeviceType.WINDOWS_PHYSICAL_DISK, DeviceType.WINDOWS_LOGICAL_DRIVE):
-            return {'windows'}
-        if device_type in (DeviceType.ANDROID_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_ANDROID):
-            return {'android'}
-        if device_type in (DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_IOS):
-            return {'ios'}
-        if device_type == DeviceType.LINUX_LOCAL_SYSTEM:
-            return {'linux'}
-        if device_type == DeviceType.MACOS_LOCAL_SYSTEM:
-            return {'macos'}
-        if device_type in self._disk_image_device_types():
-            detected_os = str(metadata.get('detected_os') or '').lower()
-            if detected_os in ('windows', 'linux', 'macos'):
-                return {detected_os}
-            # OS detection can be inconclusive for damaged, encrypted,
-            # virtualized, or mobile-origin images. Fail-open so collection
-            # does not miss evidence solely because the source OS is unknown.
-            return self._all_source_categories()
-        return set()
-
-    def _is_unknown_os_image_source(self, device) -> bool:
-        metadata = getattr(device, 'metadata', None) or {}
-        detected_os = str(metadata.get('detected_os') or '').lower()
-        return (
-            getattr(device, 'device_type', None) in self._disk_image_device_types()
-            and detected_os not in ('windows', 'linux', 'macos')
-        )
-
-    def _selected_source_categories(self, selected_devices: Optional[list] = None) -> set:
-        """Return artifact categories applicable to selected evidence sources."""
-        devices = selected_devices if selected_devices is not None else self.device_manager.get_selected_devices()
-        categories = set()
-        for device in devices:
-            categories.update(self._source_categories_for_device(device))
-        if devices and not categories:
-            return self._all_source_categories()
-        return categories
-
-    def _apply_selected_source_scope(self, selected_devices: Optional[list] = None, force: bool = False):
-        """Disable artifacts that cannot be emitted by the selected source type."""
-        if not force and (getattr(self, '_collection_starting', False) or getattr(self, '_collection_running', False)):
-            return
-        categories = self._selected_source_categories(selected_devices)
-        if not categories:
-            return
-        controls_enabled = self.collection_token is not None
-        if hasattr(self, 'select_all_cb'):
-            self.select_all_cb.setEnabled(controls_enabled)
-            self.select_all_cb.setToolTip(
-                'Select or clear all artifacts in the current tab'
-                if controls_enabled else 'Authenticate a session token first'
-            )
-        if hasattr(self, 'include_deleted_cb'):
-            self.include_deleted_cb.setEnabled(controls_enabled)
-            self.include_deleted_cb.setToolTip(
-                'Recover and collect deleted files from MFT (slower but more thorough)'
-                if controls_enabled else 'Authenticate a session token first'
-            )
-        for artifact_type, cb in self.artifact_checks.items():
-            category = self._artifact_category(artifact_type)
-            info = ARTIFACT_TYPES.get(artifact_type, {})
-            tooltip = info.get('description', '')
-
-            if category == 'ai_activity':
-                if controls_enabled and self._is_artifact_allowed(artifact_type):
-                    cb.setEnabled(True)
-                    if not cb.isChecked() and info.get('default_enabled') is not False:
-                        cb.setChecked(True)
-                else:
-                    cb.setChecked(False)
-                    cb.setEnabled(False)
-                    cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
-                continue
-
-            if category in categories and self._is_artifact_allowed(artifact_type):
-                cb.setEnabled(True)
-                if not cb.isChecked() and info.get('default_enabled') is not False:
-                    cb.setChecked(True)
-            elif category in categories:
-                cb.setChecked(False)
-                cb.setEnabled(False)
-                cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
-            else:
-                cb.setChecked(False)
-                cb.setEnabled(False)
-                cb.setToolTip((tooltip + " | " if tooltip else "") + "Not applicable to the selected evidence source")
-
-    def _category_label(self, category: str) -> str:
-        labels = {
-            'windows': 'Windows',
-            'android': 'Android',
-            'ios': 'iOS',
-            'linux': 'Linux',
-            'macos': 'macOS',
-            'ai_activity': 'AI Activity',
-        }
-        return labels.get(category, category or 'Unknown')
-
-    def _format_category_scope(self, categories: set) -> str:
-        order = ['windows', 'android', 'ios', 'linux', 'macos']
-        return ', '.join(self._category_label(c) for c in order if c in categories) or 'Unspecified'
-
-    def _set_source_scope_label(self, text: str, tone: str = 'info') -> None:
-        if not hasattr(self, 'source_scope_label'):
-            return
-        color_key = {
-            'success': 'success',
-            'warning': 'warning',
-            'error': 'error',
-            'info': 'info',
-        }.get(tone, 'info')
-        bg_key = f'{color_key}_bg'
-        self.source_scope_label.setText(text)
-        self.source_scope_label.setStyleSheet(
-            f"background: {COLORS.get(bg_key, COLORS['bg_secondary'])}; "
-            f"color: {COLORS.get(color_key, COLORS['text_secondary'])}; "
-            f"font-size: 9px; border-radius: 4px; padding: 4px 8px;"
-        )
-
-    def _set_artifacts_waiting_for_source(self) -> None:
-        has_token = self.collection_token is not None
-        if has_token:
-            message = 'Authorized profile loaded. Select an evidence source to apply collection scope.'
-            tooltip_suffix = 'Select an evidence source to apply the authorized collection profile'
-        else:
-            message = 'Authenticate a session token, then select an evidence source to load collection scope.'
-            tooltip_suffix = 'Authenticate a session token and select an evidence source first'
-
-        self._set_source_scope_label(message, 'info')
-
-        if hasattr(self, 'select_all_cb'):
-            self.select_all_cb.blockSignals(True)
-            self.select_all_cb.setChecked(False)
-            self.select_all_cb.blockSignals(False)
-            self.select_all_cb.setEnabled(False)
-            self.select_all_cb.setToolTip(tooltip_suffix)
-        if hasattr(self, 'include_deleted_cb'):
-            self.include_deleted_cb.setEnabled(False)
-            self.include_deleted_cb.setToolTip(
-                'Recover deleted files after an evidence source is selected'
-            )
-
-        for artifact_type, cb in self.artifact_checks.items():
-            cb.setChecked(False)
-            cb.setEnabled(False)
-            tooltip = ARTIFACT_TYPES.get(artifact_type, {}).get('description', '')
-            cb.setToolTip((tooltip + ' | ' if tooltip else '') + tooltip_suffix)
-
-    def _update_source_scope_status(self, selected_devices: Optional[list] = None) -> None:
-        devices = selected_devices if selected_devices is not None else self.device_manager.get_selected_devices()
-        if not devices:
-            if self.collection_token is not None:
-                self._set_source_scope_label(
-                    'Authorized profile loaded. Select an evidence source to apply collection scope.',
-                    'info',
-                )
-            else:
-                self._set_source_scope_label(
-                    'Authenticate a session token, then select an evidence source to load collection scope.',
-                    'info',
-                )
-            return
-
-        categories = self._selected_source_categories(devices)
-        unknown_images = [d for d in devices if self._is_unknown_os_image_source(d)]
-        if unknown_images:
-            names = ', '.join(d.display_name for d in unknown_images[:2])
-            suffix = '...' if len(unknown_images) > 2 else ''
-            self._set_source_scope_label(
-                f'OS not identified for {len(unknown_images)} image source(s): {names}{suffix}. '
-                f'Full collection scope is enabled: {self._format_category_scope(categories)}.',
-                'warning',
-            )
-            return
-
-        self._set_source_scope_label(
-            f'Collection scope: {self._format_category_scope(categories)}. '
-            f'{len(devices)} evidence source(s) selected.',
-            'success',
-        )
-
-    def _artifact_count_for_source(self, device, selected_artifacts: list) -> int:
-        categories = self._source_categories_for_device(device)
-        if not categories:
-            return len(selected_artifacts)
-        return sum(1 for artifact_type in selected_artifacts if self._artifact_category(artifact_type) in categories)
-
-    def _device_type_label(self, device) -> str:
-        device_type = getattr(device, 'device_type', None)
-        if device_type is None:
-            return 'Unknown source'
-        return device_type.name.replace('_', ' ').title()
-
-    def _detected_os_label(self, device) -> str:
-        metadata = getattr(device, 'metadata', None) or {}
-        detected_os = str(metadata.get('detected_os') or '').lower()
-        if detected_os in ('windows', 'linux', 'macos'):
-            return self._category_label(detected_os)
-        if self._is_unknown_os_image_source(device):
-            return 'Unknown - full scope'
-        return metadata.get('os_family') or metadata.get('platform') or 'N/A'
-
-    def _build_collection_plan_lines(self, selected_devices: list, selected_artifacts: list) -> list:
-        lines = []
-        for index, device in enumerate(selected_devices, 1):
-            categories = self._source_categories_for_device(device)
-            artifact_count = self._artifact_count_for_source(device, selected_artifacts)
-            size = getattr(device, 'size_display', '') or 'size unknown'
-            lines.append(
-                f"{index}. {device.display_name} | {self._device_type_label(device)} | "
-                f"OS: {self._detected_os_label(device)} | "
-                f"scope: {self._format_category_scope(categories)} | "
-                f"artifacts: {artifact_count} | {size}"
-            )
-        return lines
-
-    def _collection_preflight_warnings(self, selected_devices: list, selected_artifacts: list) -> list:
-        warnings = []
-        if len(selected_devices) > 1:
-            warnings.append('Multiple evidence sources will be collected into the same case. Confirm they belong to the same investigation scope.')
-
-        unknown_count = sum(1 for d in selected_devices if self._is_unknown_os_image_source(d))
-        if unknown_count:
-            warnings.append('One or more image sources have unknown OS. Full profile mode is enabled to avoid missed collection; it may take longer.')
-
-        requires_admin = any(getattr(d, 'requires_admin', False) for d in selected_devices)
-        if requires_admin:
-            try:
-                from utils.privilege import is_admin
-                admin_ok = is_admin()
-            except Exception:
-                admin_ok = None
-            if admin_ok is False:
-                warnings.append('Administrator/root privileges are not active. Physical disk and local filesystem collection may be incomplete.')
-            elif admin_ok is None:
-                warnings.append('Administrator/root privilege state could not be verified before collection.')
-
-        android_nonroot = [
-            d for d in selected_devices
-            if d.device_type == DeviceType.ANDROID_DEVICE and not (getattr(d, 'metadata', None) or {}).get('rooted')
-        ]
-        if android_nonroot:
-            warnings.append('Android non-root mode is selected. Root-only app databases will be skipped when unavailable.')
-
-        if any(d.device_type == DeviceType.IOS_DEVICE for d in selected_devices):
-            warnings.append(
-                'iOS USB collection uses backup-based extraction. Keep the device unlocked and trusted until preparation completes. '
-                'If iOS asks for the device passcode, enter the physical device passcode on the iPhone screen.'
-            )
-
-        if not selected_artifacts:
-            warnings.append('No artifacts are selected.')
-
-        return warnings
-
-    def _confirm_collection_plan(self, selected_devices: list, selected_artifacts: list) -> bool:
-        lines = self._build_collection_plan_lines(selected_devices, selected_artifacts)
-        warnings = self._collection_preflight_warnings(selected_devices, selected_artifacts)
-
-        body = 'Review the collection plan before starting.\n\n'
-        body += '\n'.join(lines[:12])
-        if len(lines) > 12:
-            body += f"\n... and {len(lines) - 12} more source(s)"
-        if warnings:
-            body += '\n\nPreflight notes:\n' + '\n'.join(f'- {w}' for w in warnings)
-        body += '\n\nContinue collection?'
-
-        confirm = QMessageBox.question(
-            self,
-            'Review Collection Plan',
-            body,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        return confirm == QMessageBox.StandardButton.Yes
-
-    def _set_collection_inputs_locked(self, locked: bool) -> None:
-        for attr in ('device_group', 'token_group', 'artifacts_group'):
-            widget = getattr(self, attr, None)
-            if widget is not None:
-                widget.setEnabled(not locked)
-        if hasattr(self, 'collect_btn'):
-            self.collect_btn.setEnabled(False if locked else self.collect_btn.isEnabled())
-
     def _update_platform_tab_states(self):
         """
         Auto-navigate to relevant platform tab based on selected device
@@ -1446,19 +1282,12 @@ class CollectorWindow(QMainWindow):
         """
         selected_devices = self.device_manager.get_selected_devices()
 
-        if not selected_devices:
-            self._update_linux_macos_info_labels([])
-            self._update_android_root_status(is_rooted=False, connected=False)
-            self._update_ios_info_label(None, [])
-            self._set_artifacts_waiting_for_source()
-            return
-
         # Determine tab for auto-focus (priority: first selected device)
         tab_map = {'windows': 0, 'android': 1, 'ios': 2, 'linux': 3, 'macos': 4}
         target_tab = None
 
         for device in selected_devices:
-            if device.device_type in (DeviceType.WINDOWS_PHYSICAL_DISK, DeviceType.WINDOWS_LOGICAL_DRIVE):
+            if device.device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
                 target_tab = tab_map['windows']
                 break
 
@@ -1533,12 +1362,6 @@ class CollectorWindow(QMainWindow):
 
         # Update iOS tab info label
         self._update_ios_info_label(ios_bundle, selected_devices)
-
-        # Keep the artifact list scoped to the selected evidence source.
-        # Example: iOS USB on a Windows PC must not leave Windows artifacts
-        # checked from the host profile.
-        self._apply_selected_source_scope(selected_devices)
-        self._update_source_scope_status(selected_devices)
 
         # Auto-navigate to detected tab (only if different from current)
         if target_tab is not None and self.artifacts_tab.currentIndex() != target_tab:
@@ -1714,48 +1537,20 @@ class CollectorWindow(QMainWindow):
         self._disable_ios_artifacts_without_source()
 
     def _update_collect_button_state(self):
-        """Update collect button state and explain why it is disabled."""
-        if getattr(self, '_collection_starting', False) or getattr(self, '_collection_running', False):
+        """Update collect button state"""
+        if getattr(self, '_token_validation_in_progress', False):
             self.collect_btn.setEnabled(False)
-            self.collect_btn.setToolTip("Collection is already starting or running")
+            self._update_scope_summary()
+            self._update_workflow_status()
             return
 
         has_token = self.collection_token is not None
         has_devices = len(self.device_manager.get_selected_devices()) > 0
-        has_artifacts = bool(self._selected_artifact_types())
-        ready = has_token and has_devices and has_artifacts
+        has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
 
-        self.collect_btn.setEnabled(ready)
-        if ready:
-            self.collect_btn.setToolTip("Ready to start collection")
-            return
-
-        missing = []
-        if not has_token:
-            missing.append("authenticate the session token")
-        if not has_devices:
-            missing.append("select at least one evidence source")
-        if not has_artifacts:
-            missing.append("select at least one artifact")
-        self.collect_btn.setToolTip("Start Collection is disabled: " + ", ".join(missing))
-
-    def _artifact_checkbox_enabled_for_collection(self, cb) -> bool:
-        """Return checkbox state ignoring temporary parent locks during start."""
-        artifacts_group = getattr(self, 'artifacts_group', None)
-        if artifacts_group is not None:
-            try:
-                return cb.isEnabledTo(artifacts_group)
-            except Exception:
-                pass
-        return cb.isEnabled()
-
-    def _selected_artifact_types(self) -> list:
-        """Return artifact types that are both enabled by policy/source and selected."""
-        return [
-            artifact_type
-            for artifact_type, cb in self.artifact_checks.items()
-            if self._artifact_checkbox_enabled_for_collection(cb) and cb.isChecked()
-        ]
+        self.collect_btn.setEnabled(has_token and has_devices and has_artifacts)
+        self._update_scope_summary()
+        self._update_workflow_status()
 
     def _log_mobile_preflight(self, selected_devices: list, selected_artifacts: list):
         """Log mobile collection readiness without changing collection behavior."""
@@ -1919,15 +1714,26 @@ class CollectorWindow(QMainWindow):
         current_category = category_map.get(current_tab, 'windows')
 
         for artifact_type, cb in self.artifact_checks.items():
-            if not self._artifact_checkbox_enabled_for_collection(cb):
+            if not cb.isEnabled():
                 continue
 
-            artifact_category = self._artifact_category(artifact_type)
-            if artifact_category != current_category:
+            # Check artifact category
+            artifact_info = ARTIFACT_TYPES.get(artifact_type, {})
+            artifact_category = artifact_info.get('category', 'windows')
+
+            # Windows tab: items without category or 'windows', exclude mobile
+            if current_category == 'windows':
+                if artifact_type.startswith('mobile_'):
+                    continue
+                if artifact_category not in ('windows', None) and 'category' in artifact_info:
+                    continue
+
+            # Other tabs: matching category only
+            elif artifact_category != current_category:
                 continue
 
             cb.setChecked(checked)
-
+        self._update_scope_summary()
         self._update_collect_button_state()
 
     def _validate_token(self):
@@ -1937,11 +1743,76 @@ class CollectorWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Please enter a session token")
             return
 
-        self._log("Validating token...")
-        self.validate_btn.setEnabled(False)
+        if self._token_validation_in_progress:
+            self.status_bar.showMessage("Token validation is already running...")
+            return
 
-        validator = TokenValidator(self.config['server_url'])
-        result = validator.validate(token)
+        self._log("Validating token...")
+        self._set_token_validation_busy(True)
+        QApplication.processEvents()
+
+        worker = TokenValidationWorker(self.config['server_url'], token)
+        self._token_validation_worker = worker
+        worker.result_ready.connect(self._on_token_validation_result)
+        worker.error_ready.connect(self._on_token_validation_error)
+        worker.finished.connect(self._on_token_validation_worker_finished)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _set_token_validation_busy(self, busy: bool):
+        """Show validation progress and prevent duplicate authentication."""
+        self._token_validation_in_progress = busy
+        self.validate_btn.setEnabled(not busy)
+        self.show_token_btn.setEnabled(not busy)
+        self.token_input.setEnabled(not busy)
+
+        if busy:
+            self.validate_btn.setText("Validating...")
+            self.token_status.setText("Validating token...")
+            self.token_status.setStyleSheet("color: #fbbf24;")
+            self.token_progress.setRange(0, 0)
+            self.token_progress.setVisible(True)
+            self.collect_btn.setEnabled(False)
+            self.status_bar.showMessage("Validating session token...")
+            self._update_workflow_status()
+            return
+
+        self.validate_btn.setText("Validate Token")
+        self.token_progress.setVisible(False)
+        self.token_progress.setRange(0, 100)
+        self.token_input.setEnabled(True)
+        self.show_token_btn.setEnabled(True)
+        self.status_bar.showMessage("Ready")
+        self._update_collect_button_state()
+
+    def _on_token_validation_worker_finished(self):
+        """Drop the completed validation worker reference."""
+        worker = self.sender()
+        if self._token_validation_worker is worker:
+            self._token_validation_worker = None
+
+    def _on_token_validation_error(self, error: str):
+        """Handle unexpected validation worker failures."""
+        self._set_token_validation_busy(False)
+        self.token_status.setText("Invalid: validation failed")
+        self.token_status.setStyleSheet("color: #f72585;")
+        self._log(f"Token validation failed: {error}", error=True)
+        QMessageBox.warning(
+            self,
+            "Token Validation Failed",
+            f"Unable to validate the token.\n\n{error}"
+        )
+
+    def _on_token_validation_result(self, result):
+        """Apply token validation result on the UI thread."""
+        try:
+            self.token_status.setText("Applying collection profile...")
+            self._handle_token_validation_result(result)
+        finally:
+            self._set_token_validation_busy(False)
+
+    def _handle_token_validation_result(self, result):
+        """Apply successful or failed token validation results."""
 
         if result.valid:
             # [Security] Original session token not stored (unnecessary after validation)
@@ -1951,7 +1822,6 @@ class CollectorWindow(QMainWindow):
             self.case_id = result.case_id
             self.collection_token = result.collection_token
             self.collection_profile_id = getattr(result, 'collection_profile_id', None)
-            self.collection_profile_signing_key = getattr(result, 'signing_key', None)
             self.collection_profile_targets = getattr(result, 'collection_profile_targets', None) or []
             self.profile_artifact_types = set()
             for registry in (
@@ -2000,15 +1870,21 @@ class CollectorWindow(QMainWindow):
             self.ws_url = config_ws_url.replace('://localhost', '://127.0.0.1')
             self.allowed_artifacts = result.allowed_artifacts or list(ARTIFACT_TYPES.keys())
 
-            self.token_status.setText(f"Valid - Case: {self.case_id[:8]}...")
-            self.token_status.setStyleSheet("color: #4cc9f0;")
+            self.token_status.setText(f"Validated - Case: {self.case_id[:8]}...")
+            self.token_status.setStyleSheet(
+                f"background: {COLORS['success_bg']}; "
+                f"border: 1px solid {COLORS['success']}; "
+                f"border-radius: 4px; "
+                f"color: {COLORS['success']}; "
+                "font-weight: 700; padding: 4px 6px;"
+            )
             self._log(f"Token validated. Case ID: {self.case_id}")
             self._log(f"Session ID: {self.session_id}")
-            self._log(f"Authorized upload scope loaded: {len(self.allowed_artifacts)} server target(s)")
+            self._log(f"Allowed artifacts: {', '.join(self.allowed_artifacts)}")
             if self.collection_profile_id:
                 self._log(f"Server collection profile loaded: {len(self.collection_profile_targets)} authorized target(s)")
                 if self.profile_artifact_types:
-                    self._log(f"Server policy applied to {len(self.profile_artifact_types)} collection target(s)")
+                    self._log(f"Runtime profile applied: {len(self.profile_artifact_types)} artifact type(s)")
                 if android_ffs_count or ios_ffs_count:
                     message = (
                         f"Mobile FFS profile applied: {android_ffs_count} Android spec(s), "
@@ -2058,13 +1934,13 @@ class CollectorWindow(QMainWindow):
                         mapped_allowed.add(artifact_type)
 
             # Allow all artifacts if 'all' is included or allowed_artifacts is empty
-            allow_all = 'all' in self.allowed_artifacts or '*' in self.allowed_artifacts or not result.allowed_artifacts
+            allow_all = 'all' in self.allowed_artifacts or not result.allowed_artifacts
             self._allow_all_artifacts = allow_all
             self._mapped_allowed_artifacts = mapped_allowed
 
-            self._log(f"Collection target mapping ready: {len(mapped_allowed)} selectable target(s)")
+            self._log(f"Mapped artifacts for GUI: {', '.join(sorted(mapped_allowed))}")
             if allow_all:
-                self._log("All artifacts are authorized by the collection token")
+                self._log("All artifacts are allowed - selecting all by default")
 
             enabled_count = 0
             for artifact_type, cb in self.artifact_checks.items():
@@ -2082,7 +1958,7 @@ class CollectorWindow(QMainWindow):
                     tooltip = info.get('description', '')
                     cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
 
-            self._log(f"Authorized artifact types loaded: {enabled_count}/{len(self.artifact_checks)}")
+            self._log(f"[DEBUG] Enabled and checked {enabled_count}/{len(self.artifact_checks)} checkboxes")
             self._update_platform_tab_states()
 
             # Update collect button state including device selection status
@@ -2100,41 +1976,7 @@ class CollectorWindow(QMainWindow):
                 f"⚠️ {friendly_error.title}",
                 f"{friendly_error.message}\n\nSolution:\n{friendly_error.solution}"
             )
-        self.validate_btn.setEnabled(True)
-
     def _start_collection(self):
-        """Start collection with a guard against duplicate clicks."""
-        if getattr(self, '_collection_starting', False) or getattr(self, '_collection_running', False):
-            self._log("Collection is already starting or running; duplicate click ignored.")
-            return
-
-        self._collection_starting = True
-        self._set_collection_inputs_locked(True)
-        self.collect_btn.setEnabled(False)
-        self.validate_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(False)
-        QApplication.processEvents()
-
-        worker_started = False
-        try:
-            worker_started = bool(self._start_collection_impl())
-        except Exception as exc:
-            self._log(f"Collection start failed: {exc}", error=True)
-            QMessageBox.critical(self, "Collection Start Failed", str(exc))
-            worker_started = False
-        finally:
-            if worker_started:
-                self._collection_starting = False
-                self._collection_running = True
-            else:
-                self._collection_starting = False
-                self._collection_running = False
-                self._set_collection_inputs_locked(False)
-                self.validate_btn.setEnabled(True)
-                self.cancel_btn.setEnabled(False)
-                self._update_collect_button_state()
-
-    def _start_collection_impl(self):
         """Start the collection process"""
         # === Session validation (required before collection start) ===
         # Detect cancelled cases, expired sessions, etc.
@@ -2182,35 +2024,37 @@ class CollectorWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Please select at least one device")
             return
 
-        self._apply_selected_source_scope(selected_devices, force=True)
-        selected = self._selected_artifact_types()
+        selected = [k for k, cb in self.artifact_checks.items() if cb.isChecked()]
         if not selected:
-            checked = [
-                artifact_type
-                for artifact_type, cb in self.artifact_checks.items()
-                if cb.isChecked()
-            ]
-            blocked_checked = [
-                artifact_type
-                for artifact_type, cb in self.artifact_checks.items()
-                if cb.isChecked() and not self._artifact_checkbox_enabled_for_collection(cb)
-            ]
-            self._log(
-                f"No collectable artifacts selected at start "
-                f"(checked={len(checked)}, blocked_by_source_or_policy={len(blocked_checked)})",
-                error=True,
-            )
             QMessageBox.warning(self, "Error", "Please select at least one artifact type")
             return
 
         self._log_mobile_preflight(selected_devices, selected)
-        self._update_source_scope_status(selected_devices)
 
-        if not self._confirm_collection_plan(selected_devices, selected):
-            self._log("Collection cancelled: User did not confirm the collection plan")
-            return
+        # Confirm selected devices (show clearly when multiple)
+        if len(selected_devices) > 1:
+            device_list = "\n".join([f"  • {d.display_name}" for d in selected_devices])
+            confirm = QMessageBox.question(
+                self,
+                "Confirm Collection Targets",
+                f"Collecting from {len(selected_devices)} device(s):\n\n{device_list}\n\n"
+                f"Selected artifacts: {len(selected)}\n\n"
+                "Evidence scope warning:\n"
+                "Only continue if all selected sources belong to the same "
+                "investigation scope.\n"
+                "Uncheck any unrelated device, disk image, or removable media "
+                "before starting collection.\n\n"
+                f"Continue?\n\n"
+                f"(To collect from specific devices only, select 'No'\n"
+                f"and uncheck unwanted devices)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                self._log("Collection cancelled: User wants to reconfirm device selection")
+                return
 
-        self._log(f"Starting collection from {len(selected_devices)} evidence source(s)")
+        self._log(f"Starting collection from {len(selected_devices)} device(s)")
 
         # Legal consent check (required) - server API integration
         from gui.consent_dialog import show_consent_dialog
@@ -2812,12 +2656,7 @@ class CollectorWindow(QMainWindow):
                 self._log("Collection cancelled: Android device info dialog cancelled.")
                 return
 
-        categories = self._selected_source_categories(selected_devices)
-        category_text = ", ".join(sorted(categories)) if categories else "unspecified"
-        self._log(
-            f"Starting collection: {len(selected_devices)} source(s), "
-            f"{len(selected)} selected artifact type(s), source scope: {category_text}"
-        )
+        self._log(f"Starting collection for: {', '.join(selected)}")
 
         # Disable controls
         self.collect_btn.setEnabled(False)
@@ -2868,7 +2707,6 @@ class CollectorWindow(QMainWindow):
             # Request signing
             request_signer=self.request_signer,
             collection_profile_id=self.collection_profile_id,
-            collection_profile_signing_key=self.collection_profile_signing_key,
         )
         self.worker.progress_updated.connect(self._update_progress)
         self.worker.file_collected.connect(self._add_collected_file)
@@ -2894,12 +2732,8 @@ class CollectorWindow(QMainWindow):
         if any(d.device_type == DeviceType.IOS_DEVICE for d in selected_devices):
             self._show_ios_status(
                 "Preparing iOS backup...\n"
-                "Connecting to device and checking encryption status.\n"
-                "Keep the iPhone unlocked. If a passcode prompt appears,\n"
-                "enter the device passcode on the iPhone screen."
+                "Connecting to device and checking encryption status."
             )
-
-        return True
 
     def _check_for_updates(self):
         """Check for updates via GitHub Releases API (background)"""
@@ -3171,8 +3005,6 @@ class CollectorWindow(QMainWindow):
     def _collection_finished(self, success: bool, message: str):
         """Handle collection completion"""
         close_after_finish = getattr(self, '_close_after_worker_finish', False)
-        self._collection_starting = False
-        self._collection_running = False
 
         # Stop heartbeat timer and show final elapsed time
         self._heartbeat_timer.stop()
@@ -3198,35 +3030,17 @@ class CollectorWindow(QMainWindow):
             self._bitlocker_auto_decrypt_used = False
 
         # Re-enable controls
-        self._set_collection_inputs_locked(False)
         self.collect_btn.setEnabled(False)  # Disable after collection complete/cancelled (new token required)
         self.cancel_btn.setEnabled(False)
         self.validate_btn.setEnabled(True)
+        self.select_all_cb.setEnabled(True)
+        self.include_deleted_cb.setEnabled(True)
+        for cb in self.artifact_checks.values():
+            cb.setEnabled(True)
+
         # [Security] Clear session data - prevent token reuse
         # After collection complete/cancelled, must re-authenticate with new token
         self._clear_session_data()
-        self._set_artifacts_waiting_for_source()
-
-        if close_after_finish:
-            if success:
-                self._collection_completed = True
-                self._log(f"Collection completed: {message}")
-                self._log("")
-                self._log("All evidence has been uploaded to the server.")
-                self._log("Return to your web browser and start AI Analysis.")
-                self._log("")
-                self._log("New token required for new collection.")
-            else:
-                self._log(f"Collection failed: {message}", error=True)
-                self._log("New token required for new collection.")
-            self.status_bar.showMessage("Ready - New token required")
-            self.token_status.setText("New token required")
-            self.token_status.setStyleSheet("color: #ffc107;")
-            self._shutdown_ws_worker('collection_finished')
-            app = QApplication.instance()
-            if app:
-                app.quit()
-            return
 
         if success:
             self._collection_completed = True
@@ -3236,22 +3050,30 @@ class CollectorWindow(QMainWindow):
             self._log("👉 Return to your web browser and start AI Analysis.")
             self._log("")
             self._log("New token required for new collection.")
-            QMessageBox.information(
-                self, "Collection Complete",
-                f"{message}\n\n"
-                "✅ All evidence has been uploaded.\n\n"
-                "Next step:\n"
-                "Return to your web browser and start AI Analysis.\n\n"
-                "A new token is required for additional collections."
-            )
+            if not close_after_finish:
+                QMessageBox.information(
+                    self, "Collection Complete",
+                    f"{message}\n\n"
+                    "✅ All evidence has been uploaded.\n\n"
+                    "Next step:\n"
+                    "Return to your web browser and start AI Analysis.\n\n"
+                    "A new token is required for additional collections."
+                )
         else:
             self._log(f"Collection failed: {message}", error=True)
             self._log("New token required for new collection.")
-            QMessageBox.critical(self, "Error", f"{message}\n\nPlease get a new token for additional collections.")
+            if not close_after_finish:
+                QMessageBox.critical(self, "Error", f"{message}\n\nPlease get a new token for additional collections.")
 
         self.status_bar.showMessage("Ready - New token required")
         self.token_status.setText("New token required")
         self.token_status.setStyleSheet("color: #ffc107;")
+
+        if close_after_finish:
+            self._shutdown_ws_worker('collection_finished')
+            app = QApplication.instance()
+            if app:
+                app.quit()
 
     def _reenable_bitlocker(self):
         """Re-enable BitLocker after collection"""
@@ -3325,7 +3147,6 @@ class CollectorWindow(QMainWindow):
         self.server_url = None
         self.ws_url = None
         self.collection_profile_id = None
-        self.collection_profile_signing_key = None
         self.collection_profile_targets = []
         self.profile_artifact_types = set()
         self.allowed_artifacts = []
@@ -3335,6 +3156,8 @@ class CollectorWindow(QMainWindow):
         # Clear token input field
         if hasattr(self, 'token_input') and self.token_input:
             self.token_input.clear()
+        self._update_scope_summary()
+        self._update_workflow_status()
 
     def _notify_server_cancel(self):
         """
@@ -3648,7 +3471,6 @@ class CollectionWorker(QThread):
         # Request signing
         request_signer=None,
         collection_profile_id: str = None,
-        collection_profile_signing_key: str = None,
     ):
         super().__init__()
         self.server_url = server_url
@@ -3665,7 +3487,6 @@ class CollectionWorker(QThread):
         self.config = config or {}
         self.request_signer = request_signer
         self.collection_profile_id = collection_profile_id
-        self.collection_profile_signing_key = collection_profile_signing_key
 
         # Selected devices list
         self.selected_devices = selected_devices or []
@@ -3710,67 +3531,6 @@ class CollectionWorker(QThread):
         # Heartbeat thread to keep collection session alive
         self._heartbeat_stop_event = None
         self._heartbeat_thread = None
-
-    def _refresh_collection_profile(self):
-        validator = TokenValidator(self.server_url)
-        profile = validator.fetch_collection_profile(
-            self.session_id,
-            self.collection_token,
-            self.collection_profile_signing_key,
-        )
-        self.collection_profile_id = profile.get('profile_id')
-        return self.collection_profile_id
-
-    def _metadata_source_identity(self, file_path: str, metadata: dict) -> str:
-        if not isinstance(metadata, dict):
-            metadata = {}
-        for key in (
-            'original_path',
-            'source_path',
-            'full_path',
-            'relative_path',
-            'path',
-            'file_id',
-        ):
-            value = metadata.get(key)
-            if value:
-                if isinstance(value, (list, tuple, set)):
-                    value = '|'.join(str(item) for item in value)
-                return str(value).replace('\\', '/').strip().lower()
-        return str(Path(file_path)).replace('\\', '/').strip().lower()
-
-    def _upload_dedupe_key(self, file_path: str, metadata: dict, original_hash: str):
-        source_identity = self._metadata_source_identity(file_path, metadata)
-        content_hash = str(original_hash or (metadata or {}).get('hash_sha256') or '').lower()
-        return content_hash, source_identity
-
-    def _queue_prepared_upload(
-        self,
-        encrypted_files: list,
-        upload_dedupe_index: dict,
-        file_path: str,
-        artifact_type: str,
-        metadata: dict,
-        original_hash: str,
-    ) -> bool:
-        dedupe_key = self._upload_dedupe_key(file_path, metadata, original_hash)
-        existing_index = upload_dedupe_index.get(dedupe_key)
-        if existing_index is not None:
-            existing_artifact_type = encrypted_files[existing_index][1]
-            existing_metadata = encrypted_files[existing_index][2]
-            matched_types = existing_metadata.setdefault('matched_artifact_types', [])
-            for candidate in (existing_artifact_type, artifact_type):
-                if candidate and candidate not in matched_types:
-                    matched_types.append(candidate)
-            duplicate_types = existing_metadata.setdefault('duplicate_artifact_types', [])
-            if artifact_type and artifact_type not in duplicate_types:
-                duplicate_types.append(artifact_type)
-            return False
-
-        metadata.setdefault('matched_artifact_types', [artifact_type])
-        upload_dedupe_index[dedupe_key] = len(encrypted_files)
-        encrypted_files.append((file_path, artifact_type, metadata))
-        return True
 
     def _start_heartbeat(self):
         """
@@ -3865,115 +3625,6 @@ class CollectionWorker(QThread):
             or self._server_completion_accepted
         )
 
-    def _abort_session(self):
-        """Notify server of session abort (clear active collection flag)"""
-        if not self.session_id or not self.collection_token:
-            return
-        try:
-            abort_path = f"/api/v1/collector/collection/abort/{self.session_id}"
-            abort_url = f"{self.server_url}{abort_path}"
-            abort_headers = {
-                'X-Collection-Token': self.collection_token,
-                'X-Session-ID': self.session_id,
-            }
-            if self.request_signer:
-                abort_headers.update(self.request_signer.sign_request(
-                    "POST", abort_path, None, self.collection_token,
-                ))
-            requests.post(
-                abort_url,
-                headers=abort_headers,
-                timeout=5,  # Quick timeout (don't wait during shutdown)
-                verify=_get_ssl_verify(),
-            )
-        except Exception:
-            pass  # Ignore failure (shutting down)
-
-    def _calculate_overall_progress(self, stage: int, stage_progress: int) -> int:
-        """Calculate overall progress"""
-        completed_weight = sum(
-            self.STAGE_WEIGHTS[s] for s in range(1, stage)
-        )
-        current_weight = self.STAGE_WEIGHTS[stage] * stage_progress / 100
-        return int(completed_weight + current_weight)
-
-    def _estimate_remaining_time(self, stage: int, stage_progress: int, items_done: int, total_items: int) -> str:
-        """Estimate remaining time"""
-        import time
-
-        if not self._start_time or stage_progress <= 0:
-            return ""
-
-        elapsed = time.time() - self._start_time
-        overall_progress = self._calculate_overall_progress(stage, stage_progress)
-
-        if overall_progress <= 0:
-            return ""
-
-        # Calculate estimated total time
-        estimated_total = elapsed / (overall_progress / 100)
-        remaining = max(0, estimated_total - elapsed)
-
-        if remaining < 60:
-            return f"{int(remaining)}s"
-        elif remaining < 3600:
-            minutes = int(remaining / 60)
-            seconds = int(remaining % 60)
-            return f"{minutes}m {seconds}s"
-        else:
-            hours = int(remaining / 3600)
-            minutes = int((remaining % 3600) / 60)
-            return f"{hours}h {minutes}m"
-
-    def _target_label(self, artifact_type: str, index: int = None, total: int = None, device_name: str = None) -> str:
-        base = "Selected target"
-        if index is not None and total:
-            base = f"Selected target {index}/{total}"
-        if device_name:
-            return f"[{device_name}] {base}"
-        return base
-
-    def _artifact_category(self, artifact_type: str) -> str:
-        info = ARTIFACT_TYPES.get(artifact_type, {})
-        category = str(info.get('category') or '').lower()
-        if category in ('windows', 'android', 'ios', 'linux', 'macos', 'ai_activity'):
-            return category
-        lowered = str(artifact_type or '').lower()
-        if lowered.startswith(('mobile_ios_', 'ios_')):
-            return 'ios'
-        if lowered.startswith(('mobile_android_', 'android_')):
-            return 'android'
-        if lowered.startswith('linux_'):
-            return 'linux'
-        if lowered.startswith('macos_'):
-            return 'macos'
-        return 'windows'
-
-    def _device_artifact_categories(self, device) -> set:
-        device_type = device.device_type
-        if device_type in (DeviceType.WINDOWS_PHYSICAL_DISK, DeviceType.WINDOWS_LOGICAL_DRIVE):
-            return {'windows'}
-        if device_type in (DeviceType.ANDROID_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_ANDROID):
-            return {'android'}
-        if device_type in (DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE, DeviceType.MOBILE_FFS_BUNDLE_IOS):
-            return {'ios'}
-        if device_type == DeviceType.LINUX_LOCAL_SYSTEM:
-            return {'linux'}
-        if device_type == DeviceType.MACOS_LOCAL_SYSTEM:
-            return {'macos'}
-        if device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
-                           DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
-                           DeviceType.VHDX_IMAGE, DeviceType.QCOW2_IMAGE,
-                           DeviceType.VDI_IMAGE, DeviceType.DMG_IMAGE):
-            detected_os = str(device.metadata.get('detected_os') or '').lower()
-            if detected_os in ('windows', 'linux', 'macos'):
-                return {detected_os}
-            # Fail-open for unknown images so collection does not miss
-            # evidence because OS detection was inconclusive. Inapplicable
-            # artifacts are skipped by the concrete collector.
-            return {'windows', 'android', 'ios', 'linux', 'macos'}
-        return set()
-
     def _mobile_ffs_available_artifacts(self, device) -> set:
         meta = device.metadata or {}
         present = set(meta.get("present_artifacts") or [])
@@ -3994,7 +3645,8 @@ class CollectionWorker(QThread):
         return set()
 
     def _artifact_category_for_device(self, artifact_type: str, device) -> str:
-        category = self._artifact_category(artifact_type)
+        info = ARTIFACT_TYPES.get(artifact_type, {})
+        category = info.get("category", "")
         if category == "ai_activity" and artifact_type.startswith("ai_mobile_"):
             if device.device_type == DeviceType.MOBILE_FFS_BUNDLE_ANDROID:
                 return "android"
@@ -4003,72 +3655,60 @@ class CollectionWorker(QThread):
         return category
 
     def _artifacts_for_device(self, device) -> List[str]:
-        if device.device_type in (
+        if device.device_type not in (
             DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
             DeviceType.MOBILE_FFS_BUNDLE_IOS,
         ):
-            platform = (
-                "android"
-                if device.device_type == DeviceType.MOBILE_FFS_BUNDLE_ANDROID
-                else "ios"
-            )
-            available = self._mobile_ffs_available_artifacts(device)
-            if not available:
-                self.log_message.emit(
-                    f"[WARN] [{device.display_name}] FFS present-artifact scan unavailable; "
-                    "using selected mobile artifacts as-is.",
-                    True,
-                )
-                return [
-                    artifact_type for artifact_type in self.artifacts
-                    if self._artifact_category_for_device(artifact_type, device) == platform
-                ]
-
-            try:
-                from collectors.mobile_ffs_collector import expand_mobile_ffs_selection
-            except Exception:
-                expand_mobile_ffs_selection = None
-
-            filtered = []
-            seen = set()
-            mobile_selected = 0
-            for artifact_type in self.artifacts:
-                if self._artifact_category_for_device(artifact_type, device) != platform:
-                    continue
-                mobile_selected += 1
-                if expand_mobile_ffs_selection:
-                    candidates = expand_mobile_ffs_selection(
-                        artifact_type,
-                        available,
-                        platform=platform,
-                    )
-                else:
-                    candidates = [artifact_type] if artifact_type in available else []
-                for candidate in candidates:
-                    if candidate not in seen:
-                        filtered.append(candidate)
-                        seen.add(candidate)
-
-            skipped = max(mobile_selected - len(seen), 0)
-            if skipped:
-                self.log_message.emit(
-                    f"[SKIP] [{device.display_name}] {skipped} selected mobile artifact "
-                    "type(s) are not present or not supported by this FFS bundle.",
-                    False,
-                )
-            return filtered
-
-        categories = self._device_artifact_categories(device)
-        if not categories:
             return list(self.artifacts)
-        filtered = [
-            artifact_type for artifact_type in self.artifacts
-            if self._artifact_category(artifact_type) in categories
-        ]
-        skipped = len(self.artifacts) - len(filtered)
+
+        platform = (
+            "android"
+            if device.device_type == DeviceType.MOBILE_FFS_BUNDLE_ANDROID
+            else "ios"
+        )
+        available = self._mobile_ffs_available_artifacts(device)
+        if not available:
+            self.log_message.emit(
+                f"[WARN] [{device.display_name}] FFS present-artifact scan unavailable; "
+                "using selected mobile artifacts as-is.",
+                True,
+            )
+            return [
+                artifact_type for artifact_type in self.artifacts
+                if self._artifact_category_for_device(artifact_type, device) == platform
+            ]
+
+        try:
+            from collectors.mobile_ffs_collector import expand_mobile_ffs_selection
+        except Exception:
+            expand_mobile_ffs_selection = None
+
+        filtered = []
+        seen = set()
+        mobile_selected = 0
+
+        for artifact_type in self.artifacts:
+            if self._artifact_category_for_device(artifact_type, device) != platform:
+                continue
+            mobile_selected += 1
+            if expand_mobile_ffs_selection:
+                candidates = expand_mobile_ffs_selection(
+                    artifact_type,
+                    available,
+                    platform=platform,
+                )
+            else:
+                candidates = [artifact_type] if artifact_type in available else []
+            for candidate in candidates:
+                if candidate not in seen:
+                    filtered.append(candidate)
+                    seen.add(candidate)
+
+        skipped = max(mobile_selected - len(seen), 0)
         if skipped:
             self.log_message.emit(
-                f"[{device.display_name}] Skipped {skipped} artifact(s) not applicable to this source type.",
+                f"[SKIP] [{device.display_name}] {skipped} selected mobile artifact "
+                "type(s) are not present or not supported by this FFS bundle.",
                 False,
             )
         return filtered
@@ -4150,6 +3790,66 @@ class CollectionWorker(QThread):
 
         metadata['upload_staged'] = True
         return str(staged_path)
+
+    def _abort_session(self):
+        """Notify server of session abort (clear active collection flag)"""
+        if not self.session_id or not self.collection_token:
+            return
+        try:
+            abort_path = f"/api/v1/collector/collection/abort/{self.session_id}"
+            abort_url = f"{self.server_url}{abort_path}"
+            abort_headers = {
+                'X-Collection-Token': self.collection_token,
+                'X-Session-ID': self.session_id,
+            }
+            if self.request_signer:
+                abort_headers.update(self.request_signer.sign_request(
+                    "POST", abort_path, None, self.collection_token,
+                ))
+            requests.post(
+                abort_url,
+                headers=abort_headers,
+                timeout=5,  # Quick timeout (don't wait during shutdown)
+                verify=_get_ssl_verify(),
+            )
+        except Exception:
+            pass  # Ignore failure (shutting down)
+
+    def _calculate_overall_progress(self, stage: int, stage_progress: int) -> int:
+        """Calculate overall progress"""
+        completed_weight = sum(
+            self.STAGE_WEIGHTS[s] for s in range(1, stage)
+        )
+        current_weight = self.STAGE_WEIGHTS[stage] * stage_progress / 100
+        return int(completed_weight + current_weight)
+
+    def _estimate_remaining_time(self, stage: int, stage_progress: int, items_done: int, total_items: int) -> str:
+        """Estimate remaining time"""
+        import time
+
+        if not self._start_time or stage_progress <= 0:
+            return ""
+
+        elapsed = time.time() - self._start_time
+        overall_progress = self._calculate_overall_progress(stage, stage_progress)
+
+        if overall_progress <= 0:
+            return ""
+
+        # Calculate estimated total time
+        estimated_total = elapsed / (overall_progress / 100)
+        remaining = max(0, estimated_total - elapsed)
+
+        if remaining < 60:
+            return f"{int(remaining)}s"
+        elif remaining < 3600:
+            minutes = int(remaining / 60)
+            seconds = int(remaining % 60)
+            return f"{minutes}m {seconds}s"
+        else:
+            hours = int(remaining / 3600)
+            minutes = int((remaining % 3600) / 60)
+            return f"{hours}h {minutes}m"
 
     def _create_collector_for_device(self, device, output_dir: str):
         """
@@ -4243,7 +3943,7 @@ class CollectionWorker(QThread):
                 return collector
 
             # Windows physical disk
-            elif device_type in (DeviceType.WINDOWS_PHYSICAL_DISK, DeviceType.WINDOWS_LOGICAL_DRIVE):
+            elif device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
                 # Get decrypted reader if BitLocker was unlocked via dialog
                 decrypted_reader = None
                 if self.bitlocker_decryptor:
@@ -4256,8 +3956,7 @@ class CollectionWorker(QThread):
                 # Use LocalMFTCollector (BitLocker auto-detection + directory fallback)
                 if BASE_MFT_AVAILABLE:
                     volume = device.metadata.get('volume') or 'C'
-                    source_label = 'logical drive' if device_type == DeviceType.WINDOWS_LOGICAL_DRIVE else 'physical disk volume'
-                    self.log_message.emit(f"Using Windows {source_label}: {volume}:", False)
+                    self.log_message.emit(f"Using volume: {volume}:", False)
                     collector = LocalMFTCollector(output_dir, volume=volume, decrypted_reader=decrypted_reader)
                     self.log_message.emit(
                         f"Collection mode: {collector.get_collection_mode()}", False
@@ -4482,11 +4181,11 @@ class CollectionWorker(QThread):
 
             # If devices are selected, collect per device
             if self.selected_devices:
-                per_device_artifacts = {
+                artifacts_by_device = {
                     device.device_id: self._artifacts_for_device(device)
                     for device in self.selected_devices
                 }
-                total_items = sum(len(items) for items in per_device_artifacts.values())
+                total_items = sum(len(v) for v in artifacts_by_device.values())
                 item_index = 0
 
                 for device in self.selected_devices:
@@ -4530,9 +4229,12 @@ class CollectionWorker(QThread):
                         except Exception as e:
                             self.log_message.emit(f"[{device_name}] Index build skipped: {e}", True)
 
-                    device_artifacts = per_device_artifacts.get(device.device_id, [])
+                    device_artifacts = artifacts_by_device.get(device.device_id, [])
                     if not device_artifacts:
-                        self.log_message.emit(f"[{device_name}] No applicable artifacts selected for this source.", False)
+                        self.log_message.emit(
+                            f"[SKIP] [{device_name}] No selected artifact types apply to this source.",
+                            False,
+                        )
                         if hasattr(collector, 'close') and not close_after_upload:
                             collector.close()
                         continue
@@ -4548,7 +4250,7 @@ class CollectionWorker(QThread):
 
                         self.progress_updated.emit(
                             1, stage_progress, overall_progress,
-                            f"{self._target_label(artifact_type, item_index, total_items, device_name)} collecting...",
+                            f"[{device_name}] Collecting: {artifact_type}...",
                             remaining
                         )
 
@@ -4585,7 +4287,7 @@ class CollectionWorker(QThread):
                                         pct = float(msg.split(":")[-1].strip().rstrip("%"))
                                         self.progress_updated.emit(
                                             1, int(pct), self._calculate_overall_progress(1, int(pct)),
-                                            f"{self._target_label(artifact_type, item_index, total_items, device_name)}: {pct:.1f}%",
+                                            f"[{device_name}] {artifact_type}: {pct:.1f}%",
                                             ""
                                         )
                                     except (ValueError, IndexError):
@@ -4614,16 +4316,13 @@ class CollectionWorker(QThread):
                                     # not_found = file absent from backup (normal for uninstalled apps)
                                     # Unknown artifact type = other platform artifact (silent skip)
                                     if status == 'not_found':
-                                        self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: not present", False)
+                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: Not in backup", False)
                                     elif status == 'skipped':
-                                        self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: skipped", False)
+                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: {error_msg}", False)
                                     elif 'Root access required' in error_msg or 'not rooted' in error_msg:
-                                        self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: requires elevated access", False)
+                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: Requires root", False)
                                     elif error_msg not in ['Unknown artifact type: ' + artifact_type]:
-                                        self.log_message.emit(
-                                            f"{self._target_label(artifact_type, item_index, total_items, device_name)}: {error_msg}",
-                                            True,
-                                        )
+                                        self.log_message.emit(f"[{device_name}] {artifact_type}: {error_msg}", True)
                                         if is_ios_backup_artifact and not ios_backup_blocking_error:
                                             blocking_markers = (
                                                 'iOS encrypted backup is not enabled',
@@ -4664,14 +4363,14 @@ class CollectionWorker(QThread):
 
                                 # Update progress every 100 items + process GUI events
                                 if file_count % CHUNK_SIZE == 0:
-                                    self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)}: {file_count} files collecting...", False)
+                                    self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count} files collecting...", False)
 
                             if file_count == 0 and error_count == 0:
-                                self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, item_index, total_items, device_name)}: no matching files found", False)
+                                self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: No files found", False)
                                 if is_ios_backup_artifact:
                                     ios_backup_no_match_count += 1
                             elif file_count > 0:
-                                self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)}: {file_count} files collected", False)
+                                self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count} files collected", False)
                                 if is_ios_backup_artifact:
                                     ios_backup_file_count += file_count
                             elif is_ios_backup_artifact:
@@ -4685,7 +4384,7 @@ class CollectionWorker(QThread):
                                 # Silently skip — not an error
                                 logging.debug(f"Skipped cross-platform artifact: {artifact_type} on {device_name}")
                             else:
-                                self.log_message.emit(f"{self._target_label(artifact_type, item_index, total_items, device_name)} failed: {e}", True)
+                                self.log_message.emit(f"Collection failed [{device_name}] ({artifact_type}): {e}", True)
                                 logging.debug(f"Collection error for {artifact_type} on {device_name}: {e}")
                                 if is_ios_backup_artifact:
                                     ios_backup_error_count += 1
@@ -4742,10 +4441,10 @@ class CollectionWorker(QThread):
 
                     self.progress_updated.emit(
                         1, stage_progress, overall_progress,
-                        f"{self._target_label(artifact_type, i + 1, total_artifacts)} collecting...",
+                        f"Collecting: {artifact_type}...",
                         remaining
                     )
-                    self.log_message.emit(f"{self._target_label(artifact_type, i + 1, total_artifacts)} collecting", False)
+                    self.log_message.emit(f"Collecting: {artifact_type}", False)
 
                     try:
                         # Phase 2.1: Pass kwargs per category
@@ -4785,16 +4484,16 @@ class CollectionWorker(QThread):
 
                             # Update progress every 100 items + process GUI events
                             if file_count % CHUNK_SIZE == 0:
-                                self.log_message.emit(f"{self._target_label(artifact_type, i + 1, total_artifacts)}: {file_count} files collecting...", False)
+                                self.log_message.emit(f"{artifact_type}: {file_count} files collecting...", False)
 
                         if file_count == 0:
-                            self.log_message.emit(f"[SKIP] {self._target_label(artifact_type, i + 1, total_artifacts)}: no matching files found", False)
+                            self.log_message.emit(f"[SKIP] {artifact_type}: No files found", False)
                         else:
-                            self.log_message.emit(f"✓ {self._target_label(artifact_type, i + 1, total_artifacts)}: {file_count} files collected", False)
+                            self.log_message.emit(f"✓ {artifact_type}: {file_count} files collected", False)
 
                     except Exception as e:
                         import logging
-                        self.log_message.emit(f"{self._target_label(artifact_type, i + 1, total_artifacts)} failed: {e}", True)
+                        self.log_message.emit(f"Collection failed ({artifact_type}): {e}", True)
                         logging.debug(f"Collection error for {artifact_type}: {e}")
 
                 # Release scan cache after all artifact types collected
@@ -4841,8 +4540,6 @@ class CollectionWorker(QThread):
             # ========================================
             self.log_message.emit(f"🔐 Preparing {len(collected_raw_files)} files for upload...", False)
             encrypted_files = []  # (file_path, artifact_type, metadata)
-            upload_dedupe_index = {}
-            duplicate_uploads_skipped = 0
             total_files = len(collected_raw_files)
             preparation_error_count = 0
 
@@ -4930,22 +4627,11 @@ class CollectionWorker(QThread):
                             original_hash=original_hash,
                         )
 
-                    queued = self._queue_prepared_upload(
-                        encrypted_files,
-                        upload_dedupe_index,
+                    encrypted_files.append((
                         upload_file_path,
                         artifact_type,
-                        metadata,
-                        original_hash,
-                    )
-                    if not queued:
-                        duplicate_uploads_skipped += 1
-                        if duplicate_uploads_skipped <= 20:
-                            self.log_message.emit(
-                                f"[SKIP] {filename}: duplicate source already queued",
-                                False,
-                            )
-                        continue
+                        metadata
+                    ))
 
                 except FileNotFoundError:
                     preparation_error_count += 1
@@ -4956,17 +4642,6 @@ class CollectionWorker(QThread):
                 except Exception as e:
                     preparation_error_count += 1
                     self.log_message.emit(f"Preparation failed ({filename}): {e}", True)
-
-            if duplicate_uploads_skipped > 20:
-                self.log_message.emit(
-                    f"[SKIP] {duplicate_uploads_skipped - 20} additional duplicate source files already queued",
-                    False,
-                )
-            if duplicate_uploads_skipped:
-                self.log_message.emit(
-                    f"Deduplicated {duplicate_uploads_skipped} duplicate upload queue entries.",
-                    False,
-                )
 
             if self._cancelled:
                 self.finished.emit(False, "Preparation cancelled")
@@ -4995,7 +4670,6 @@ class CollectionWorker(QThread):
                 config=self.config,
                 request_signer=self.request_signer,
                 profile_id=self.collection_profile_id,
-                profile_refresh_callback=self._refresh_collection_profile,
             )
             uploader = R2DirectUploader(
                 server_url=self.server_url,
@@ -5007,7 +4681,6 @@ class CollectionWorker(QThread):
                 request_signer=self.request_signer,
                 profile_id=self.collection_profile_id,
                 fallback_uploader=sync_uploader,
-                profile_refresh_callback=self._refresh_collection_profile,
             )
 
             success_count = 0
@@ -5048,7 +4721,7 @@ class CollectionWorker(QThread):
                             self.log_message.emit("⏳ Previous data cleanup in progress. Please try again after cleanup completes.", True)
                             self._cancelled = True
                         else:
-                            self.log_message.emit(f"✗ Upload failed: {result.error}", True)
+                            self.log_message.emit(f"✗ Upload failed ({artifact_type}): {result.error}", True)
 
                 return result
 

@@ -5,6 +5,8 @@
 # Sensitive config files (API keys, server URLs, etc.)
 config.json
 config.local.json
+config.development.json
+config.production.json
 config.staging.json
 *.secret
 *.credentials

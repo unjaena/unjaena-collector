@@ -687,6 +687,9 @@ class AndroidCollector:
             output_dir: Directory to store collected artifacts
             device_serial: Optional specific device serial (auto-detect if None)
         """
+        self._device: Optional[AdbDeviceUsb] = None
+        self._signer: Optional[PythonRSASigner] = None
+        self._system_adb_path: Optional[str] = None
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -695,9 +698,7 @@ class AndroidCollector:
         self.monitor = ADBDeviceMonitor()
 
         # Active USB device connection
-        self._device: Optional[AdbDeviceUsb] = None
         self._adb_key_path = Path.home() / ".android" / "adbkey"
-        self._signer: Optional[PythonRSASigner] = None
 
     def _get_or_create_adb_key(self) -> PythonRSASigner:
         """Generate or load ADB RSA key"""
@@ -866,6 +867,10 @@ class AndroidCollector:
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
             devices_output = result.stdout.decode('utf-8', errors='replace')
+            # Parse "serial\tstatus" lines. If libusb only exposed a VID:PID
+            # placeholder, use the single adb-visible serial so the user gets
+            # the precise unauthorized/offline status instead of a generic
+            # shell access failure.
             adb_entries = []
             for line in devices_output.strip().splitlines():
                 if line.lower().startswith('list of devices'):
@@ -927,7 +932,8 @@ class AndroidCollector:
 
                 # Populate or refresh device_info. libusb may expose a connected
                 # device but fail adb-key auth, while system adb is already
-                # authorized. In that case keep the real adb serial/details.
+                # authorized. In that case keep the real adb serial/details and
+                # mark USB debugging as available.
                 adb_device_info = self._build_device_info_from_adb(adb_path)
                 if adb_device_info:
                     self.device_info = adb_device_info
@@ -946,7 +952,6 @@ class AndroidCollector:
                 f"is not available. Enable USB debugging, unlock the device, and approve "
                 f"the 'Allow USB debugging?' prompt before starting collection."
             )
-
         raise RuntimeError(
             f"Cannot connect to {self.device_serial}. "
             f"libusb driver not compatible and system adb connection failed. "
@@ -1214,6 +1219,40 @@ class AndroidCollector:
             yield from self._collect_system_info(
                 artifact_type, artifact_info, artifact_dir, progress_callback
             )
+
+        elif collection_method == 'logcat':
+            yield from self._collect_logcat(
+                artifact_type, artifact_dir, progress_callback
+            )
+
+        elif collection_method == 'package_list':
+            yield from self._collect_package_list(
+                artifact_type, artifact_dir, progress_callback
+            )
+
+        elif collection_method == 'dumpsys':
+            yield from self._collect_dumpsys(
+                artifact_type,
+                artifact_info.get('services', []),
+                artifact_dir,
+                progress_callback
+            )
+
+        elif collection_method == 'settings':
+            yield from self._collect_settings(
+                artifact_type, artifact_dir, progress_callback
+            )
+
+        elif collection_method == 'backup':
+            backup_path, metadata = self.create_backup(
+                str(artifact_dir / "android_backup.ab"),
+                progress_callback
+            )
+            metadata['artifact_type'] = artifact_type
+            if backup_path:
+                yield backup_path, metadata
+            else:
+                yield '', metadata
 
         elif collection_method == 'root_db':
             yield from self._collect_root_db(

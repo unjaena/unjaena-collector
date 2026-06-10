@@ -1,7 +1,0 @@
-{
-  "server_url": "https://app.unjaena.com",
-  "ws_url": "wss://app.unjaena.com",
-  "app_name": "unJaena Collector",
-  "version": "0.0.0",
-  "dev_mode": false
-}

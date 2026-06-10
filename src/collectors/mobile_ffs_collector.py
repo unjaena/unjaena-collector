@@ -70,7 +70,13 @@ def expand_mobile_ffs_selection(
     *,
     platform: str = "android",
 ) -> List[str]:
-    """Expand generic/live mobile selections into FFS-routable ids."""
+    """Expand generic/live mobile selections into FFS-routable ids.
+
+    FFS bundles are already offline full-filesystem exports. Live Android
+    provider ids and generic UI ids should therefore route to the concrete
+    artifact ids present in the bundle so server parsing and embeddings keep
+    their specific type labels.
+    """
     available = set(available_types or ())
     canonical = canonicalize_mobile_ffs_artifact(artifact_type)
 
@@ -167,6 +173,13 @@ class MobileFFSBundleCollector:
             self._artifacts_by_type.setdefault("mobile_android_app", app_like)
 
     def _stage_upload_file(self, artifact_type: str, entry) -> Path:
+        """Move a nested extracted entry to a short upload-staging path.
+
+        Zip paths can be deeply nested. Returning those paths directly makes
+        Windows upload code vulnerable to path normalization and length edge
+        cases. The original zip path remains in metadata; the upload file is a
+        stable flat copy under ``ffs_bundle/_upload``.
+        """
         source_name = entry.zip_entry_path.replace("\\", "/").rsplit("/", 1)[-1]
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", source_name).strip("._")
         if not safe_name:

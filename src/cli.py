@@ -1,5 +1,5 @@
 """
-CLI / Headless Mode for unJaena Collector
+CLI / Headless Mode for Digital Forensics Collector
 
 Enables collection on Linux servers and other environments without GUI.
 
@@ -57,7 +57,6 @@ class HeadlessCollector:
         config: dict = None,
         output_dir: str = None,
         collection_profile_id: str = None,
-        collection_profile_signing_key: str = None,
     ):
         self.server_url = server_url
         self.session_id = session_id
@@ -68,25 +67,12 @@ class HeadlessCollector:
         self.config = config or {}
         self.output_dir = output_dir or tempfile.mkdtemp(prefix="forensic_collect_")
         self.collection_profile_id = collection_profile_id
-        self.collection_profile_signing_key = collection_profile_signing_key
         self._cancelled = False
-
-    def _refresh_collection_profile(self):
-        from core.token_validator import TokenValidator
-
-        validator = TokenValidator(self.server_url)
-        profile = validator.fetch_collection_profile(
-            self.session_id,
-            self.collection_token,
-            self.collection_profile_signing_key,
-        )
-        self.collection_profile_id = profile.get('profile_id')
-        return self.collection_profile_id
 
     def run(self) -> bool:
         """Execute the full collection pipeline. Returns True on success."""
         logger.info("=" * 60)
-        logger.info("unJaena Collector - Headless Mode")
+        logger.info("Digital Forensics Collector — Headless Mode")
         logger.info("=" * 60)
         logger.info(f"Server: {self.server_url}")
         logger.info(f"Case ID: {self.case_id}")
@@ -308,7 +294,6 @@ class HeadlessCollector:
             config=self.config,
             request_signer=self.request_signer,
             profile_id=self.collection_profile_id,
-            profile_refresh_callback=self._refresh_collection_profile,
         )
 
         success_count = 0
@@ -451,7 +436,6 @@ def run_headless(args, config: dict) -> int:
         config=config,
         output_dir=args.output_dir,
         collection_profile_id=getattr(result, 'collection_profile_id', None),
-        collection_profile_signing_key=getattr(result, 'signing_key', None),
     )
 
     success = collector.run()
