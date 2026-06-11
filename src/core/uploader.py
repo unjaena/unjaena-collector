@@ -26,6 +26,7 @@ import time
 import aiohttp
 import requests
 import websockets
+from requests.adapters import HTTPAdapter
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -138,6 +139,23 @@ def _zeroize_key(key_ref: str) -> None:
     del key_ref
 
 
+def _coerce_int(value, default: int, min_value: int, max_value: int) -> int:
+    """Parse and clamp integer tuning values from env/config."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(min_value, min(max_value, parsed))
+
+
+def _coerce_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
 @dataclass
 class UploadResult:
     """Upload result (P2-2: Extended error information)"""
@@ -148,6 +166,7 @@ class UploadResult:
     error_solution: Optional[str] = None   # P2-2: Solution/resolution
     is_recoverable: bool = True            # P2-2: Whether retry is possible
     is_credit_paused: bool = False         # True when server returns 402 (upload paused)
+    metrics: Optional[dict] = None         # Optional upload timing/size diagnostics
 
     @classmethod
     def from_error(cls, technical_error: str) -> 'UploadResult':
@@ -898,13 +917,52 @@ class DirectUploader:
         self.case_id = case_id
         self.consent_record = consent_record
         self.max_file_size = max_file_size or self.DEFAULT_MAX_FILE_SIZE
-        self._dev_mode = config.get('dev_mode', False) if config else False
+        self.config = config or {}
+        self._dev_mode = self.config.get('dev_mode', False)
         self.request_signer = request_signer
         self.profile_id = profile_id
         self.fallback_uploader = fallback_uploader
         if retry_count is None:
             retry_count = int(os.getenv('COLLECTOR_DIRECT_UPLOAD_RETRIES', '5'))
         self.request_retries = max(1, int(retry_count))
+        self.upload_workers = self._tuning_int(
+            'upload_workers', 'COLLECTOR_UPLOAD_WORKERS', 5, 1, 16
+        )
+        self.multipart_workers = self._tuning_int(
+            'multipart_upload_workers', 'COLLECTOR_MULTIPART_WORKERS', 4, 1, 8
+        )
+        self.http_pool_size = self._tuning_int(
+            'upload_http_pool_maxsize', 'COLLECTOR_UPLOAD_HTTP_POOL_MAXSIZE', 16, 1, 64
+        )
+        self.upload_timing_enabled = _coerce_bool(
+            os.getenv('COLLECTOR_UPLOAD_TIMING', self.config.get('upload_timing')),
+            default=False,
+        )
+        self._thread_local = threading.local()
+
+    def _tuning_int(
+        self, key: str, env_name: str, default: int, min_value: int, max_value: int
+    ) -> int:
+        return _coerce_int(
+            os.getenv(env_name, self.config.get(key)),
+            default,
+            min_value,
+            max_value,
+        )
+
+    def _http_session(self) -> requests.Session:
+        """Return a per-thread requests session for connection reuse."""
+        session = getattr(self._thread_local, 'session', None)
+        if session is None:
+            session = requests.Session()
+            adapter = HTTPAdapter(
+                pool_connections=self.http_pool_size,
+                pool_maxsize=self.http_pool_size,
+            )
+            session.mount('http://', adapter)
+            session.mount('https://', adapter)
+            self._thread_local.session = session
+        return session
 
     def _get_auth_headers(self, method: str = "POST", path: str = "", body=None) -> dict:
         """Build auth headers (session + token + HMAC signature)."""
@@ -922,9 +980,38 @@ class DirectUploader:
         """Compute SHA-256 hash."""
         h = hashlib.sha256()
         with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(8192), b''):
+            for chunk in iter(lambda: f.read(1024 * 1024), b''):
                 h.update(chunk)
         return h.hexdigest()
+
+    def _get_precomputed_file_hash(
+        self, file_path: str, file_size: int, metadata: Optional[dict]
+    ) -> Optional[str]:
+        """Reuse a prepared hash only when file identity still matches."""
+        if not metadata:
+            return None
+
+        file_hash = str(metadata.get('upload_hash_sha256') or '').strip().lower()
+        if not re.fullmatch(r'[0-9a-f]{64}', file_hash):
+            return None
+
+        try:
+            expected_size = int(metadata.get('upload_hash_size'))
+            expected_mtime_ns = int(metadata.get('upload_hash_mtime_ns'))
+            expected_path = os.path.abspath(str(metadata.get('upload_hash_path') or ''))
+            actual_path = os.path.abspath(file_path)
+            stat_result = os.stat(file_path)
+        except (TypeError, ValueError, OSError):
+            return None
+
+        if expected_path != actual_path:
+            return None
+        if expected_size != file_size or stat_result.st_size != file_size:
+            return None
+        if getattr(stat_result, 'st_mtime_ns', int(stat_result.st_mtime * 1_000_000_000)) != expected_mtime_ns:
+            return None
+
+        return file_hash
 
     def _request_presigned_url(self, file_path: str, artifact_type: str, file_hash: str) -> dict:
         """Request presigned URL from server (up to 5 retries)."""
@@ -948,7 +1035,7 @@ class DirectUploader:
                 headers = self._get_auth_headers("POST", endpoint, body)
                 headers['Content-Type'] = 'application/json'
 
-                response = requests.post(
+                response = self._http_session().post(
                     f"{self.server_url}{endpoint}",
                     data=body,
                     headers=headers,
@@ -1029,7 +1116,7 @@ class DirectUploader:
         for attempt in range(1, max_retries + 1):
             try:
                 with open(file_path, 'rb') as f:
-                    response = requests.put(
+                    response = self._http_session().put(
                         presigned_url,
                         data=f,
                         headers={'Content-Type': 'application/octet-stream'},
@@ -1072,7 +1159,7 @@ class DirectUploader:
                     with open(file_path, 'rb') as f:
                         f.seek(start)
                         data = f.read(chunk_size)
-                    response = requests.put(
+                    response = self._http_session().put(
                         part_url,
                         data=data,
                         headers={'Content-Type': 'application/octet-stream'},
@@ -1094,8 +1181,8 @@ class DirectUploader:
                     else:
                         raise
 
-        # Parallel part upload (max 4 concurrent)
-        max_workers = min(4, total_parts)
+        # Parallel part upload; tune with COLLECTOR_MULTIPART_WORKERS/config.
+        max_workers = min(self.multipart_workers, total_parts)
         completed_parts = [None] * total_parts
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1141,7 +1228,7 @@ class DirectUploader:
                 headers = self._get_auth_headers("POST", endpoint, body)
                 headers['Content-Type'] = 'application/json'
 
-                response = requests.post(
+                response = self._http_session().post(
                     f"{self.server_url}{endpoint}",
                     data=body,
                     headers=headers,
@@ -1194,7 +1281,7 @@ class DirectUploader:
             endpoint = _ENDPOINTS['abort_upload']
             headers = self._get_auth_headers("POST", endpoint)
 
-            requests.post(
+            self._http_session().post(
                 f"{self.server_url}{endpoint}",
                 params={"case_id": case_id, "key": key, "upload_id": upload_id},
                 headers=headers,
@@ -1245,9 +1332,21 @@ class DirectUploader:
                 is_recoverable=False,
             )
 
-        # Compute SHA-256 hash
+        timings = {}
+        total_start = time.perf_counter()
+
+        # Compute or reuse SHA-256 hash. Prepared hashes are accepted only
+        # when path, size, and mtime still match the file being uploaded.
         try:
-            file_hash = self._compute_file_hash(file_path)
+            hash_start = time.perf_counter()
+            file_hash = self._get_precomputed_file_hash(file_path, file_size, metadata)
+            if file_hash:
+                timings['hash_reused'] = True
+                timings['hash_ms'] = 0
+            else:
+                file_hash = self._compute_file_hash(file_path)
+                timings['hash_reused'] = False
+                timings['hash_ms'] = int((time.perf_counter() - hash_start) * 1000)
         except Exception as e:
             return UploadResult.from_error(f"Hash computation failed: {e}")
 
@@ -1257,7 +1356,9 @@ class DirectUploader:
 
         try:
             # Step 1: Request presigned URL
+            presign_start = time.perf_counter()
             presigned_info = self._request_presigned_url(file_path, artifact_type, file_hash)
+            timings['presigned_ms'] = int((time.perf_counter() - presign_start) * 1000)
             key = presigned_info['key']
             is_multipart = presigned_info.get('multipart', False)
             upload_id = presigned_info.get('upload_id')
@@ -1272,6 +1373,7 @@ class DirectUploader:
             encrypted_path = None
 
             if protected_secret_hex:
+                protect_start = time.perf_counter()
                 try:
                     from core.secure_upload import AESGCMCipher
                     cipher = AESGCMCipher(bytes.fromhex(protected_secret_hex))
@@ -1285,6 +1387,7 @@ class DirectUploader:
                         encrypted_path = f.name
 
                     cipher.encrypt_file(file_path, encrypted_path, aad)
+                    timings['protect_ms'] = int((time.perf_counter() - protect_start) * 1000)
                     is_encrypted = True
                     logger.info(f"[DIRECT] File protected: {file_name} ({os.path.getsize(encrypted_path):,} bytes)")
                 except Exception as enc_err:
@@ -1306,11 +1409,14 @@ class DirectUploader:
 
             # Step 2: Direct upload to cloud storage
             completed_parts = None
+            upload_start = time.perf_counter()
             if is_multipart:
                 completed_parts = self._upload_multipart(upload_path, presigned_info)
             else:
                 upload_url = presigned_info['upload_url']
                 self._upload_single(upload_path, upload_url)
+            timings['put_ms'] = int((time.perf_counter() - upload_start) * 1000)
+            upload_size = os.path.getsize(upload_path)
 
             # Clean up protected temp file
             if encrypted_path and os.path.exists(encrypted_path):
@@ -1318,6 +1424,7 @@ class DirectUploader:
 
             # Step 3: Confirm completion with server
             original_path = metadata.get('original_path', '') if metadata else ''
+            confirm_start = time.perf_counter()
             confirm_result = self._confirm_upload(
                 key=key,
                 upload_id=upload_id,
@@ -1328,11 +1435,41 @@ class DirectUploader:
                 is_encrypted=is_encrypted,
                 original_path=original_path,
             )
+            timings['confirm_ms'] = int((time.perf_counter() - confirm_start) * 1000)
+            timings['total_ms'] = int((time.perf_counter() - total_start) * 1000)
+
+            metrics = {
+                **timings,
+                'file_size': file_size,
+                'upload_size': upload_size,
+                'multipart': bool(is_multipart),
+                'hash_reused': bool(timings.get('hash_reused')),
+                'upload_workers': self.upload_workers,
+                'multipart_workers': self.multipart_workers if is_multipart else 0,
+            }
+
+            if self.upload_timing_enabled:
+                logger.info(
+                    "[UPLOAD_TIMING] %s size=%d upload_size=%d multipart=%s "
+                    "hash=%dms reused=%s presign=%dms protect=%dms put=%dms confirm=%dms total=%dms",
+                    file_name,
+                    file_size,
+                    upload_size,
+                    bool(is_multipart),
+                    metrics.get('hash_ms', 0),
+                    metrics.get('hash_reused', False),
+                    metrics.get('presigned_ms', 0),
+                    metrics.get('protect_ms', 0),
+                    metrics.get('put_ms', 0),
+                    metrics.get('confirm_ms', 0),
+                    metrics.get('total_ms', 0),
+                )
 
             logger.info(f"[DIRECT] Upload complete: {file_name} -> {key}")
             return UploadResult(
                 success=True,
                 artifact_id=confirm_result.get('file_id'),
+                metrics=metrics,
             )
 
         except SessionCancelledError as sce:
@@ -1414,12 +1551,18 @@ class DirectUploader:
         def _upload_one(idx, file_path, artifact_type, metadata):
             nonlocal completed_count
             if credit_paused.is_set():
-                return UploadResult(
+                result = UploadResult(
                     success=False, error="Upload paused - insufficient account balance.",
                     error_title="Upload Paused",
                     error_solution="Please check your account balance on the web platform. After resolving, restart the collector to continue. Already processed files are preserved.",
                     is_recoverable=False, is_credit_paused=True,
                 )
+                with lock:
+                    results[idx] = result
+                    completed_count += 1
+                    if progress_callback:
+                        progress_callback(completed_count / total, Path(file_path).name)
+                return result
             result = self.upload_file(file_path, artifact_type, metadata)
             if getattr(result, 'is_credit_paused', False):
                 credit_paused.set()  # Signal other threads to stop
@@ -1430,7 +1573,7 @@ class DirectUploader:
                     progress_callback(completed_count / total, Path(file_path).name)
             return result
 
-        max_workers = min(4, total)
+        max_workers = min(self.upload_workers, total)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {}
             for i, (file_path, artifact_type, metadata) in enumerate(files):

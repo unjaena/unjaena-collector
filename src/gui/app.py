@@ -1976,6 +1976,7 @@ class CollectorWindow(QMainWindow):
                 f"⚠️ {friendly_error.title}",
                 f"{friendly_error.message}\n\nSolution:\n{friendly_error.solution}"
             )
+
     def _start_collection(self):
         """Start the collection process"""
         # === Session validation (required before collection start) ===
@@ -3754,6 +3755,35 @@ class CollectionWorker(QThread):
         hash_dir = original_hash[:16] if original_hash else 'unhashed'
         return Path(output_dir) / '_upload_queue' / safe_artifact / hash_dir / Path(file_path).name
 
+    @staticmethod
+    def _record_upload_hash_metadata(
+        metadata: dict,
+        file_path: str,
+        file_hash: str,
+        file_size: int,
+    ) -> None:
+        import os
+
+        stat_result = os.stat(file_path)
+        metadata['upload_hash_sha256'] = file_hash
+        metadata['upload_hash_size'] = file_size
+        metadata['upload_hash_mtime_ns'] = getattr(
+            stat_result,
+            'st_mtime_ns',
+            int(stat_result.st_mtime * 1_000_000_000),
+        )
+        metadata['upload_hash_path'] = os.path.abspath(file_path)
+
+    @staticmethod
+    def _calculate_sha256(file_path: str) -> str:
+        import hashlib
+
+        h = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                h.update(chunk)
+        return h.hexdigest()
+
     @classmethod
     def _stage_stable_upload_copy(
         cls,
@@ -3784,11 +3814,23 @@ class CollectionWorker(QThread):
         shutil.copy2(source_path, staged_path)
         if not staged_path.is_file():
             raise FileNotFoundError(str(staged_path))
-        if os.path.getsize(staged_path) != os.path.getsize(source_path):
+        staged_size = os.path.getsize(staged_path)
+        if staged_size != os.path.getsize(source_path):
             staged_path.unlink(missing_ok=True)
             raise OSError(f"staged copy size mismatch for {source_path.name}")
 
+        staged_hash = cls._calculate_sha256(str(staged_path))
+        if staged_hash != original_hash:
+            staged_path.unlink(missing_ok=True)
+            raise OSError(f"staged copy hash mismatch for {source_path.name}")
+
         metadata['upload_staged'] = True
+        cls._record_upload_hash_metadata(
+            metadata,
+            str(staged_path),
+            staged_hash,
+            staged_size,
+        )
         return str(staged_path)
 
     def _abort_session(self):
@@ -4609,6 +4651,12 @@ class CollectionWorker(QThread):
                     metadata['sha256'] = original_hash
                     metadata['original_hash'] = original_hash
                     metadata['original_size'] = original_size
+                    self._record_upload_hash_metadata(
+                        metadata,
+                        file_path,
+                        original_hash,
+                        original_size,
+                    )
                     metadata['collection_time'] = datetime.utcnow().isoformat()
 
                     # Legacy wire-format metadata (server-side processed)
@@ -4713,6 +4761,18 @@ class CollectionWorker(QThread):
                     if result.success:
                         success_count += 1
                         self.log_message.emit(f"✓ Upload successful: {filename}", False)
+                        if getattr(uploader, 'upload_timing_enabled', False) and result.metrics:
+                            metrics = result.metrics
+                            self.log_message.emit(
+                                "Upload timing: "
+                                f"hash={metrics.get('hash_ms', 0)}ms, "
+                                f"reused={metrics.get('hash_reused', False)}, "
+                                f"presign={metrics.get('presigned_ms', 0)}ms, "
+                                f"put={metrics.get('put_ms', 0)}ms, "
+                                f"confirm={metrics.get('confirm_ms', 0)}ms, "
+                                f"total={metrics.get('total_ms', 0)}ms",
+                                False,
+                            )
                     else:
                         if result.error and ("CANCELLED" in result.error or "cancelled" in result.error.lower()):
                             self.log_message.emit("🛑 Collection cancelled by server. Stopping upload.", True)
@@ -4725,7 +4785,7 @@ class CollectionWorker(QThread):
 
                 return result
 
-            max_workers = min(5, max(total_upload, 1))
+            max_workers = min(uploader.upload_workers, max(total_upload, 1))
             if total_upload == 0:
                 self.log_message.emit(
                     "No files were collected. Verify the selected evidence source, "
@@ -4735,6 +4795,8 @@ class CollectionWorker(QThread):
                 self.progress_updated.emit(3, 0, self._calculate_overall_progress(3, 0), "No files collected", "")
                 self.finished.emit(False, "No files were collected; nothing was uploaded or queued for analysis.")
                 return
+
+            self.log_message.emit(f"Upload concurrency: {max_workers} worker(s)", False)
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {}

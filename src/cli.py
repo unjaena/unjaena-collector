@@ -267,11 +267,24 @@ class HeadlessCollector:
             if i % 50 == 0 or i == len(files):
                 logger.info(f"  Hashing [{i}/{len(files)}]")
             try:
-                calculator.calculate_file_hash(filepath)
+                hash_result = calculator.calculate_file_hash(filepath)
                 with open(filepath, "rb") as readable:
                     readable.read(1)
-                if os.path.getsize(filepath) <= 0:
+                stat_result = os.stat(filepath)
+                if hash_result.file_size <= 0:
                     raise ValueError("empty file")
+                metadata["hash_sha256"] = hash_result.sha256_hash
+                metadata["sha256"] = hash_result.sha256_hash
+                metadata["original_hash"] = hash_result.sha256_hash
+                metadata["original_size"] = hash_result.file_size
+                metadata["upload_hash_sha256"] = hash_result.sha256_hash
+                metadata["upload_hash_size"] = hash_result.file_size
+                metadata["upload_hash_mtime_ns"] = getattr(
+                    stat_result,
+                    "st_mtime_ns",
+                    int(stat_result.st_mtime * 1_000_000_000),
+                )
+                metadata["upload_hash_path"] = os.path.abspath(filepath)
                 verified.append((filepath, artifact_type, metadata))
             except Exception as e:
                 logger.warning(f"  Hash failed: {os.path.basename(filepath)}: {e}")
@@ -321,7 +334,8 @@ class HeadlessCollector:
                     logger.info(f"  Uploading [{completed[0]}/{len(files)}]")
             return filepath, result
 
-        max_workers = min(5, len(files))
+        max_workers = min(uploader.upload_workers, len(files))
+        logger.info(f"  Upload concurrency: {max_workers} worker(s)")
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             for entry in files:
