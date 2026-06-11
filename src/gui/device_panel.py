@@ -58,9 +58,20 @@ class DeviceListPanel(QWidget):
         super().__init__(parent)
         self.device_manager = device_manager
         self.device_checkboxes: Dict[str, QCheckBox] = {}
+        self._interaction_locked = False
         self.setAcceptDrops(True)
         self._setup_ui()
         self._connect_signals()
+
+    def set_interaction_locked(self, locked: bool):
+        """Disable source changes while collection or upload is running."""
+        self._interaction_locked = bool(locked)
+        self.refresh_btn.setEnabled(not locked)
+        self.add_btn.setEnabled(not locked)
+        self.setAcceptDrops(not locked)
+        for device_id, cb in self.device_checkboxes.items():
+            device = self.device_manager.get_device(device_id)
+            cb.setEnabled(False if locked else bool(device and device.is_selectable))
 
     def _setup_ui(self):
         """Setup UI"""
@@ -73,15 +84,15 @@ class DeviceListPanel(QWidget):
         header.setSpacing(4)
         header.setContentsMargins(0, 0, 0, 0)
 
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setFixedHeight(24)
-        refresh_btn.clicked.connect(self._on_refresh_clicked)
-        header.addWidget(refresh_btn)
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.setFixedHeight(24)
+        self.refresh_btn.clicked.connect(self._on_refresh_clicked)
+        header.addWidget(self.refresh_btn)
 
-        add_btn = QPushButton("+ Add Disk Image / FFS")
-        add_btn.setFixedHeight(24)
-        add_btn.setObjectName("addEvidenceButton")
-        add_btn.setStyleSheet(f"""
+        self.add_btn = QPushButton("+ Add Disk Image / FFS")
+        self.add_btn.setFixedHeight(24)
+        self.add_btn.setObjectName("addEvidenceButton")
+        self.add_btn.setStyleSheet(f"""
             QPushButton#addEvidenceButton {{
                 background-color: {COLORS['bg_elevated']};
                 border: 1px solid {COLORS['brand_primary']};
@@ -100,8 +111,8 @@ class DeviceListPanel(QWidget):
                 border-color: {COLORS['brand_secondary']};
             }}
         """)
-        add_btn.clicked.connect(self._on_add_image_clicked)
-        header.addWidget(add_btn)
+        self.add_btn.clicked.connect(self._on_add_image_clicked)
+        header.addWidget(self.add_btn)
 
         header.addStretch()
 
@@ -285,7 +296,7 @@ class DeviceListPanel(QWidget):
 
         cb = QCheckBox(self._get_device_label(device))
         cb.setChecked(device.is_selected)
-        cb.setEnabled(device.is_selectable)
+        cb.setEnabled(device.is_selectable and not self._interaction_locked)
         cb.setProperty("device_id", device.device_id)
         cb.stateChanged.connect(
             lambda state, d=device.device_id: self._on_checkbox_changed(d, state)
@@ -312,9 +323,12 @@ class DeviceListPanel(QWidget):
             cb = self.device_checkboxes[device.device_id]
             cb.setText(self._get_device_label(device))
             cb.setToolTip(self._get_device_tooltip(device))
+            cb.setEnabled(device.is_selectable and not self._interaction_locked)
 
     def _on_checkbox_changed(self, device_id: str, state: int):
         """Checkbox changed"""
+        if self._interaction_locked:
+            return
         selected = state == Qt.CheckState.Checked.value
         self.device_manager.select_device(device_id, selected)
         self._update_summary()
@@ -322,11 +336,15 @@ class DeviceListPanel(QWidget):
 
     def _on_refresh_clicked(self):
         """Refresh"""
+        if self._interaction_locked:
+            return
         self.device_manager.refresh()
         self._update_mobile_guide()
 
     def _on_add_image_clicked(self):
         """Add image or mobile FFS bundle"""
+        if self._interaction_locked:
+            return
         file_path, selected_filter = QFileDialog.getOpenFileName(
             self,
             "Select Disk Image or Mobile FFS Bundle",
@@ -342,6 +360,8 @@ class DeviceListPanel(QWidget):
 
     def _register_evidence_file(self, file_path: str):
         """Register a supported image or mobile FFS bundle."""
+        if self._interaction_locked:
+            return
         is_mobile_bundle = file_path.lower().endswith((".zip", ".clbx"))
         if is_mobile_bundle:
             self._register_ffs_bundle(file_path)
@@ -352,6 +372,9 @@ class DeviceListPanel(QWidget):
 
     def dragEnterEvent(self, event):
         """Accept supported evidence files dropped onto the source panel."""
+        if self._interaction_locked:
+            event.ignore()
+            return
         if self._event_has_supported_file(event):
             event.acceptProposedAction()
             return
@@ -359,6 +382,9 @@ class DeviceListPanel(QWidget):
 
     def dropEvent(self, event):
         """Register a dropped evidence file."""
+        if self._interaction_locked:
+            event.ignore()
+            return
         urls = event.mimeData().urls()
         if not urls:
             event.ignore()

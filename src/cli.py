@@ -147,7 +147,8 @@ class HeadlessCollector:
             for i, artifact_type in enumerate(self.artifacts, 1):
                 if self._cancelled:
                     break
-                logger.info(f"  [{i}/{len(self.artifacts)}] Collecting: {artifact_type}")
+                target_label = f"selected target {i}/{len(self.artifacts)}"
+                logger.info(f"  [{i}/{len(self.artifacts)}] Collecting {target_label}")
                 try:
                     file_count = 0
                     for item in collector.collect(artifact_type) or []:
@@ -171,7 +172,8 @@ class HeadlessCollector:
         for i, artifact_type in enumerate(self.artifacts, 1):
             if self._cancelled:
                 break
-            logger.info(f"  [{i}/{len(self.artifacts)}] Collecting: {artifact_type}")
+            target_label = f"selected target {i}/{len(self.artifacts)}"
+            logger.info(f"  [{i}/{len(self.artifacts)}] Collecting {target_label}")
             file_count = 0
             try:
                 for item in collector.collect(artifact_type) or []:
@@ -180,7 +182,7 @@ class HeadlessCollector:
                         metadata = item[1] if isinstance(item, tuple) and len(item) > 1 and isinstance(item[1], dict) else {}
                         error_msg = metadata.get('error', 'Unknown')
                         if metadata.get('status') not in ('not_found', 'skipped'):
-                            logger.warning(f"    -> {artifact_type}: {error_msg}")
+                            logger.warning(f"    -> {target_label}: {error_msg}")
                         continue
                     collected.append(normalized)
                     file_count += 1
@@ -227,12 +229,12 @@ class HeadlessCollector:
             return None
 
         if not filepath or not isinstance(filepath, (str, os.PathLike)):
-            logger.warning(f"    -> {artifact_type}: invalid collector output path")
+            logger.warning("    -> selected target: invalid collector output path")
             return None
 
         filepath = os.fspath(filepath)
         if not os.path.isfile(filepath):
-            logger.warning(f"    -> {artifact_type}: collected path is not a readable file: {filepath}")
+            logger.warning(f"    -> selected target: collected path is not a readable file: {filepath}")
             return None
 
         metadata.setdefault("original_path", filepath)

@@ -379,7 +379,12 @@ class TokenValidator:
             logger.error(f"[Health] {detail}")
             return False, detail
 
-    def validate_session(self, session_id: str, collection_token: str) -> SessionValidationResult:
+    def validate_session(
+        self,
+        session_id: str,
+        collection_token: str,
+        profile_id: str = None,
+    ) -> SessionValidationResult:
         """
         Validate session (for pre-collection check)
 
@@ -395,12 +400,15 @@ class TokenValidator:
         """
         try:
             # Enforce SSL certificate verification
+            payload = {
+                "session_id": session_id,
+                "collection_token": collection_token,
+            }
+            if profile_id:
+                payload["profile_id"] = profile_id
             response = requests.post(
                 f"{self.server_url}/api/v1/collector/validate-session",
-                json={
-                    "session_id": session_id,
-                    "collection_token": collection_token,
-                },
+                json=payload,
                 timeout=self.timeout,
                 verify=_get_ssl_verify(),
             )

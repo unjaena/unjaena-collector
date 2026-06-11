@@ -114,6 +114,7 @@ class CollectorWindow(QMainWindow):
         self.request_signer = None
         self._token_validation_worker = None
         self._token_validation_in_progress = False
+        self._collection_in_progress = False
         self._close_after_worker_finish = False
 
         # Unified device manager
@@ -1280,6 +1281,9 @@ class CollectorWindow(QMainWindow):
         - All tabs remain accessible (not disabled)
         - Auto-focus to appropriate tab based on detected OS
         """
+        if getattr(self, '_collection_in_progress', False):
+            return
+
         selected_devices = self.device_manager.get_selected_devices()
 
         # Determine tab for auto-focus (priority: first selected device)
@@ -1538,7 +1542,7 @@ class CollectorWindow(QMainWindow):
 
     def _update_collect_button_state(self):
         """Update collect button state"""
-        if getattr(self, '_token_validation_in_progress', False):
+        if getattr(self, '_token_validation_in_progress', False) or getattr(self, '_collection_in_progress', False):
             self.collect_btn.setEnabled(False)
             self._update_scope_summary()
             self._update_workflow_status()
@@ -1549,6 +1553,32 @@ class CollectorWindow(QMainWindow):
         has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
 
         self.collect_btn.setEnabled(has_token and has_devices and has_artifacts)
+        self._update_scope_summary()
+        self._update_workflow_status()
+
+    def _set_collection_controls_locked(self, locked: bool):
+        """Freeze all collection inputs while a collection/upload run is active."""
+        self._collection_in_progress = bool(locked)
+        self.collect_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(bool(locked))
+        self.validate_btn.setEnabled(not locked and not getattr(self, '_token_validation_in_progress', False))
+        self.show_token_btn.setEnabled(not locked and not getattr(self, '_token_validation_in_progress', False))
+        self.token_input.setEnabled(not locked and not getattr(self, '_token_validation_in_progress', False))
+        self.select_all_cb.setEnabled(not locked)
+        self.include_deleted_cb.setEnabled(not locked)
+        self.advanced_scope_cb.setEnabled(not locked)
+        self.artifacts_tab.setEnabled(not locked)
+        if hasattr(self, 'linux_mount_path'):
+            self.linux_mount_path.setEnabled(not locked)
+        if hasattr(self, 'macos_mount_path'):
+            self.macos_mount_path.setEnabled(not locked)
+        if hasattr(self, 'device_panel'):
+            self.device_panel.set_interaction_locked(locked)
+        for cb in self.artifact_checks.values():
+            cb.setEnabled(False if locked else self._is_artifact_allowed(cb.property("artifact_type") or ""))
+        if not locked:
+            self._update_platform_tab_states()
+            self._update_collect_button_state()
         self._update_scope_summary()
         self._update_workflow_status()
 
@@ -1706,6 +1736,9 @@ class CollectorWindow(QMainWindow):
 
     def _toggle_select_all(self, state):
         """Toggle artifact checkboxes for current tab only"""
+        if getattr(self, '_collection_in_progress', False):
+            return
+
         checked = state == Qt.CheckState.Checked.value
 
         # Determine category based on current tab index
@@ -1738,6 +1771,10 @@ class CollectorWindow(QMainWindow):
 
     def _validate_token(self):
         """Validate the session token"""
+        if getattr(self, '_collection_in_progress', False):
+            self.status_bar.showMessage("Collection is already running...")
+            return
+
         token = self.token_input.text().strip()
         if not token:
             QMessageBox.warning(self, "Error", "Please enter a session token")
@@ -1762,9 +1799,10 @@ class CollectorWindow(QMainWindow):
     def _set_token_validation_busy(self, busy: bool):
         """Show validation progress and prevent duplicate authentication."""
         self._token_validation_in_progress = busy
-        self.validate_btn.setEnabled(not busy)
-        self.show_token_btn.setEnabled(not busy)
-        self.token_input.setEnabled(not busy)
+        controls_enabled = not busy and not getattr(self, '_collection_in_progress', False)
+        self.validate_btn.setEnabled(controls_enabled)
+        self.show_token_btn.setEnabled(controls_enabled)
+        self.token_input.setEnabled(controls_enabled)
 
         if busy:
             self.validate_btn.setText("Validating...")
@@ -1780,8 +1818,8 @@ class CollectorWindow(QMainWindow):
         self.validate_btn.setText("Validate Token")
         self.token_progress.setVisible(False)
         self.token_progress.setRange(0, 100)
-        self.token_input.setEnabled(True)
-        self.show_token_btn.setEnabled(True)
+        self.token_input.setEnabled(not getattr(self, '_collection_in_progress', False))
+        self.show_token_btn.setEnabled(not getattr(self, '_collection_in_progress', False))
         self.status_bar.showMessage("Ready")
         self._update_collect_button_state()
 
@@ -1979,6 +2017,10 @@ class CollectorWindow(QMainWindow):
 
     def _start_collection(self):
         """Start the collection process"""
+        if getattr(self, '_collection_in_progress', False):
+            self._log("Collection is already running. Wait for it to finish or cancel it first.", error=True)
+            return
+
         # === Session validation (required before collection start) ===
         # Detect cancelled cases, expired sessions, etc.
         # [Security] Use session_id + collection_token instead of original token
@@ -1992,7 +2034,11 @@ class CollectorWindow(QMainWindow):
 
         self._log("Validating session before starting collection...")
         validator = TokenValidator(self.config['server_url'])
-        result = validator.validate_session(self.session_id, self.collection_token)
+        result = validator.validate_session(
+            self.session_id,
+            self.collection_token,
+            profile_id=self.collection_profile_id,
+        )
 
         if not result.can_proceed:
             reason = result.reason or "Unknown error"
@@ -2659,14 +2705,10 @@ class CollectorWindow(QMainWindow):
 
         self._log(f"Starting collection for: {', '.join(selected)}")
 
-        # Disable controls
-        self.collect_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
-        self.validate_btn.setEnabled(False)
-        self.select_all_cb.setEnabled(False)
-        self.include_deleted_cb.setEnabled(False)
-        for cb in self.artifact_checks.values():
-            cb.setEnabled(False)
+        # Freeze every source/scope/auth input for the full collection and
+        # upload lifetime. Individual UI events can otherwise re-enable the
+        # start button or mutate selected sources while the worker is running.
+        self._set_collection_controls_locked(True)
 
         # Phase 2.1: Get Android/iOS options
         android_serial = getattr(self, '_android_device_serial', None)
@@ -3030,18 +3072,12 @@ class CollectorWindow(QMainWindow):
             self._reenable_bitlocker()
             self._bitlocker_auto_decrypt_used = False
 
-        # Re-enable controls
-        self.collect_btn.setEnabled(False)  # Disable after collection complete/cancelled (new token required)
-        self.cancel_btn.setEnabled(False)
-        self.validate_btn.setEnabled(True)
-        self.select_all_cb.setEnabled(True)
-        self.include_deleted_cb.setEnabled(True)
-        for cb in self.artifact_checks.values():
-            cb.setEnabled(True)
-
         # [Security] Clear session data - prevent token reuse
         # After collection complete/cancelled, must re-authenticate with new token
         self._clear_session_data()
+        self._set_collection_controls_locked(False)
+        self.collect_btn.setEnabled(False)  # Disable after collection complete/cancelled (new token required)
+        self.cancel_btn.setEnabled(False)
 
         if success:
             self._collection_completed = True
@@ -3551,12 +3587,15 @@ class CollectionWorker(QThread):
                 if self._cancelled:
                     break
                 try:
+                    payload = {
+                        'session_id': self.session_id,
+                        'collection_token': self.collection_token,
+                    }
+                    if self.collection_profile_id:
+                        payload['profile_id'] = self.collection_profile_id
                     resp = requests.post(
                         f"{self.server_url}/api/v1/collector/validate-session",
-                        json={
-                            'session_id': self.session_id,
-                            'collection_token': self.collection_token,
-                        },
+                        json=payload,
                         timeout=10,
                         verify=_get_ssl_verify(),
                     )
@@ -3736,6 +3775,22 @@ class CollectionWorker(QThread):
             module_name.endswith("ios_collector")
             or class_name in {"ioscollector", "iosdeviceconnector"}
         )
+
+    @staticmethod
+    def _target_label(index: int, total: int) -> str:
+        return f"Selected target {index}/{max(total, 1)}"
+
+    @staticmethod
+    def _sanitize_collector_status(message: str) -> str:
+        text = str(message or "")
+        if "progress:" in text.lower():
+            return text
+        lowered = text.lower()
+        if lowered.startswith("preparing backup for "):
+            return "Preparing backup access..."
+        if lowered.startswith("extracting ") and " from backup" in lowered:
+            return "Extracting selected target from backup..."
+        return text
 
     @staticmethod
     def _requires_stable_upload_copy(artifact_type: str, metadata: dict) -> bool:
@@ -4286,13 +4341,14 @@ class CollectionWorker(QThread):
                             break
 
                         item_index += 1
+                        target_label = self._target_label(item_index, total_items)
                         stage_progress = int((item_index / max(total_items, 1)) * 100)
                         overall_progress = self._calculate_overall_progress(1, stage_progress)
                         remaining = self._estimate_remaining_time(1, stage_progress, item_index, total_items)
 
                         self.progress_updated.emit(
                             1, stage_progress, overall_progress,
-                            f"[{device_name}] Collecting: {artifact_type}...",
+                            f"[{device_name}] Collecting {target_label}...",
                             remaining
                         )
 
@@ -4329,15 +4385,16 @@ class CollectionWorker(QThread):
                                         pct = float(msg.split(":")[-1].strip().rstrip("%"))
                                         self.progress_updated.emit(
                                             1, int(pct), self._calculate_overall_progress(1, int(pct)),
-                                            f"[{device_name}] {artifact_type}: {pct:.1f}%",
+                                            f"[{device_name}] {target_label}: {pct:.1f}%",
                                             ""
                                         )
                                     except (ValueError, IndexError):
                                         pass
                                 else:
                                     # Non-progress messages (e.g. "Creating iOS backup") → log + status dialog
-                                    self.log_message.emit(f"[{device_name}] {msg}", False)
-                                    self.ios_status_update.emit(msg)
+                                    safe_msg = self._sanitize_collector_status(msg)
+                                    self.log_message.emit(f"[{device_name}] {safe_msg}", False)
+                                    self.ios_status_update.emit(safe_msg)
 
                             # Pass progress callback for iOS artifacts
                             _include_deleted = self.include_deleted
@@ -4358,13 +4415,13 @@ class CollectionWorker(QThread):
                                     # not_found = file absent from backup (normal for uninstalled apps)
                                     # Unknown artifact type = other platform artifact (silent skip)
                                     if status == 'not_found':
-                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: Not in backup", False)
+                                        self.log_message.emit(f"[SKIP] [{device_name}] {target_label}: not present", False)
                                     elif status == 'skipped':
-                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: {error_msg}", False)
+                                        self.log_message.emit(f"[SKIP] [{device_name}] {target_label}: {error_msg}", False)
                                     elif 'Root access required' in error_msg or 'not rooted' in error_msg:
-                                        self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: Requires root", False)
+                                        self.log_message.emit(f"[SKIP] [{device_name}] {target_label}: requires root", False)
                                     elif error_msg not in ['Unknown artifact type: ' + artifact_type]:
-                                        self.log_message.emit(f"[{device_name}] {artifact_type}: {error_msg}", True)
+                                        self.log_message.emit(f"[{device_name}] {target_label}: {error_msg}", True)
                                         if is_ios_backup_artifact and not ios_backup_blocking_error:
                                             blocking_markers = (
                                                 'iOS encrypted backup is not enabled',
@@ -4380,7 +4437,7 @@ class CollectionWorker(QThread):
                                 collected_path = Path(file_path)
                                 if not collected_path.is_file():
                                     self.log_message.emit(
-                                        f"[SKIP] [{device_name}] {artifact_type}: "
+                                        f"[SKIP] [{device_name}] {target_label}: "
                                         f"non-file collection result ignored ({collected_path.name})",
                                         False,
                                     )
@@ -4405,14 +4462,14 @@ class CollectionWorker(QThread):
 
                                 # Update progress every 100 items + process GUI events
                                 if file_count % CHUNK_SIZE == 0:
-                                    self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count} files collecting...", False)
+                                    self.log_message.emit(f"[{device_name}] {target_label}: {file_count} files queued...", False)
 
                             if file_count == 0 and error_count == 0:
-                                self.log_message.emit(f"[SKIP] [{device_name}] {artifact_type}: No files found", False)
+                                self.log_message.emit(f"[SKIP] [{device_name}] {target_label}: no matching files found", False)
                                 if is_ios_backup_artifact:
                                     ios_backup_no_match_count += 1
                             elif file_count > 0:
-                                self.log_message.emit(f"[{device_name}] {artifact_type}: {file_count} files collected", False)
+                                self.log_message.emit(f"[{device_name}] {target_label}: {file_count} files queued for upload", False)
                                 if is_ios_backup_artifact:
                                     ios_backup_file_count += file_count
                             elif is_ios_backup_artifact:
@@ -4426,7 +4483,7 @@ class CollectionWorker(QThread):
                                 # Silently skip — not an error
                                 logging.debug(f"Skipped cross-platform artifact: {artifact_type} on {device_name}")
                             else:
-                                self.log_message.emit(f"Collection failed [{device_name}] ({artifact_type}): {e}", True)
+                                self.log_message.emit(f"Collection failed [{device_name}] ({target_label}): {e}", True)
                                 logging.debug(f"Collection error for {artifact_type} on {device_name}: {e}")
                                 if is_ios_backup_artifact:
                                     ios_backup_error_count += 1
@@ -4477,16 +4534,17 @@ class CollectionWorker(QThread):
                         self.finished.emit(False, "Collection cancelled")
                         return
 
+                    target_label = self._target_label(i + 1, total_artifacts)
                     stage_progress = int(((i + 1) / total_artifacts) * 100)
                     overall_progress = self._calculate_overall_progress(1, stage_progress)
                     remaining = self._estimate_remaining_time(1, stage_progress, i + 1, total_artifacts)
 
                     self.progress_updated.emit(
                         1, stage_progress, overall_progress,
-                        f"Collecting: {artifact_type}...",
+                        f"Collecting {target_label}...",
                         remaining
                     )
-                    self.log_message.emit(f"Collecting: {artifact_type}", False)
+                    self.log_message.emit(f"Collecting {target_label}", False)
 
                     try:
                         # Phase 2.1: Pass kwargs per category
@@ -4513,7 +4571,7 @@ class CollectionWorker(QThread):
                                 break
                             if not file_path or not Path(file_path).is_file():
                                 self.log_message.emit(
-                                    f"[SKIP] {artifact_type}: non-file collection result ignored",
+                                    f"[SKIP] {target_label}: non-file collection result ignored",
                                     False,
                                 )
                                 continue
@@ -4526,16 +4584,16 @@ class CollectionWorker(QThread):
 
                             # Update progress every 100 items + process GUI events
                             if file_count % CHUNK_SIZE == 0:
-                                self.log_message.emit(f"{artifact_type}: {file_count} files collecting...", False)
+                                self.log_message.emit(f"{target_label}: {file_count} files queued...", False)
 
                         if file_count == 0:
-                            self.log_message.emit(f"[SKIP] {artifact_type}: No files found", False)
+                            self.log_message.emit(f"[SKIP] {target_label}: no matching files found", False)
                         else:
-                            self.log_message.emit(f"✓ {artifact_type}: {file_count} files collected", False)
+                            self.log_message.emit(f"{target_label}: {file_count} files queued for upload", False)
 
                     except Exception as e:
                         import logging
-                        self.log_message.emit(f"Collection failed ({artifact_type}): {e}", True)
+                        self.log_message.emit(f"Collection failed ({target_label}): {e}", True)
                         logging.debug(f"Collection error for {artifact_type}: {e}")
 
                 # Release scan cache after all artifact types collected
@@ -4781,7 +4839,7 @@ class CollectionWorker(QThread):
                             self.log_message.emit("⏳ Previous data cleanup in progress. Please try again after cleanup completes.", True)
                             self._cancelled = True
                         else:
-                            self.log_message.emit(f"✗ Upload failed ({artifact_type}): {result.error}", True)
+                            self.log_message.emit(f"Upload failed: {filename}: {result.error}", True)
 
                 return result
 
@@ -4792,7 +4850,7 @@ class CollectionWorker(QThread):
                     "authorized targets, and filesystem support before retrying.",
                     True,
                 )
-                self.progress_updated.emit(3, 0, self._calculate_overall_progress(3, 0), "No files collected", "")
+                self.progress_updated.emit(3, 0, self._calculate_overall_progress(3, 0), "No files queued for upload", "")
                 self.finished.emit(False, "No files were collected; nothing was uploaded or queued for analysis.")
                 return
 
