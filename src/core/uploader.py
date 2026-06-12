@@ -926,13 +926,13 @@ class DirectUploader:
             retry_count = int(os.getenv('COLLECTOR_DIRECT_UPLOAD_RETRIES', '5'))
         self.request_retries = max(1, int(retry_count))
         self.upload_workers = self._tuning_int(
-            'upload_workers', 'COLLECTOR_UPLOAD_WORKERS', 5, 1, 16
+            'upload_workers', 'COLLECTOR_UPLOAD_WORKERS', 10, 1, 16
         )
         self.multipart_workers = self._tuning_int(
             'multipart_upload_workers', 'COLLECTOR_MULTIPART_WORKERS', 4, 1, 8
         )
         self.http_pool_size = self._tuning_int(
-            'upload_http_pool_maxsize', 'COLLECTOR_UPLOAD_HTTP_POOL_MAXSIZE', 16, 1, 64
+            'upload_http_pool_maxsize', 'COLLECTOR_UPLOAD_HTTP_POOL_MAXSIZE', 24, 1, 64
         )
         self.upload_timing_enabled = _coerce_bool(
             os.getenv('COLLECTOR_UPLOAD_TIMING', self.config.get('upload_timing')),

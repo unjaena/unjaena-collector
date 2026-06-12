@@ -5,5 +5,10 @@
   "ws_url": "wss://app.unjaena.com",
   "app_name": "unJaena Intelligence Collector",
   "version": "2.6.6",
-  "dev_mode": false
+  "dev_mode": false,
+  "prepare_workers": 2,
+  "upload_workers": 5,
+  "multipart_upload_workers": 4,
+  "upload_http_pool_maxsize": 16,
+  "upload_timing": false
 }

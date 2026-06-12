@@ -3622,6 +3622,125 @@ class CollectionWorker(QThread):
         self._heartbeat_stop_event = None
         self._heartbeat_thread = None
 
+    def _tuning_int(self, key: str, env_name: str, default: int, min_value: int, max_value: int) -> int:
+        import os
+
+        raw_value = os.getenv(env_name, self.config.get(key))
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            parsed = default
+        return max(min_value, min(max_value, parsed))
+
+    def _prepare_upload_item(self, output_dir: str, item: tuple) -> dict:
+        import os
+        import time
+
+        index, file_path, artifact_type, metadata = item
+        filename = Path(file_path).name
+        timings = {}
+        item_start = time.perf_counter()
+
+        try:
+            if not os.path.exists(file_path):
+                return {
+                    'ok': False,
+                    'index': index,
+                    'filename': filename,
+                    'error': f"[ERROR] {filename}: file disappeared before upload preparation",
+                }
+            if not os.path.isfile(file_path):
+                return {
+                    'ok': False,
+                    'index': index,
+                    'filename': filename,
+                    'error': f"[ERROR] {filename}: non-file path cannot be uploaded",
+                }
+
+            actual_size = os.path.getsize(file_path)
+            if actual_size <= 0:
+                return {
+                    'ok': False,
+                    'index': index,
+                    'filename': filename,
+                    'error': f"[ERROR] {filename}: empty file cannot be uploaded",
+                }
+
+            try:
+                with open(file_path, 'rb') as readable:
+                    readable.read(1)
+            except OSError as access_error:
+                return {
+                    'ok': False,
+                    'index': index,
+                    'filename': filename,
+                    'error': f"[ERROR] {filename}: file is not readable before upload ({access_error})",
+                }
+
+            hash_start = time.perf_counter()
+            hash_result = FileHashCalculator().calculate_file_hash(file_path)
+            original_hash = hash_result.sha256_hash
+            original_size = hash_result.file_size
+            timings['hash_ms'] = int((time.perf_counter() - hash_start) * 1000)
+
+            cached_hash = metadata.get('hash_sha256') or metadata.get('sha256')
+            if cached_hash and cached_hash != original_hash:
+                metadata['collector_reported_hash'] = cached_hash
+            metadata['hash_sha256'] = original_hash
+            metadata['sha256'] = original_hash
+            metadata['original_hash'] = original_hash
+            metadata['original_size'] = original_size
+            self._record_upload_hash_metadata(
+                metadata,
+                file_path,
+                original_hash,
+                original_size,
+            )
+            metadata['collection_time'] = datetime.utcnow().isoformat()
+            metadata['encryption'] = {
+                'nonce': 'hash_only',
+                'original_hash': original_hash,
+            }
+
+            upload_file_path = file_path
+            timings['stable_copy_ms'] = 0
+            if self._requires_stable_upload_copy(artifact_type, metadata):
+                copy_start = time.perf_counter()
+                upload_file_path = self._stage_stable_upload_copy(
+                    output_dir=output_dir,
+                    file_path=file_path,
+                    artifact_type=artifact_type,
+                    metadata=metadata,
+                    original_hash=original_hash,
+                )
+                timings['stable_copy_ms'] = int((time.perf_counter() - copy_start) * 1000)
+
+            timings['total_ms'] = int((time.perf_counter() - item_start) * 1000)
+            return {
+                'ok': True,
+                'index': index,
+                'filename': filename,
+                'file_path': upload_file_path,
+                'artifact_type': artifact_type,
+                'metadata': metadata,
+                'file_size': original_size,
+                'timings': timings,
+            }
+        except FileNotFoundError:
+            return {
+                'ok': False,
+                'index': index,
+                'filename': filename,
+                'error': f"[ERROR] {filename}: file removed mid-pipeline",
+            }
+        except Exception as exc:
+            return {
+                'ok': False,
+                'index': index,
+                'filename': filename,
+                'error': f"Preparation failed ({filename}): {exc}",
+            }
+
     def _request_password(self, error_msg=None):
         """
         Password callback: called from collector thread → emits signal → blocks until GUI responds.
@@ -3948,6 +4067,56 @@ class CollectionWorker(QThread):
             minutes = int((remaining % 3600) / 60)
             return f"{hours}h {minutes}m"
 
+    def _prewarm_collector_index(self, collector, device_name: str) -> None:
+        """Build reusable filesystem indexes before per-artifact collection starts."""
+        import time
+
+        started = time.perf_counter()
+        try:
+            # ArtifactCollector forensic-disk mode keeps its own scan cache.
+            if hasattr(collector, 'forensic_disk_accessor') and collector.forensic_disk_accessor:
+                self.log_message.emit(f"[{device_name}] Building artifact index...", False)
+                self.progress_updated.emit(1, 0, 0, f"[{device_name}] Building artifact index...", "")
+                if hasattr(collector, '_scan_cache') and collector._scan_cache is None:
+                    collector._scan_cache = collector.forensic_disk_accessor.scan_all_files(
+                        include_deleted=True
+                    )
+                    if hasattr(collector, '_build_scan_index') and collector._scan_index is None:
+                        collector._scan_index = collector._build_scan_index(collector._scan_cache)
+                    active_count = len(collector._scan_cache.get('active_files', []))
+                    elapsed_ms = int((time.perf_counter() - started) * 1000)
+                    self.log_message.emit(
+                        f"[{device_name}] Index ready: {active_count} files ({elapsed_ms}ms)",
+                        False,
+                    )
+                return
+
+            # BaseMFTCollector subclasses, including E01ArtifactCollector and
+            # LocalMFTCollector, expose _build_mft_index(). Restrict prewarm to
+            # NTFS/native extractor mode so non-NTFS direct-path collection is not
+            # forced into an expensive full filesystem scan.
+            accessor = getattr(collector, '_accessor', None)
+            if (
+                accessor is not None
+                and hasattr(collector, '_build_mft_index')
+                and not getattr(collector, '_mft_indexed', False)
+                and getattr(accessor, '_extractor', None) is not None
+            ):
+                self.log_message.emit(f"[{device_name}] Building artifact index...", False)
+                self.progress_updated.emit(1, 0, 0, f"[{device_name}] Building artifact index...", "")
+                collector._build_mft_index()
+                cache = getattr(collector, '_mft_cache', {}) or {}
+                active_count = len(cache.get('active_files', []))
+                deleted_count = len(cache.get('deleted_files', []))
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                self.log_message.emit(
+                    f"[{device_name}] Index ready: {active_count} active, "
+                    f"{deleted_count} deleted ({elapsed_ms}ms)",
+                    False,
+                )
+        except Exception as e:
+            self.log_message.emit(f"[{device_name}] Index build skipped: {e}", True)
+
     def _create_collector_for_device(self, device, output_dir: str):
         """
         Create appropriate collector for device type
@@ -4261,8 +4430,6 @@ class CollectionWorker(QThread):
             if _sys.platform != 'win32':
                 os.chmod(output_dir, 0o700)  # Unix: owner-only access
 
-            hash_calculator = FileHashCalculator()
-
             # ========================================
             # STAGE 1: Collection (30%)
             # ========================================
@@ -4306,25 +4473,10 @@ class CollectionWorker(QThread):
                     if close_after_upload and hasattr(collector, 'close'):
                         _ios_collectors.append(collector)
 
-                    # Pre-warm MFT scan cache so all artifact types use cached data.
-                    # Without this, the first artifact type triggers the full MFT scan
-                    # and index build. Doing it upfront with progress feedback is better UX.
-                    if hasattr(collector, 'forensic_disk_accessor') and collector.forensic_disk_accessor:
-                        self.log_message.emit(f"[{device_name}] Building artifact index...", False)
-                        self.progress_updated.emit(1, 0, 0, f"[{device_name}] Building artifact index...", "")
-                        try:
-                            if hasattr(collector, '_scan_cache') and collector._scan_cache is None:
-                                collector._scan_cache = collector.forensic_disk_accessor.scan_all_files(
-                                    include_deleted=True
-                                )
-                                if hasattr(collector, '_build_scan_index') and collector._scan_index is None:
-                                    collector._scan_index = collector._build_scan_index(collector._scan_cache)
-                                active_count = len(collector._scan_cache.get('active_files', []))
-                                self.log_message.emit(
-                                    f"[{device_name}] Index ready: {active_count} files", False
-                                )
-                        except Exception as e:
-                            self.log_message.emit(f"[{device_name}] Index build skipped: {e}", True)
+                    # Pre-warm reusable filesystem indexes so all artifact types
+                    # use cached metadata and the expensive MFT scan is visible as
+                    # its own stage instead of being hidden under the first artifact.
+                    self._prewarm_collector_index(collector, device_name)
 
                     device_artifacts = artifacts_by_device.get(device.device_id, [])
                     if not device_artifacts:
@@ -4642,112 +4794,85 @@ class CollectionWorker(QThread):
             encrypted_files = []  # (file_path, artifact_type, metadata)
             total_files = len(collected_raw_files)
             preparation_error_count = 0
+            prepared_results = []
+            prepare_workers = self._tuning_int(
+                'prepare_workers', 'COLLECTOR_PREPARE_WORKERS', 2, 1, 8
+            )
+            prepare_start = time.perf_counter()
+            prepare_hash_ms = 0
+            prepare_copy_ms = 0
+            prepare_bytes = 0
 
-            for j, (file_path, artifact_type, metadata) in enumerate(collected_raw_files):
-                if self._cancelled:
-                    self.finished.emit(False, "Preparation cancelled")
-                    return
+            if total_files:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                filename = Path(file_path).name
-                stage_progress = int(((j + 1) / max(total_files, 1)) * 100)
-                overall_progress = self._calculate_overall_progress(2, stage_progress)
-                remaining = self._estimate_remaining_time(2, stage_progress, j + 1, total_files)
-
-                self.progress_updated.emit(
-                    2, stage_progress, overall_progress,
-                    f"Preparing: {filename}",
-                    remaining
+                max_prepare_workers = min(prepare_workers, total_files)
+                self.log_message.emit(
+                    f"Preparation concurrency: {max_prepare_workers} worker(s)",
+                    False,
                 )
 
-                try:
-                    if not os.path.exists(file_path):
-                        preparation_error_count += 1
-                        self.log_message.emit(
-                            f"[ERROR] {filename}: file disappeared before "
-                            "upload preparation",
-                            True,
+                with ThreadPoolExecutor(max_workers=max_prepare_workers) as executor:
+                    futures = {}
+                    for j, (file_path, artifact_type, metadata) in enumerate(collected_raw_files):
+                        if self._cancelled:
+                            break
+                        future = executor.submit(
+                            self._prepare_upload_item,
+                            output_dir,
+                            (j, file_path, artifact_type, metadata),
                         )
-                        continue
-                    if not os.path.isfile(file_path):
-                        preparation_error_count += 1
-                        self.log_message.emit(
-                            f"[ERROR] {filename}: non-file path cannot be uploaded",
-                            True,
-                        )
-                        continue
+                        futures[future] = j
 
-                    actual_size = os.path.getsize(file_path)
-                    if actual_size <= 0:
-                        preparation_error_count += 1
-                        self.log_message.emit(
-                            f"[ERROR] {filename}: empty file cannot be uploaded",
-                            True,
-                        )
-                        continue
-
-                    try:
-                        with open(file_path, 'rb') as readable:
-                            readable.read(1)
-                    except OSError as access_error:
-                        preparation_error_count += 1
-                        self.log_message.emit(
-                            f"[ERROR] {filename}: file is not readable before upload "
-                            f"({access_error})",
-                            True,
-                        )
-                        continue
-
-                    hash_result = hash_calculator.calculate_file_hash(file_path)
-                    original_hash = hash_result.sha256_hash
-                    original_size = hash_result.file_size
-
-                    # Add required metadata fields for server
-                    cached_hash = metadata.get('hash_sha256') or metadata.get('sha256')
-                    if cached_hash and cached_hash != original_hash:
-                        metadata['collector_reported_hash'] = cached_hash
-                    metadata['hash_sha256'] = original_hash
-                    metadata['sha256'] = original_hash
-                    metadata['original_hash'] = original_hash
-                    metadata['original_size'] = original_size
-                    self._record_upload_hash_metadata(
-                        metadata,
-                        file_path,
-                        original_hash,
-                        original_size,
-                    )
-                    metadata['collection_time'] = datetime.utcnow().isoformat()
-
-                    # Legacy wire-format metadata (server-side processed)
-                    metadata['encryption'] = {
-                        'nonce': 'hash_only',
-                        'original_hash': original_hash,
-                    }
-
-                    upload_file_path = file_path
-                    if self._requires_stable_upload_copy(artifact_type, metadata):
-                        upload_file_path = self._stage_stable_upload_copy(
-                            output_dir=output_dir,
-                            file_path=file_path,
-                            artifact_type=artifact_type,
-                            metadata=metadata,
-                            original_hash=original_hash,
+                    completed_prepare = 0
+                    for future in as_completed(futures):
+                        completed_prepare += 1
+                        result = future.result()
+                        filename = result.get('filename') or 'Unknown'
+                        stage_progress = int((completed_prepare / max(total_files, 1)) * 100)
+                        overall_progress = self._calculate_overall_progress(2, stage_progress)
+                        remaining = self._estimate_remaining_time(
+                            2, stage_progress, completed_prepare, total_files
                         )
 
-                    encrypted_files.append((
-                        upload_file_path,
-                        artifact_type,
-                        metadata
-                    ))
+                        self.progress_updated.emit(
+                            2, stage_progress, overall_progress,
+                            f"Preparing: {filename}",
+                            remaining
+                        )
 
-                except FileNotFoundError:
-                    preparation_error_count += 1
-                    self.log_message.emit(
-                        f"[ERROR] {filename}: file removed mid-pipeline",
-                        True,
-                    )
-                except Exception as e:
-                    preparation_error_count += 1
-                    self.log_message.emit(f"Preparation failed ({filename}): {e}", True)
+                        if result.get('ok'):
+                            timings = result.get('timings') or {}
+                            prepare_hash_ms += int(timings.get('hash_ms') or 0)
+                            prepare_copy_ms += int(timings.get('stable_copy_ms') or 0)
+                            prepare_bytes += int(result.get('file_size') or 0)
+                            prepared_results.append(result)
+                        else:
+                            preparation_error_count += 1
+                            self.log_message.emit(str(result.get('error') or 'Preparation failed'), True)
+
+                        if self._cancelled:
+                            for pending in futures:
+                                pending.cancel()
+                            break
+
+                prepared_results.sort(key=lambda item: int(item.get('index') or 0))
+                encrypted_files = [
+                    (item['file_path'], item['artifact_type'], item['metadata'])
+                    for item in prepared_results
+                ]
+
+            prepare_elapsed_ms = int((time.perf_counter() - prepare_start) * 1000)
+            if total_files:
+                self.log_message.emit(
+                    "Preparation timing: "
+                    f"files={len(encrypted_files)}/{total_files}, "
+                    f"bytes={prepare_bytes:,}, "
+                    f"hash_total={prepare_hash_ms}ms, "
+                    f"stable_copy_total={prepare_copy_ms}ms, "
+                    f"elapsed={prepare_elapsed_ms}ms",
+                    False,
+                )
 
             if self._cancelled:
                 self.finished.emit(False, "Preparation cancelled")

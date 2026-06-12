@@ -8,6 +8,7 @@ Security:
     - Compliant with NIST recommended hash algorithms
 """
 import hashlib
+import os
 import shutil
 from pathlib import Path
 from dataclasses import dataclass
@@ -23,6 +24,16 @@ class FileHashResult:
     md5_hash: str = ""  # [DEPRECATED] MD5 removed due to security vulnerabilities. Field kept for backward compatibility.
 
 
+def _coerce_hash_chunk_size(value=None) -> int:
+    """Return a bounded hash read size. Larger chunks reduce syscall overhead."""
+    default = 1024 * 1024
+    try:
+        parsed = int(value if value is not None else os.getenv("COLLECTOR_HASH_CHUNK_SIZE", default))
+    except (TypeError, ValueError):
+        parsed = default
+    return max(64 * 1024, min(parsed, 16 * 1024 * 1024))
+
+
 class FileHashCalculator:
     """
     File hash calculator.
@@ -30,7 +41,10 @@ class FileHashCalculator:
     Calculates hashes for integrity verification of collected artifacts.
     """
 
-    CHUNK_SIZE = 64 * 1024  # 64KB chunks for large files
+    CHUNK_SIZE = _coerce_hash_chunk_size()
+
+    def __init__(self, chunk_size: int = None):
+        self.chunk_size = _coerce_hash_chunk_size(chunk_size)
 
     def calculate_file_hash(self, file_path: str) -> FileHashResult:
         """
@@ -51,7 +65,7 @@ class FileHashCalculator:
         file_size = 0
 
         with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(self.CHUNK_SIZE), b''):
+            for chunk in iter(lambda: f.read(self.chunk_size), b''):
                 sha256.update(chunk)
                 file_size += len(chunk)
 
