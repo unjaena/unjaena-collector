@@ -4943,28 +4943,34 @@ class CollectionWorker(QThread):
 
                     if result.success:
                         success_count += 1
-                        self.log_message.emit(f"✓ Upload successful: {filename}", False)
+                        self.log_message.emit(f"Upload | Status: Success | File: {filename}", False)
                         if getattr(uploader, 'upload_timing_enabled', False) and result.metrics:
                             metrics = result.metrics
                             self.log_message.emit(
-                                "Upload timing: "
-                                f"hash={metrics.get('hash_ms', 0)}ms, "
-                                f"reused={metrics.get('hash_reused', False)}, "
-                                f"presign={metrics.get('presigned_ms', 0)}ms, "
-                                f"put={metrics.get('put_ms', 0)}ms, "
-                                f"confirm={metrics.get('confirm_ms', 0)}ms, "
-                                f"total={metrics.get('total_ms', 0)}ms",
+                                "Upload | Status: Timing | "
+                                f"File: {filename} | "
+                                f"Duration: {metrics.get('total_ms', 0)} ms",
                                 False,
                             )
                     else:
+                        message = result.error or "The upload could not be completed. Please try again."
                         if result.error and ("CANCELLED" in result.error or "cancelled" in result.error.lower()):
-                            self.log_message.emit("🛑 Collection cancelled by server. Stopping upload.", True)
+                            self.log_message.emit(
+                                f"Upload | Status: Stopped | File: {filename} | Message: The collection was cancelled from the web platform.",
+                                True,
+                            )
                             self._cancelled = True
                         elif result.error and "CLEANUP_IN_PROGRESS" in result.error:
-                            self.log_message.emit("⏳ Previous data cleanup in progress. Please try again after cleanup completes.", True)
+                            self.log_message.emit(
+                                f"Upload | Status: Waiting | File: {filename} | Message: Previous data cleanup is still running. Please try again shortly.",
+                                True,
+                            )
                             self._cancelled = True
                         else:
-                            self.log_message.emit(f"Upload failed: {filename}: {result.error}", True)
+                            self.log_message.emit(
+                                f"Upload | Status: Failed | File: {filename} | Message: {message}",
+                                True,
+                            )
 
                 return result
 

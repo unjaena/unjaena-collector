@@ -129,6 +129,75 @@ def _sanitize_error_for_logging(error_text: str, max_length: int = 200) -> str:
     return sanitized
 
 
+
+
+def _safe_retry_after(response, default: int = 30) -> int:
+    """Extract a bounded Retry-After value without exposing response internals."""
+    candidates = []
+    try:
+        candidates.append(response.headers.get('Retry-After'))
+    except Exception:
+        pass
+    try:
+        detail = response.json()
+        if isinstance(detail, dict):
+            body = detail.get('detail') if isinstance(detail.get('detail'), dict) else detail
+            if isinstance(body, dict):
+                candidates.append(body.get('retry_after_seconds'))
+                candidates.append(body.get('retry_after'))
+    except Exception:
+        pass
+    for candidate in candidates:
+        try:
+            value = int(float(candidate))
+            return max(1, min(value, 300))
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _user_upload_message(status_code: int = None, retry_after: int = None, fallback: str = None) -> str:
+    """User-facing English upload error message for Activity Log output."""
+    suffix = f" Please try again in about {retry_after} seconds." if retry_after else " Please try again shortly."
+    if status_code in (502, 503, 504):
+        return "The service is temporarily unavailable." + suffix
+    if status_code == 429:
+        return "The server is receiving too many upload requests." + suffix
+    if status_code in (401, 403):
+        return "The collection session is not authorized. Please refresh the case page and start a new collection."
+    if status_code == 404:
+        return "The uploaded file could not be confirmed. Please retry the upload."
+    if status_code == 409:
+        return "The collection session was stopped or replaced. Please refresh the case page and start a new collection."
+    if status_code == 413:
+        return "The file is larger than the allowed upload size."
+    if status_code and 500 <= status_code < 600:
+        return "The service could not complete the upload." + suffix
+    if status_code and 400 <= status_code < 500:
+        return "The upload request could not be accepted. Please refresh the case page and try again."
+    if fallback:
+        lowered = fallback.lower()
+        if "timeout" in lowered:
+            return "The upload timed out. Please check the network connection and try again."
+        if "connection" in lowered:
+            return "The network connection was interrupted. Please try again."
+    return "The upload could not be completed. Please try again."
+
+
+def _user_upload_message_from_text(technical_error: str) -> str:
+    text = str(technical_error or "")
+    match = re.search(r'\((\d{3})\)', text)
+    status_code = int(match.group(1)) if match else None
+    retry_match = re.search(r'retry[_ -]?after(?:_seconds)?["\s:=]+(\d+)', text, re.IGNORECASE)
+    retry_after = int(retry_match.group(1)) if retry_match else None
+    return _user_upload_message(status_code=status_code, retry_after=retry_after, fallback=text)
+
+
+def _raise_upload_http_error(action: str, response) -> None:
+    retry_after = _safe_retry_after(response)
+    message = _user_upload_message(response.status_code, retry_after=retry_after)
+    raise RuntimeError(f"{action} failed ({response.status_code}): {message}")
+
 def _zeroize_key(key_ref: str) -> None:
     """Request garbage collection of sensitive key material.
 
@@ -170,12 +239,12 @@ class UploadResult:
 
     @classmethod
     def from_error(cls, technical_error: str) -> 'UploadResult':
-        """Create UploadResult preserving original error for debugging"""
-        friendly = translate_error(technical_error)
+        """Create a user-facing upload result while keeping technical details in logs."""
+        user_message = _user_upload_message_from_text(technical_error)
+        friendly = translate_error(user_message)
         return cls(
             success=False,
-            # Preserve original technical error for log display
-            error=technical_error,
+            error=user_message,
             error_title=friendly.title,
             error_solution=friendly.solution,
             is_recoverable=friendly.is_recoverable,
@@ -613,10 +682,10 @@ class RealTimeUploader:
                                 artifact_id=result.get('artifact_id'),
                             )
                         else:
-                            error_text = await response.text()
+                            await response.text()
                             # P2-2: User-friendly error message
                             return UploadResult.from_error(
-                                f"Upload failed ({response.status}): {error_text}"
+                                f"Upload failed ({response.status}): {_user_upload_message(response.status)}"
                             )
 
         except aiohttp.ClientError as e:
@@ -820,10 +889,11 @@ class SyncUploader:
                             sanitized_error = _sanitize_error_for_logging(error_text)
                             logger.error(f"[UPLOAD] HTTP {response.status_code}: {sanitized_error}")
                             return UploadResult.from_error(
-                                f"Upload failed ({response.status_code}): {error_text}"
+                                f"Upload failed ({response.status_code}): {_user_upload_message(response.status_code)}"
                             )
                         # Server errors (5xx) are retryable
-                        last_error = f"Upload failed ({response.status_code}): {error_text}"
+                        retry_after = _safe_retry_after(response)
+                        last_error = f"Upload failed ({response.status_code}): {_user_upload_message(response.status_code, retry_after=retry_after)}"
                         sanitized_error = _sanitize_error_for_logging(error_text)
                         logger.warning(f"[UPLOAD] HTTP {response.status_code} (attempt {attempt}/{MAX_RETRIES}): {sanitized_error}")
 
@@ -1054,11 +1124,13 @@ class DirectUploader:
                         detail=detail,
                     )
 
-                if response.status_code == 429:
-                    wait = attempt * 10
-                    logger.warning(f"[DIRECT] Presigned URL rate limited, retrying in {wait}s (attempt {attempt}/{max_retries})")
-                    time.sleep(wait)
-                    continue
+                if response.status_code in (429, 502, 503, 504):
+                    wait = _safe_retry_after(response, default=attempt * 10)
+                    logger.warning(f"[DIRECT] Presigned URL temporarily unavailable, retrying in {wait}s (attempt {attempt}/{max_retries})")
+                    if attempt < max_retries:
+                        time.sleep(wait)
+                        continue
+                    _raise_upload_http_error("Presigned URL request", response)
 
                 if response.status_code == 409:
                     # Session invalidated or case cancelled: do not retry.
@@ -1070,7 +1142,7 @@ class DirectUploader:
                     raise SessionCancelledError(f"Collection cancelled: {detail}")
 
                 if response.status_code != 200:
-                    raise RuntimeError(f"Presigned URL request failed ({response.status_code}): {response.text[:200]}")
+                    _raise_upload_http_error("Presigned URL request", response)
 
                 return response.json()
             except SessionCancelledError:
@@ -1123,7 +1195,7 @@ class DirectUploader:
                         timeout=timeout,
                     )
                 if response.status_code not in (200, 201):
-                    raise RuntimeError(f"PUT upload failed ({response.status_code}): {response.text[:200]}")
+                    _raise_upload_http_error("File upload", response)
                 return  # success
             except Exception as e:
                 if attempt < max_retries:
@@ -1166,10 +1238,7 @@ class DirectUploader:
                         timeout=timeout,
                     )
                     if response.status_code not in (200, 201):
-                        raise RuntimeError(
-                            f"Multipart part {part_number} upload failed "
-                            f"({response.status_code}): {response.text[:200]}"
-                        )
+                        _raise_upload_http_error("File upload", response)
                     etag = response.headers.get('ETag', '').strip('"')
                     logger.debug(f"[DIRECT] Part {part_number}/{total_parts} uploaded ({chunk_size:,} bytes)")
                     return {"PartNumber": part_number, "ETag": etag}
@@ -1246,14 +1315,16 @@ class DirectUploader:
                         detail=detail,
                     )
 
-                if response.status_code == 429:
-                    wait = attempt * 10
-                    logger.warning(f"[DIRECT] Upload confirm rate limited, retrying in {wait}s (attempt {attempt}/{max_retries})")
-                    time.sleep(wait)
-                    continue
+                if response.status_code in (429, 502, 503, 504):
+                    wait = _safe_retry_after(response, default=attempt * 10)
+                    logger.warning(f"[DIRECT] Upload confirmation temporarily unavailable, retrying in {wait}s (attempt {attempt}/{max_retries})")
+                    if attempt < max_retries:
+                        time.sleep(wait)
+                        continue
+                    _raise_upload_http_error("Upload confirmation", response)
 
                 if response.status_code != 200:
-                    raise RuntimeError(f"Upload confirmation failed ({response.status_code}): {response.text[:200]}")
+                    _raise_upload_http_error("Upload confirmation", response)
 
                 return response.json()
             except CreditPausedError:
@@ -1526,7 +1597,7 @@ class DirectUploader:
                         f"R2 upload failed and fallback failed: {fallback_error}"
                     )
 
-            return UploadResult.from_error(f"R2 upload failed: {e}")
+            return UploadResult.from_error(str(e))
 
     def upload_batch(
         self,
