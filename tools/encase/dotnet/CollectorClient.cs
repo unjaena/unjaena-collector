@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace UnjaenaEncaseBridge
 {
@@ -216,10 +217,6 @@ namespace UnjaenaEncaseBridge
             {
                 CollectionProfileTarget target = targets[i];
                 if (target == null || IsBlank(target.ArtifactType) || target.Patterns == null)
-                {
-                    continue;
-                }
-                if (IsSourceFileTarget(target))
                 {
                     continue;
                 }
@@ -1318,13 +1315,6 @@ namespace UnjaenaEncaseBridge
             return result;
         }
 
-        private static bool IsSourceFileTarget(CollectionProfileTarget target)
-        {
-            return target != null
-                && !IsBlank(target.Kind)
-                && string.Compare(NormalizeMatchValue(target.Kind), "source_file", StringComparison.OrdinalIgnoreCase) == 0;
-        }
-
         private static string[] ExpandCollectionPatternVariants(string pattern)
         {
             string normalized = NormalizeMatchValue(pattern);
@@ -1341,6 +1331,12 @@ namespace UnjaenaEncaseBridge
             int count = variants.Count;
             for (int i = 0; i < count; i++)
             {
+                AddWindowsUserDriveOptionalPatternVariants(variants, variants[i]);
+            }
+
+            count = variants.Count;
+            for (int i = 0; i < count; i++)
+            {
                 AddDirectFilePatternVariant(variants, variants[i]);
             }
             return variants.ToArray();
@@ -1353,6 +1349,22 @@ namespace UnjaenaEncaseBridge
                 return;
             }
             AddPatternVariant(variants, pattern.Replace(token, replacement));
+        }
+
+        private static void AddWindowsUserDriveOptionalPatternVariants(List<string> variants, string pattern)
+        {
+            string normalized = NormalizeMatchValue(pattern);
+            string[] prefixes = new string[] { "c:/users/", "c:/documents and settings/" };
+            for (int i = 0; i < prefixes.Length; i++)
+            {
+                if (normalized.StartsWith(prefixes[i], StringComparison.Ordinal))
+                {
+                    string suffix = normalized.Substring(3);
+                    AddPatternVariant(variants, suffix);
+                    AddPatternVariant(variants, "/" + suffix);
+                    return;
+                }
+            }
         }
 
         private static void AddDirectFilePatternVariant(List<string> variants, string pattern)
@@ -1403,46 +1415,71 @@ namespace UnjaenaEncaseBridge
                 return false;
             }
 
-            int textIndex = 0;
-            int patternIndex = 0;
-            int starIndex = -1;
-            int matchIndex = 0;
+            return Regex.IsMatch(
+                text,
+                WildcardPatternToRegex(pattern),
+                RegexOptions.CultureInvariant);
+        }
 
-            while (textIndex < text.Length)
+        private static string WildcardPatternToRegex(string pattern)
+        {
+            StringBuilder regex = new StringBuilder();
+            regex.Append("^");
+            for (int i = 0; i < pattern.Length; i++)
             {
-                if (patternIndex < pattern.Length
-                    && (pattern[patternIndex] == '?' || pattern[patternIndex] == text[textIndex]))
+                char ch = pattern[i];
+                if (ch == '*')
                 {
-                    textIndex++;
-                    patternIndex++;
+                    regex.Append(".*");
                     continue;
                 }
-
-                if (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+                if (ch == '?')
                 {
-                    starIndex = patternIndex;
-                    matchIndex = textIndex;
-                    patternIndex++;
+                    regex.Append('.');
                     continue;
                 }
-
-                if (starIndex != -1)
+                if (ch == '[')
                 {
-                    patternIndex = starIndex + 1;
-                    matchIndex++;
-                    textIndex = matchIndex;
-                    continue;
+                    int end = pattern.IndexOf(']', i + 1);
+                    if (end > i + 1)
+                    {
+                        regex.Append(ConvertCharacterClassToRegex(pattern.Substring(i + 1, end - i - 1)));
+                        i = end;
+                        continue;
+                    }
                 }
+                regex.Append(Regex.Escape(ch.ToString()));
+            }
+            regex.Append("$");
+            return regex.ToString();
+        }
 
-                return false;
+        private static string ConvertCharacterClassToRegex(string value)
+        {
+            if (IsBlank(value))
+            {
+                return Regex.Escape("[]");
             }
 
-            while (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+            StringBuilder result = new StringBuilder();
+            result.Append('[');
+            int index = 0;
+            if (value[0] == '!' || value[0] == '^')
             {
-                patternIndex++;
+                result.Append('^');
+                index = 1;
             }
-
-            return patternIndex == pattern.Length;
+            for (; index < value.Length; index++)
+            {
+                char ch = value[index];
+                if (ch == '\\' || ch == ']')
+                {
+                    result.Append('\\');
+                }
+                result.Append(ch);
+            }
+            result.Append(']');
+            return result.ToString();
         }
 
         private string ErrorJson(string error, string message)

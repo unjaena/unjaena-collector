@@ -887,8 +887,11 @@ class MobileFFSBundleEnumerator(BaseDeviceEnumerator):
             platform = "Android"
         else:
             raise ValueError(
-                f"Unsupported bundle format: {fmt.name} "
-                f"(only Cellebrite CLBX iOS / Android supported in this build)"
+                f"Unsupported bundle format: {fmt.name}. "
+                "Only Cellebrite UFED/CLBX iOS or Android FFS ZIP bundles are "
+                "supported directly. If this is a normal ZIP archive containing "
+                "E01/RAW disk images, extract it first and add the first image "
+                "segment."
             )
 
         device_id = f"mobile_ffs_{path.stem}_{path.stat().st_mtime_ns}"

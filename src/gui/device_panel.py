@@ -126,7 +126,8 @@ class DeviceListPanel(QWidget):
 
         self.evidence_hint = QLabel(
             "Add E01/RAW/VDI/VMDK/VHD/DMG/QCOW2 or a mobile FFS ZIP/CLBX, "
-            "then select the evidence source below."
+            "then select the evidence source below. Ordinary ZIP, ISO, and "
+            "memory dump files are not disk-image sources in this collector."
         )
         self.evidence_hint.setWordWrap(True)
         self.evidence_hint.setStyleSheet(
@@ -362,6 +363,14 @@ class DeviceListPanel(QWidget):
         """Register a supported image or mobile FFS bundle."""
         if self._interaction_locked:
             return
+        if not self._is_supported_evidence_file(file_path):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Unsupported Evidence Source",
+                self._unsupported_file_message(file_path),
+            )
+            return
         is_mobile_bundle = file_path.lower().endswith((".zip", ".clbx"))
         if is_mobile_bundle:
             self._register_ffs_bundle(file_path)
@@ -369,6 +378,15 @@ class DeviceListPanel(QWidget):
             device = self.device_manager.add_image_file(file_path)
             if device:
                 self.image_file_requested.emit()
+            else:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self,
+                    "Evidence Registration Failed",
+                    "Could not register this evidence source. Verify that the "
+                    "file exists and is a supported disk image or filesystem "
+                    "volume image.",
+                )
 
     def dragEnterEvent(self, event):
         """Accept supported evidence files dropped onto the source panel."""
@@ -413,6 +431,36 @@ class DeviceListPanel(QWidget):
         )
         return lower.endswith(suffixes)
 
+    @staticmethod
+    def _unsupported_file_message(file_path: str) -> str:
+        lower = file_path.lower()
+        if lower.endswith((".iso", ".cdr", ".udf")):
+            return (
+                "Optical disc images are not supported by this collector build.\n\n"
+                "Use E01/RAW/VMDK/VHD/VHDX/QCOW2/VDI/DMG, filesystem volume "
+                "images, or a supported mobile FFS bundle."
+            )
+        if lower.endswith((".mem", ".vmem", ".dmp", ".dump", ".mdmp")):
+            return (
+                "Memory dump files are not supported as evidence sources in this "
+                "collector screen.\n\n"
+                "Use a disk image, a filesystem volume image, or a supported "
+                "mobile FFS bundle."
+            )
+        if lower.endswith(".zip"):
+            return (
+                "Only Cellebrite UFED/CLBX mobile FFS ZIP bundles are supported "
+                "directly.\n\n"
+                "For a normal ZIP archive that contains E01/RAW images, extract "
+                "the archive first and add the first image segment, such as .E01."
+            )
+        return (
+            "This file type is not supported as an evidence source.\n\n"
+            "Supported disk sources: E01/RAW/VMDK/VHD/VHDX/QCOW2/VDI/DMG "
+            "and filesystem volume images. Supported mobile source: Cellebrite "
+            "UFED/CLBX FFS ZIP."
+        )
+
     def _register_ffs_bundle(self, file_path: str) -> None:
         """Register a mobile FFS bundle off the GUI thread (large zip
         central-directory + metadata parse can take 10-30 seconds)."""
@@ -444,9 +492,17 @@ class DeviceListPanel(QWidget):
                                          error_msg: str) -> None:
         from PyQt6.QtWidgets import QMessageBox
         if error_msg:
+            body = error_msg
+            if "GENERIC_ZIP" in error_msg or "Unsupported bundle format" in error_msg:
+                body = (
+                    "The selected ZIP is not a recognised mobile FFS bundle.\n\n"
+                    "Only Cellebrite UFED/CLBX iOS or Android FFS ZIP bundles "
+                    "are supported directly. If this ZIP contains E01/RAW disk "
+                    "images, extract it first and add the first image segment."
+                )
             QMessageBox.warning(
                 self, "Bundle Registration Failed",
-                f"Could not register bundle:\n{error_msg}"
+                f"Could not register bundle:\n{body}"
             )
             return
         if not device:
