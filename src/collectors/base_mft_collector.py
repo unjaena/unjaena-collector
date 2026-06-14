@@ -422,11 +422,13 @@ class BaseMFTCollector(ABC):
         # at the volume root. Profile-scoped path filters are too narrow there.
         fs_type = (getattr(self._accessor, '_dissect_fs_type', '') or '').lower()
         if fs_type in {'fat12', 'fat16', 'fat32', 'exfat'} and artifact_type in {
-            'document', 'email', 'image', 'video',
+            'document', 'email', 'image', 'video', 'source_code',
         }:
             if mft_filter.get('extensions'):
                 mft_filter['full_disk_scan'] = True
                 mft_filter['path_optional'] = True
+                for key in ('paths', 'path_pattern', 'path_patterns', 'base_path', 'user_path'):
+                    mft_filter.pop(key, None)
 
         logger.info(f"[{source}] Collecting {artifact_type}, filter={mft_filter}")
 
@@ -840,7 +842,15 @@ class BaseMFTCollector(ABC):
             # 4. Name pattern check
             if compiled_name_pattern and not matched:
                 if compiled_name_pattern.match(filename_lower):
-                    matched = True
+                    if compiled_patterns and full_path_lower:
+                        for pattern in compiled_patterns:
+                            if pattern.search(full_path_lower):
+                                matched = True
+                                break
+                    elif compiled_patterns:
+                        matched = bool(path_optional and not full_path_lower)
+                    else:
+                        matched = True
 
             if matched:
                 # exclude_extensions check (skip image/video files for messenger artifacts)
