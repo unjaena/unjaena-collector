@@ -42,6 +42,23 @@ _MERGE_SEQUENCE_KEYS = {
     "paths",
 }
 
+_PLATFORM_CATEGORIES = {"windows", "android", "ios", "linux", "macos", "ai_activity"}
+_WINDOWS_DISPLAY_CATEGORIES = {
+    "forensic",
+    "user_files",
+    "user file",
+    "user_file",
+    "evidence_sources",
+    "evidence source",
+    "evidence_source",
+    "source_upload",
+    "common/source",
+    "collection",
+    "pc_messenger",
+    "pc_apps",
+}
+_WINDOWS_SUBCATEGORY_HINTS = {"pc_messenger", "pc_apps", "filesystem", "developer"}
+
 
 _IOS_SYSTEM_PREFIXES = (
     ("private/var/mobile/Library/Health/", "HealthDomain", "Health/"),
@@ -116,9 +133,91 @@ def _collector_config_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return collector_config
 
 
-def _mft_config_from_entry(entry: dict[str, Any]) -> dict[str, Any]:
+def _category_token(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _category_candidate(value: Any) -> str | None:
+    token = _category_token(value)
+    if not token:
+        return None
+    aliases = {
+        "win": "windows",
+        "mac": "macos",
+        "osx": "macos",
+        "ai": "ai_activity",
+        "ai_activity_artifacts": "ai_activity",
+    }
+    token = aliases.get(token, token)
+    if token in _PLATFORM_CATEGORIES:
+        return token
+    if token in _WINDOWS_DISPLAY_CATEGORIES:
+        return "windows"
+    return None
+
+
+def _infer_artifact_category(
+    artifact_type: str,
+    metadata: dict[str, Any],
+    existing: dict[str, Any],
+    merged: dict[str, Any],
+) -> str:
+    """Normalize server display categories into collector UI platform tabs."""
+    for value in (
+        merged.get("category"),
+        existing.get("category"),
+        metadata.get("category"),
+    ):
+        category = _category_candidate(value)
+        if category:
+            return category
+
+    if artifact_type.startswith("mobile_android_"):
+        return "android"
+    if artifact_type.startswith("mobile_ios_"):
+        return "ios"
+    if artifact_type.startswith("linux_"):
+        return "linux"
+    if artifact_type.startswith("macos_"):
+        return "macos"
+    if artifact_type.startswith("ai_"):
+        return "ai_activity"
+    return "windows"
+
+
+def _infer_artifact_subcategory(
+    artifact_type: str,
+    metadata: dict[str, Any],
+    existing: dict[str, Any],
+    merged: dict[str, Any],
+) -> str | None:
+    for value in (
+        merged.get("subcategory"),
+        existing.get("subcategory"),
+        metadata.get("subcategory"),
+        merged.get("category"),
+        metadata.get("category"),
+    ):
+        token = _category_token(value)
+        if token in _WINDOWS_SUBCATEGORY_HINTS:
+            return token
+
+    if artifact_type in {"mft", "usn_journal", "logfile"}:
+        return "filesystem"
+    if artifact_type == "source_code":
+        return "developer"
+    return None
+
+
+def _mft_config_from_entry(
+    entry: dict[str, Any],
+    *,
+    include_top_level_paths: bool = True,
+) -> dict[str, Any]:
     mft_config = _as_dict(entry.get("mft_config"))
     for key in _MFT_CONFIG_KEYS:
+        if key == "paths" and not include_top_level_paths:
+            continue
         if key in entry and key not in mft_config:
             mft_config[key] = entry[key]
     return mft_config
@@ -263,6 +362,8 @@ def apply_collection_profile_to_registry(
     targets: list[Any] | None,
     registry: MutableMapping[str, dict[str, Any]],
     artifact_aliases: Mapping[str, str] | None = None,
+    *,
+    mft_registry: bool = False,
 ) -> set[str]:
     """Merge authenticated server targets into the collector registry.
 
@@ -295,6 +396,28 @@ def apply_collection_profile_to_registry(
 
         existing = deepcopy(registry.get(artifact_type) or {})
         collector_config = _collector_config_from_metadata(metadata)
+
+        if mft_registry:
+            # ARTIFACT_MFT_FILTERS is consumed directly by BaseMFTCollector.
+            # Do not copy UI/legacy collector fields such as the enormous
+            # ARTIFACT_TYPES[*]["paths"] glob expansion into the MFT filter.
+            # MFT collection needs only mft_config and explicit MFT keys.
+            has_nested_mft_config = bool(_as_dict(collector_config.get("mft_config")))
+            mft_config = _mft_config_from_entry(
+                collector_config,
+                include_top_level_paths=not has_nested_mft_config and artifact_type != "source_code",
+            )
+            if patterns and kind not in _CONFIG_ONLY_KINDS and artifact_type != "source_code":
+                mft_config["paths"] = _merge_sequence(mft_config.get("paths"), patterns)
+            if target.get("max_bytes") is not None and "max_file_size" not in mft_config:
+                mft_config["max_file_size"] = target.get("max_bytes")
+
+            merged = _merge_config(existing, mft_config)
+            if artifact_type == "source_code":
+                merged.pop("paths", None)
+            merged["server_profile_managed"] = True
+            registry[artifact_type] = merged
+            continue
 
         merged = _merge_config(existing, collector_config)
         _install_ios_backup_targets(merged, existing, collector_config)
@@ -339,7 +462,10 @@ def apply_collection_profile_to_registry(
 
         merged.setdefault("name", metadata.get("label") or artifact_type.replace("_", " ").title())
         merged.setdefault("description", metadata.get("description") or "Server-authorized collection target")
-        merged.setdefault("category", metadata.get("category") or existing.get("category") or "windows")
+        merged["category"] = _infer_artifact_category(artifact_type, metadata, existing, merged)
+        inferred_subcategory = _infer_artifact_subcategory(artifact_type, metadata, existing, merged)
+        if inferred_subcategory and not merged.get("subcategory"):
+            merged["subcategory"] = inferred_subcategory
         merged["server_profile_managed"] = True
 
         registry[artifact_type] = merged

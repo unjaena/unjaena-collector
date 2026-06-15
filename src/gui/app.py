@@ -1862,16 +1862,20 @@ class CollectorWindow(QMainWindow):
             self.collection_profile_id = getattr(result, 'collection_profile_id', None)
             self.collection_profile_targets = getattr(result, 'collection_profile_targets', None) or []
             self.profile_artifact_types = set()
-            for registry in (
-                ARTIFACT_TYPES, ARTIFACT_MFT_FILTERS,
-                ANDROID_ARTIFACT_TYPES, IOS_ARTIFACT_TYPES,
-                LINUX_ARTIFACT_TYPES, MACOS_ARTIFACT_TYPES,
+            for registry, is_mft_registry in (
+                (ARTIFACT_TYPES, False),
+                (ARTIFACT_MFT_FILTERS, True),
+                (ANDROID_ARTIFACT_TYPES, False),
+                (IOS_ARTIFACT_TYPES, False),
+                (LINUX_ARTIFACT_TYPES, False),
+                (MACOS_ARTIFACT_TYPES, False),
             ):
                 self.profile_artifact_types.update(
                     apply_collection_profile_to_registry(
                         self.collection_profile_targets,
                         registry,
                         artifact_aliases=SERVER_TO_COLLECTOR_MAPPING,
+                        mft_registry=is_mft_registry,
                     )
                 )
             android_ffs_count, ios_ffs_count = apply_collection_profile_to_mobile_ffs(

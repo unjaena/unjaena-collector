@@ -420,12 +420,21 @@ def run_headless(args, config: dict) -> int:
 
     profile_artifacts = set()
     profile_targets = getattr(result, 'collection_profile_targets', None) or []
-    for registry in (
-        ARTIFACT_TYPES, ARTIFACT_MFT_FILTERS,
-        ANDROID_ARTIFACT_TYPES, IOS_ARTIFACT_TYPES,
-        LINUX_ARTIFACT_TYPES, MACOS_ARTIFACT_TYPES,
+    for registry, is_mft_registry in (
+        (ARTIFACT_TYPES, False),
+        (ARTIFACT_MFT_FILTERS, True),
+        (ANDROID_ARTIFACT_TYPES, False),
+        (IOS_ARTIFACT_TYPES, False),
+        (LINUX_ARTIFACT_TYPES, False),
+        (MACOS_ARTIFACT_TYPES, False),
     ):
-        profile_artifacts.update(apply_collection_profile_to_registry(profile_targets, registry))
+        profile_artifacts.update(
+            apply_collection_profile_to_registry(
+                profile_targets,
+                registry,
+                mft_registry=is_mft_registry,
+            )
+        )
     apply_collection_profile_to_mobile_ffs(profile_targets)
 
     if args.artifacts:
