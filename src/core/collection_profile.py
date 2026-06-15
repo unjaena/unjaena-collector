@@ -99,6 +99,7 @@ def _merge_config(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[st
 
 
 def _collector_config_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return collector config regardless of where the server placed it."""
     collector_config = _as_dict(
         metadata.get("collector_config")
         or metadata.get("collection_config")

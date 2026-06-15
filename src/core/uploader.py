@@ -1270,7 +1270,7 @@ class DirectUploader:
 
     def _confirm_upload(
         self, key: str, upload_id: str, file_hash: str,
-        file_name: str, artifact_type: str, parts: list = None,
+        file_name: str, artifact_type: str, file_size: int = 0, parts: list = None,
         is_encrypted: bool = False, original_path: str = "",
     ) -> dict:
         """Confirm upload completion with server (up to 5 retries)."""
@@ -1283,6 +1283,7 @@ class DirectUploader:
             "file_hash": file_hash,
             "file_name": file_name,
             "artifact_type": artifact_type,
+            "file_size": file_size,
             "parts": parts,
             "is_encrypted": is_encrypted,
             "consent_record": self.consent_record,
@@ -1502,6 +1503,7 @@ class DirectUploader:
                 file_hash=file_hash,
                 file_name=file_name,
                 artifact_type=artifact_type,
+                file_size=file_size,
                 parts=completed_parts,
                 is_encrypted=is_encrypted,
                 original_path=original_path,

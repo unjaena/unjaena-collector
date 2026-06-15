@@ -203,20 +203,25 @@ class E01ArtifactCollector(BaseMFTCollector):
             return False
 
     def get_windows_partition(self) -> Optional[int]:
-        """Auto-detect Windows partition"""
+        """Auto-detect the most likely Windows OS partition."""
         if not self._partitions:
             self.list_partitions()
 
-        for p in self._partitions:
-            if p.filesystem.upper() == 'NTFS' and p.size > 20 * 1024 * 1024 * 1024:
-                # Select NTFS partition larger than 20GB
-                return p.index
-
-        # Select largest NTFS partition
         ntfs_partitions = [p for p in self._partitions if p.filesystem.upper() == 'NTFS']
         if ntfs_partitions:
-            largest = max(ntfs_partitions, key=lambda p: p.size)
-            return largest.index
+            def partition_score(partition: PartitionInfo):
+                type_name = (partition.type_name or '').lower()
+                is_recovery = 'recovery' in type_name
+                is_basic_data = 'basic data' in type_name or 'ntfs/fat' in type_name
+                is_os_sized = partition.size > 20 * 1024 * 1024 * 1024
+                return (
+                    not is_recovery,
+                    is_basic_data,
+                    is_os_sized,
+                    partition.size,
+                )
+
+            return max(ntfs_partitions, key=partition_score).index
 
         return None
 

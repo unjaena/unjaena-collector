@@ -429,8 +429,8 @@ class BaseMFTCollector(ABC):
             if mft_filter.get('extensions'):
                 mft_filter['full_disk_scan'] = True
                 mft_filter['path_optional'] = True
-                for key in ('paths', 'path_pattern', 'path_patterns', 'base_path', 'user_path'):
-                    mft_filter.pop(key, None)
+                mft_filter.pop('path_pattern', None)
+                mft_filter.pop('path_patterns', None)
 
         logger.info(f"[{source}] Collecting {artifact_type}, filter={mft_filter}")
 
@@ -686,9 +686,9 @@ class BaseMFTCollector(ABC):
             files_to_check = itertools.chain(files_to_check, self._mft_cache['deleted_files'])
 
         # Filter conditions
-        extensions = mft_filter.get('extensions', set())
-        exclude_extensions = mft_filter.get('exclude_extensions', set())
-        target_files = mft_filter.get('files', set())
+        extensions = {str(ext).lower() for ext in (mft_filter.get('extensions') or set())}
+        exclude_extensions = {str(ext).lower() for ext in (mft_filter.get('exclude_extensions') or set())}
+        target_files = {str(name).lower() for name in (mft_filter.get('files') or set())}
         path_pattern = mft_filter.get('path_pattern')
         path_patterns = mft_filter.get('path_patterns', [])
         name_pattern = mft_filter.get('name_pattern')
@@ -773,6 +773,11 @@ class BaseMFTCollector(ABC):
                     filename = entry.filename if hasattr(entry, 'filename') else str(entry)
                     full_path = entry.full_path if hasattr(entry, 'full_path') else ""
                     full_path_lower = full_path.lower().replace('\\', '/') if full_path else ""
+                    if compiled_patterns:
+                        if not full_path_lower:
+                            continue
+                        if not any(pattern.search(full_path_lower) for pattern in compiled_patterns):
+                            continue
                     if _excluded_path(full_path_lower):
                         continue
                     path_name_lower = full_path_lower.rsplit('/', 1)[-1] if full_path_lower else filename.lower()

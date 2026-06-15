@@ -4121,6 +4121,116 @@ class CollectionWorker(QThread):
         except Exception as e:
             self.log_message.emit(f"[{device_name}] Index build skipped: {e}", True)
 
+    WINDOWS_BASELINE_ARTIFACTS = frozenset({
+        'mft',
+        'registry',
+        'eventlog',
+        'document',
+    })
+    WINDOWS_RECOMMENDED_ARTIFACTS = frozenset({
+        'logfile',
+        'usn_journal',
+        'prefetch',
+        'browser',
+        'recent',
+        'jumplist',
+        'shellbags',
+        'windows_search_index',
+    })
+    DISK_IMAGE_DEVICE_TYPES = frozenset({
+        DeviceType.WINDOWS_PHYSICAL_DISK,
+        DeviceType.E01_IMAGE,
+        DeviceType.RAW_IMAGE,
+        DeviceType.VMDK_IMAGE,
+        DeviceType.VHD_IMAGE,
+        DeviceType.VHDX_IMAGE,
+        DeviceType.QCOW2_IMAGE,
+        DeviceType.VDI_IMAGE,
+    })
+
+    def _selected_partition_summary(self, collector) -> dict:
+        """Return non-sensitive metadata for the currently selected partition."""
+        selected_index = getattr(collector, '_selected_partition', None)
+        partitions = getattr(collector, '_partitions', []) or []
+        selected = next((p for p in partitions if getattr(p, 'index', None) == selected_index), None)
+        if not selected:
+            return {"selected_partition": selected_index}
+
+        size = int(getattr(selected, 'size', 0) or 0)
+        return {
+            "selected_partition": int(getattr(selected, 'index', -1)),
+            "filesystem": str(getattr(selected, 'filesystem', '') or ''),
+            "type_name": str(getattr(selected, 'type_name', '') or ''),
+            "size_bytes": size,
+            "size_gb": round(size / (1024 ** 3), 2) if size else 0,
+        }
+
+    def _is_windows_disk_source(self, device, collector) -> bool:
+        if device.device_type not in self.DISK_IMAGE_DEVICE_TYPES:
+            return False
+        partition = self._selected_partition_summary(collector)
+        filesystem = str(partition.get('filesystem') or '').upper()
+        if filesystem == 'NTFS':
+            return True
+        if device.device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
+            return True
+        return False
+
+    def _collection_scope_summary(self, device, collector, artifacts: List[str]) -> dict:
+        artifact_set = set(artifacts or [])
+        baseline_missing = sorted(self.WINDOWS_BASELINE_ARTIFACTS - artifact_set)
+        recommended_missing = sorted(self.WINDOWS_RECOMMENDED_ARTIFACTS - artifact_set)
+        return {
+            "device_type": device.device_type.name,
+            "source_kind": "disk_image" if device.device_type in self.DISK_IMAGE_DEVICE_TYPES else "device",
+            "partition": self._selected_partition_summary(collector),
+            "selected_artifact_count": len(artifact_set),
+            "windows_baseline_missing": baseline_missing,
+            "windows_recommended_missing": recommended_missing,
+            "windows_disk_source": self._is_windows_disk_source(device, collector),
+        }
+
+    def _log_collection_scope(self, device_name: str, summary: dict) -> None:
+        partition = summary.get('partition') or {}
+        partition_label = (
+            f"#{partition.get('selected_partition')} "
+            f"{partition.get('filesystem') or 'unknown'} "
+            f"{partition.get('type_name') or 'unknown'} "
+            f"({partition.get('size_gb', 0)} GB)"
+        )
+        self.log_message.emit(
+            f"[{device_name}] Collection scope: source={summary.get('device_type')}, "
+            f"partition={partition_label}, selected_artifacts={summary.get('selected_artifact_count')}",
+            False,
+        )
+        recommended_missing = summary.get('windows_recommended_missing') or []
+        if summary.get('windows_disk_source') and recommended_missing:
+            self.log_message.emit(
+                f"[{device_name}] Recommended Windows artifacts not selected: "
+                f"{', '.join(recommended_missing)}",
+                False,
+            )
+
+    def _validate_collection_scope(self, device_name: str, summary: dict) -> bool:
+        if not summary.get('windows_disk_source'):
+            return True
+
+        missing = summary.get('windows_baseline_missing') or []
+        if not missing:
+            return True
+
+        self.log_message.emit(
+            f"[BLOCK] [{device_name}] Windows disk image baseline is incomplete. "
+            f"Select required artifacts: {', '.join(missing)}.",
+            True,
+        )
+        self.log_message.emit(
+            f"[BLOCK] [{device_name}] Collection stopped before upload to prevent "
+            "a partial case that cannot support case-level analysis.",
+            True,
+        )
+        return False
+
     def _create_collector_for_device(self, device, output_dir: str):
         """
         Create appropriate collector for device type
@@ -4190,16 +4300,45 @@ class CollectionWorker(QThread):
                     return None
 
                 selected = False
+                attempted_partition_indexes = set()
+
+                def _partition_label(partition):
+                    size = getattr(partition, 'size', 0) or 0
+                    size_gb = size / (1024 ** 3) if size else 0
+                    type_name = getattr(partition, 'type_name', '') or 'unknown'
+                    return (
+                        f"#{partition.index} {partition.filesystem} {type_name} "
+                        f"({size_gb:.1f} GB)"
+                    )
+
+                preferred_partition_index = None
+                if hasattr(collector, 'get_windows_partition'):
+                    preferred_partition_index = collector.get_windows_partition()
+
+                if preferred_partition_index is not None:
+                    attempted_partition_indexes.add(preferred_partition_index)
+                    preferred_partition = next(
+                        (p for p in partitions if p.index == preferred_partition_index),
+                        None,
+                    )
+                    if collector.select_partition(preferred_partition_index):
+                        label = _partition_label(preferred_partition) if preferred_partition else f"#{preferred_partition_index}"
+                        self.log_message.emit(f"Partition selected: {label}", False)
+                        selected = True
+
                 priority_fs = ['NTFS', 'APFS', 'HFS+', 'HFSX', 'HFS', 'ext4', 'ext3', 'ext2', 'XFS', 'Btrfs', 'ZFS', 'UFS', 'FAT32', 'FAT16', 'FAT12', 'exFAT']
                 for target_fs in priority_fs:
-                    for p in partitions:
-                        if getattr(p, 'filesystem', '').upper() == target_fs.upper():
-                            if collector.select_partition(p.index):
-                                self.log_message.emit(f"Partition selected: {p.filesystem} ({getattr(p, 'size_display', '')})", False)
-                                selected = True
-                                break
                     if selected:
                         break
+                    for p in partitions:
+                        if p.index in attempted_partition_indexes:
+                            continue
+                        if getattr(p, 'filesystem', '').upper() == target_fs.upper():
+                            attempted_partition_indexes.add(p.index)
+                            if collector.select_partition(p.index):
+                                self.log_message.emit(f"Partition selected: {_partition_label(p)}", False)
+                                selected = True
+                                break
 
                 if not selected and partitions:
                     self.log_message.emit(
@@ -4477,11 +4616,6 @@ class CollectionWorker(QThread):
                     if close_after_upload and hasattr(collector, 'close'):
                         _ios_collectors.append(collector)
 
-                    # Pre-warm reusable filesystem indexes so all artifact types
-                    # use cached metadata and the expensive MFT scan is visible as
-                    # its own stage instead of being hidden under the first artifact.
-                    self._prewarm_collector_index(collector, device_name)
-
                     device_artifacts = artifacts_by_device.get(device.device_id, [])
                     if not device_artifacts:
                         self.log_message.emit(
@@ -4491,6 +4625,19 @@ class CollectionWorker(QThread):
                         if hasattr(collector, 'close') and not close_after_upload:
                             collector.close()
                         continue
+
+                    scope_summary = self._collection_scope_summary(device, collector, device_artifacts)
+                    self._log_collection_scope(device_name, scope_summary)
+                    if not self._validate_collection_scope(device_name, scope_summary):
+                        if hasattr(collector, 'close') and not close_after_upload:
+                            collector.close()
+                        self.finished.emit(False, "Windows disk image baseline artifacts are incomplete")
+                        return
+
+                    # Pre-warm reusable filesystem indexes so all artifact types
+                    # use cached metadata and the expensive MFT scan is visible as
+                    # its own stage instead of being hidden under the first artifact.
+                    self._prewarm_collector_index(collector, device_name)
 
                     for artifact_type in device_artifacts:
                         if self._cancelled:
