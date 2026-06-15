@@ -1868,7 +1868,11 @@ class CollectorWindow(QMainWindow):
                 LINUX_ARTIFACT_TYPES, MACOS_ARTIFACT_TYPES,
             ):
                 self.profile_artifact_types.update(
-                    apply_collection_profile_to_registry(self.collection_profile_targets, registry)
+                    apply_collection_profile_to_registry(
+                        self.collection_profile_targets,
+                        registry,
+                        artifact_aliases=SERVER_TO_COLLECTOR_MAPPING,
+                    )
                 )
             android_ffs_count, ios_ffs_count = apply_collection_profile_to_mobile_ffs(
                 self.collection_profile_targets

@@ -166,6 +166,8 @@ def _normalize_paths_for_mft(paths: List[str]) -> List[str]:
         drive_match = re.match(r'^[A-Za-z]:/(.*)$', p)
         if drive_match:
             p = '/' + drive_match.group(1)
+        while p.startswith('//'):
+            p = p[1:]
         if p not in seen:
             seen.add(p)
             normalized.append(p)
@@ -696,7 +698,7 @@ class BaseMFTCollector(ABC):
         # Convert Linux/macOS 'paths' list into path_patterns + target_files
         # 'paths' entries are absolute paths like '/var/log/auth.log' or
         # glob patterns like '/home/*/.bash_history', '/etc/cron.d/*'
-        artifact_paths = mft_filter.get('paths', [])
+        artifact_paths = _normalize_paths_for_mft(mft_filter.get('paths', []))
         if artifact_paths:
             target_files = set(target_files) if target_files else set()
             path_patterns = list(path_patterns)
@@ -833,7 +835,7 @@ class BaseMFTCollector(ABC):
                             matched = True
 
             # 3. Path pattern only check
-            if not matched and compiled_patterns and not extensions and not target_files:
+            if not matched and compiled_patterns and not extensions and not target_files and not compiled_name_pattern:
                 for pattern in compiled_patterns:
                     if pattern.search(full_path_lower):
                         matched = True

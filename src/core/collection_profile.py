@@ -7,7 +7,7 @@ issued by the server after session authentication.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, MutableMapping
+from typing import Any, Mapping, MutableMapping
 
 
 _SOURCE_FILE_KINDS = {"source_file", "source_upload"}
@@ -31,6 +31,17 @@ _MFT_CONFIG_KEYS = {
     "user_path",
 }
 
+_MERGE_SEQUENCE_KEYS = {
+    "exclude_extensions",
+    "exclude_path_patterns",
+    "extensions",
+    "files",
+    "manifest_paths",
+    "manifest_targets",
+    "path_patterns",
+    "paths",
+}
+
 
 _IOS_SYSTEM_PREFIXES = (
     ("private/var/mobile/Library/Health/", "HealthDomain", "Health/"),
@@ -51,6 +62,65 @@ def _target_dict(target: Any) -> dict[str, Any]:
         "max_bytes": getattr(target, "max_bytes", None),
         "metadata": getattr(target, "metadata", None),
     }
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _sequence(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return list(value)
+    return [value]
+
+
+def _merge_sequence(existing: Any, incoming: Any) -> list[Any]:
+    merged = []
+    seen = set()
+    for item in _sequence(existing) + _sequence(incoming):
+        marker = repr(item)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        merged.append(item)
+    return merged
+
+
+def _merge_config(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = deepcopy(existing)
+    for key, value in incoming.items():
+        if key in _MERGE_SEQUENCE_KEYS and key in merged:
+            merged[key] = _merge_sequence(merged.get(key), value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _collector_config_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    collector_config = _as_dict(
+        metadata.get("collector_config")
+        or metadata.get("collection_config")
+        or metadata.get("config")
+    )
+    if not collector_config:
+        collector_config = {
+            key: metadata[key]
+            for key in _MFT_CONFIG_KEYS | {"mobile_ffs_specs", "collector"}
+            if key in metadata
+        }
+    if "mft_config" in metadata and "mft_config" not in collector_config:
+        collector_config["mft_config"] = metadata["mft_config"]
+    return collector_config
+
+
+def _mft_config_from_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    mft_config = _as_dict(entry.get("mft_config"))
+    for key in _MFT_CONFIG_KEYS:
+        if key in entry and key not in mft_config:
+            mft_config[key] = entry[key]
+    return mft_config
 
 
 def _normalize_ios_relative_path(path: Any) -> str:
@@ -191,6 +261,7 @@ def _install_ios_backup_targets(
 def apply_collection_profile_to_registry(
     targets: list[Any] | None,
     registry: MutableMapping[str, dict[str, Any]],
+    artifact_aliases: Mapping[str, str] | None = None,
 ) -> set[str]:
     """Merge authenticated server targets into the collector registry.
 
@@ -204,14 +275,17 @@ def apply_collection_profile_to_registry(
     profile_artifacts: set[str] = set()
     for raw_target in targets:
         target = _target_dict(raw_target)
-        artifact_type = str(target.get("artifact_type") or "").strip()
-        if not artifact_type:
+        raw_artifact_type = str(target.get("artifact_type") or "").strip()
+        if not raw_artifact_type:
             continue
+        artifact_type = str(
+            (artifact_aliases or {}).get(raw_artifact_type, raw_artifact_type)
+        ).strip()
         profile_artifacts.add(artifact_type)
 
         kind = str(target.get("kind") or "glob")
         patterns = [str(item) for item in target.get("patterns") or [] if item]
-        metadata = dict(target.get("metadata") or {})
+        metadata = _as_dict(target.get("metadata"))
 
         if kind in _SOURCE_FILE_KINDS:
             # Evidence-source uploads are handled by the source-file workflow,
@@ -219,12 +293,15 @@ def apply_collection_profile_to_registry(
             continue
 
         existing = deepcopy(registry.get(artifact_type) or {})
-        collector_config = dict(metadata.get("collector_config") or {})
+        collector_config = _collector_config_from_metadata(metadata)
 
-        merged = {**existing, **collector_config}
+        merged = _merge_config(existing, collector_config)
         _install_ios_backup_targets(merged, existing, collector_config)
         if patterns and kind not in _CONFIG_ONLY_KINDS:
-            merged["paths"] = patterns
+            if existing.get("server_profile_managed"):
+                merged["paths"] = _merge_sequence(merged.get("paths"), patterns)
+            else:
+                merged["paths"] = patterns
         if target.get("max_bytes") is not None:
             merged["max_bytes"] = target.get("max_bytes")
 
@@ -232,13 +309,28 @@ def apply_collection_profile_to_registry(
         # ARTIFACT_TYPES[*]["mft_config"], while E01/BaseMFT collectors read
         # the MFT registry directly. Keep both registries effective so decrypted
         # BitLocker/LUKS readers and ordinary disk images honor the same profile.
-        mft_config = dict(collector_config.get("mft_config") or {})
+        has_explicit_mft_config = bool(_as_dict(collector_config.get("mft_config"))) or any(
+            key in collector_config for key in _MFT_CONFIG_KEYS
+        )
+        mft_config = _mft_config_from_entry(collector_config)
         for key in _MFT_CONFIG_KEYS:
             if key in collector_config and key not in mft_config:
                 mft_config[key] = collector_config[key]
+        if (
+            patterns
+            and kind not in _CONFIG_ONLY_KINDS
+            and (not has_explicit_mft_config or existing.get("server_profile_managed"))
+        ):
+            mft_config["paths"] = _merge_sequence(mft_config.get("paths"), patterns)
         if target.get("max_bytes") is not None and "max_file_size" not in mft_config:
             mft_config["max_file_size"] = target.get("max_bytes")
         if mft_config:
+            existing_mft_config = (
+                _mft_config_from_entry(existing)
+                if existing.get("server_profile_managed")
+                else {}
+            )
+            mft_config = _merge_config(existing_mft_config, mft_config)
             merged["mft_config"] = mft_config
             for key, value in mft_config.items():
                 if key in _MFT_CONFIG_KEYS:
