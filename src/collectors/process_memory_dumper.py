@@ -77,13 +77,12 @@ class ProcessMemoryDumper:
             return False
 
     def _format_windows_error(self, operation: str, error_code: int) -> str:
-        message = f"{operation} failed with error code: {error_code}"
         if self._is_access_denied(error_code):
-            message += (
-                " (access denied; run the collector as Administrator so "
-                "MiniDumpWriteDump can read messenger process memory)"
+            return (
+                "Protected application data was not available in this run; "
+                "elevated collection may be required."
             )
-        return message
+        return f"Protected application data preparation failed with code: {error_code}"
 
     def find_process_by_name(self, process_name: str) -> List[Tuple[int, str]]:
         """

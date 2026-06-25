@@ -232,20 +232,28 @@ class AndroidDeviceEnumerator(BaseDeviceEnumerator):
 
             for dev_info in connected:
                 # Determine selectability
-                is_selectable = True
+                is_authorized = bool(dev_info.usb_debugging)
+                is_selectable = is_authorized
                 disabled_reason = ""
 
-                if not dev_info.rooted:
-                    # Non-rooted devices have limited collection
+                if not is_authorized:
+                    disabled_reason = (
+                        "USB debugging is not authorized. Unlock the Android "
+                        "device, approve the USB debugging prompt, then click Refresh."
+                    )
+                elif not dev_info.rooted:
                     disabled_reason = "Limited collection (device not rooted)"
 
                 capability = self._android_capability_summary(dev_info.rooted)
+                display_name = f"{dev_info.manufacturer} {dev_info.model}".strip()
+                if not display_name or display_name.lower() == "unknown unknown":
+                    display_name = "Android device"
 
                 device = UnifiedDeviceInfo(
                     device_id=f"android_{dev_info.serial}",
                     device_type=DeviceType.ANDROID_DEVICE,
-                    display_name=f"{dev_info.manufacturer} {dev_info.model}",
-                    status=DeviceStatus.READY,
+                    display_name=display_name,
+                    status=DeviceStatus.READY if is_authorized else DeviceStatus.ERROR,
                     size_bytes=dev_info.storage_available,
                     connection_time=datetime.now(),
                     is_selectable=is_selectable,
@@ -261,6 +269,7 @@ class AndroidDeviceEnumerator(BaseDeviceEnumerator):
                         'rooted': dev_info.rooted,
                         'storage_available': dev_info.storage_available,
                         'collection_capability': capability,
+                        'authorization_required': not is_authorized,
                     }
                 )
                 devices.append(device)

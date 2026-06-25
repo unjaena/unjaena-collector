@@ -380,12 +380,18 @@ class CellebriteAdapter:
         # the manifest, so the case record carries them as auxiliary
         # evidence without dispatching them as separate artifacts.
         zip_entries_set = self._entry_set or set()
-        sqlite_suffixes = (".db", ".sqlite", ".sqlitedb", ".sqlite3")
+        sidecar_suffixes = ("-wal", "-shm", "-journal")
         sidecar_extras: Dict[str, ResolvedArtifact] = {}
+        for candidate in list(wanted):
+            for suffix in sidecar_suffixes:
+                if candidate.endswith(suffix):
+                    primary = candidate[:-len(suffix)]
+                    if primary in wanted:
+                        sidecar_extras[candidate] = wanted[primary]
+                        wanted.pop(candidate, None)
+                    break
         for primary_path, ra in list(wanted.items()):
-            if not primary_path.lower().endswith(sqlite_suffixes):
-                continue
-            for suffix in ("-wal", "-shm"):
+            for suffix in sidecar_suffixes:
                 cand = primary_path + suffix
                 if cand in zip_entries_set and cand not in wanted:
                     sidecar_extras[cand] = ra

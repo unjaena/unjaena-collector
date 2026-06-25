@@ -23,7 +23,7 @@ from PyQt6.QtGui import QFont
 
 from core.token_validator import TokenValidator, _get_ssl_verify
 from core.encryptor import FileHashCalculator
-from core.uploader import SyncUploader, R2DirectUploader, RealTimeUploader
+from core.uploader import SyncUploader, RealTimeUploader
 from core.request_signer import RequestSigner
 from core.collection_profile import apply_collection_profile_to_mobile_ffs, apply_collection_profile_to_registry
 from collectors.artifact_collector import (
@@ -574,6 +574,12 @@ class CollectorWindow(QMainWindow):
         self._update_scope_summary()
         self._update_collect_button_state()
 
+    def _selected_axiom_sources(self, selected_devices=None) -> List:
+        devices = selected_devices
+        if devices is None:
+            devices = self.device_manager.get_selected_devices()
+        return [d for d in devices if d.device_type == DeviceType.AXIOM_CASE_DB]
+
     def _update_scope_summary(self):
         """Update the compact collection scope summary."""
         if not hasattr(self, 'beginner_scope_label'):
@@ -581,6 +587,7 @@ class CollectorWindow(QMainWindow):
 
         checked = sum(1 for cb in self.artifact_checks.values() if cb.isChecked())
         enabled = sum(1 for cb in self.artifact_checks.values() if cb.isEnabled())
+        axiom_count = len(self._selected_axiom_sources())
         deleted_text = (
             "Deleted files included where supported."
             if getattr(self, 'include_deleted_cb', None) and self.include_deleted_cb.isChecked()
@@ -592,10 +599,21 @@ class CollectorWindow(QMainWindow):
                 "Authenticate first. The server profile will enable the allowed "
                 "artifact set automatically."
             )
+        elif checked and axiom_count:
+            text = (
+                f"Scope ready: {checked} selected artifact type(s)"
+                f" out of {enabled} allowed, plus {axiom_count} AXIOM DB source(s). "
+                f"{deleted_text}"
+            )
         elif checked:
             text = (
                 f"Recommended scope ready: {checked} selected artifact type(s)"
                 f" out of {enabled} allowed. {deleted_text}"
+            )
+        elif axiom_count:
+            text = (
+                f"AXIOM DB scope ready: {axiom_count} result DB source(s). "
+                "Server parsing will expand AXIOM hits into searchable documents."
             )
         else:
             text = (
@@ -621,7 +639,8 @@ class CollectorWindow(QMainWindow):
         selected_devices = self.device_manager.get_selected_devices()
         source_done = bool(selected_devices)
         artifact_count = sum(1 for cb in self.artifact_checks.values() if cb.isChecked())
-        scope_done = artifact_count > 0
+        axiom_count = len(self._selected_axiom_sources(selected_devices))
+        scope_done = artifact_count > 0 or axiom_count > 0
 
         if self._token_validation_in_progress:
             token_detail = "Validating session token..."
@@ -639,7 +658,11 @@ class CollectorWindow(QMainWindow):
         else:
             source_detail = "Select a local drive, connected device, image file, or FFS bundle."
 
-        if scope_done:
+        if scope_done and artifact_count and axiom_count:
+            scope_detail = f"{artifact_count} artifact type(s) and {axiom_count} AXIOM DB source(s) selected."
+        elif scope_done and axiom_count:
+            scope_detail = f"{axiom_count} AXIOM DB source(s) selected."
+        elif scope_done:
             scope_detail = f"{artifact_count} artifact type(s) selected."
         elif token_done:
             scope_detail = "Open advanced options to choose artifacts."
@@ -1549,10 +1572,12 @@ class CollectorWindow(QMainWindow):
             return
 
         has_token = self.collection_token is not None
-        has_devices = len(self.device_manager.get_selected_devices()) > 0
+        selected_devices = self.device_manager.get_selected_devices()
+        has_devices = len(selected_devices) > 0
         has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
+        has_axiom_sources = bool(self._selected_axiom_sources(selected_devices))
 
-        self.collect_btn.setEnabled(has_token and has_devices and has_artifacts)
+        self.collect_btn.setEnabled(has_token and has_devices and (has_artifacts or has_axiom_sources))
         self._update_scope_summary()
         self._update_workflow_status()
 
@@ -2080,8 +2105,9 @@ class CollectorWindow(QMainWindow):
             return
 
         selected = [k for k, cb in self.artifact_checks.items() if cb.isChecked()]
-        if not selected:
-            QMessageBox.warning(self, "Error", "Please select at least one artifact type")
+        axiom_sources = self._selected_axiom_sources(selected_devices)
+        if not selected and not axiom_sources:
+            QMessageBox.warning(self, "Error", "Please select at least one artifact type or AXIOM DB source")
             return
 
         self._log_mobile_preflight(selected_devices, selected)
@@ -2093,7 +2119,8 @@ class CollectorWindow(QMainWindow):
                 self,
                 "Confirm Collection Targets",
                 f"Collecting from {len(selected_devices)} device(s):\n\n{device_list}\n\n"
-                f"Selected artifacts: {len(selected)}\n\n"
+                f"Selected artifacts: {len(selected)}\n"
+                f"AXIOM DB sources: {len(axiom_sources)}\n\n"
                 "Evidence scope warning:\n"
                 "Only continue if all selected sources belong to the same "
                 "investigation scope.\n"
@@ -2702,6 +2729,23 @@ class CollectorWindow(QMainWindow):
             if d.device_type == DeviceType.ANDROID_DEVICE
         ]
         if android_devices:
+            unauthorized_android = [
+                d for d in android_devices
+                if not d.metadata.get('usb_debugging')
+            ]
+            if unauthorized_android:
+                self._log(
+                    "Android collection blocked: USB debugging is not authorized.",
+                    error=True,
+                )
+                QMessageBox.warning(
+                    self,
+                    "Android Authorization Required",
+                    "Unlock the Android device, approve the USB debugging "
+                    "prompt, then click Refresh and select the device again."
+                )
+                return
+
             from gui.android_info_dialog import show_android_info_dialog
             android_result = show_android_info_dialog(
                 device_info=android_devices[0].metadata,
@@ -2711,7 +2755,10 @@ class CollectorWindow(QMainWindow):
                 self._log("Collection cancelled: Android device info dialog cancelled.")
                 return
 
-        self._log(f"Starting collection for: {', '.join(selected)}")
+        if selected:
+            self._log(f"Starting collection for: {', '.join(selected)}")
+        if axiom_sources:
+            self._log(f"Starting AXIOM DB upload for {len(axiom_sources)} source(s)")
 
         # Freeze every source/scope/auth input for the full collection and
         # upload lifetime. Individual UI events can otherwise re-enable the
@@ -3667,6 +3714,14 @@ class CollectionWorker(QThread):
 
             actual_size = os.path.getsize(file_path)
             if actual_size <= 0:
+                if self._is_empty_placeholder_artifact(file_path, artifact_type, metadata):
+                    return {
+                        'ok': False,
+                        'skipped': True,
+                        'index': index,
+                        'filename': filename,
+                        'message': f"[SKIP] {filename}: empty Android placeholder ignored",
+                    }
                 return {
                     'ok': False,
                     'index': index,
@@ -3749,6 +3804,22 @@ class CollectionWorker(QThread):
                 'error': f"Preparation failed ({filename}): {exc}",
             }
 
+    @staticmethod
+    def _is_empty_placeholder_artifact(file_path: str, artifact_type: str, metadata: dict) -> bool:
+        """Return True for mobile placeholder files that should not block upload.
+
+        Android external storage often contains zero-byte marker files such as
+        `.nomedia`. They have directory-display semantics on the device but no
+        forensic payload to upload. Treat them as skipped so they do not fail an
+        otherwise valid collection batch.
+        """
+        filename = Path(file_path).name.lower()
+        if artifact_type.startswith("mobile_android_") and filename in {".nomedia"}:
+            return True
+        if metadata.get("placeholder") is True:
+            return True
+        return False
+
     def _request_password(self, error_msg=None):
         """
         Password callback: called from collector thread → emits signal → blocks until GUI responds.
@@ -3822,6 +3893,8 @@ class CollectionWorker(QThread):
         return category
 
     def _artifacts_for_device(self, device) -> List[str]:
+        if device.device_type == DeviceType.AXIOM_CASE_DB:
+            return ["axiom_case_db"]
         if device.device_type not in (
             DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
             DeviceType.MOBILE_FFS_BUNDLE_IOS,
@@ -4607,6 +4680,44 @@ class CollectionWorker(QThread):
                     device_name = device.display_name
                     self.log_message.emit(f"Device: {device_name}", False)
 
+                    if device.device_type == DeviceType.AXIOM_CASE_DB:
+                        item_index += 1
+                        stage_progress = int((item_index / max(total_items, 1)) * 100)
+                        overall_progress = self._calculate_overall_progress(1, stage_progress)
+                        remaining = self._estimate_remaining_time(1, stage_progress, item_index, total_items)
+                        self.progress_updated.emit(
+                            1, stage_progress, overall_progress,
+                            f"[{device_name}] Preparing AXIOM DB upload...",
+                            remaining,
+                        )
+
+                        axiom_path = (device.metadata or {}).get('file_path')
+                        if not axiom_path or not Path(axiom_path).is_file():
+                            self.log_message.emit(
+                                f"[ERROR] [{device_name}] AXIOM DB file is missing or unreadable",
+                                True,
+                            )
+                            continue
+
+                        metadata = dict(device.metadata or {})
+                        metadata.update({
+                            'artifact_type': 'axiom_case_db',
+                            'upload_artifact_type': 'axiom_case_db',
+                            'collection_method': 'axiom_case_db_upload',
+                            'device_id': device.device_id,
+                            'device_name': device_name,
+                            'device_type': device.device_type.name,
+                            'original_path': metadata.get('original_path') or axiom_path,
+                            'source_tool': metadata.get('source_tool') or 'magnet_axiom',
+                        })
+                        collected_raw_files.append((axiom_path, 'axiom_case_db', metadata))
+                        self.file_collected.emit(Path(axiom_path).name, True)
+                        self.log_message.emit(
+                            f"[{device_name}] AXIOM DB queued for upload: {Path(axiom_path).name}",
+                            False,
+                        )
+                        continue
+
                     # Create appropriate collector based on device type
                     collector = self._create_collector_for_device(device, output_dir)
                     if not collector:
@@ -5002,6 +5113,8 @@ class CollectionWorker(QThread):
                             prepare_copy_ms += int(timings.get('stable_copy_ms') or 0)
                             prepare_bytes += int(result.get('file_size') or 0)
                             prepared_results.append(result)
+                        elif result.get('skipped'):
+                            self.log_message.emit(str(result.get('message') or 'Preparation skipped'), False)
                         else:
                             preparation_error_count += 1
                             self.log_message.emit(str(result.get('error') or 'Preparation failed'), True)
@@ -5045,8 +5158,11 @@ class CollectionWorker(QThread):
             # ========================================
             self.log_message.emit(f"☁️ Uploading {len(encrypted_files)} files...", False)
 
-            # Direct upload via presigned URLs, with server-streaming fallback.
-            sync_uploader = SyncUploader(
+            # Upload original evidence to the server for parsing. The server
+            # now deletes raw evidence after parsing and stores analysis
+            # outputs in object storage, so the GUI must not use R2 direct
+            # upload for raw evidence.
+            uploader = SyncUploader(
                 server_url=self.server_url,
                 ws_url=self.ws_url,
                 session_id=self.session_id,
@@ -5056,17 +5172,6 @@ class CollectionWorker(QThread):
                 config=self.config,
                 request_signer=self.request_signer,
                 profile_id=self.collection_profile_id,
-            )
-            uploader = R2DirectUploader(
-                server_url=self.server_url,
-                session_id=self.session_id,
-                collection_token=self.collection_token,
-                case_id=self.case_id,
-                consent_record=self.consent_record,
-                config=self.config,
-                request_signer=self.request_signer,
-                profile_id=self.collection_profile_id,
-                fallback_uploader=sync_uploader,
             )
 
             success_count = 0

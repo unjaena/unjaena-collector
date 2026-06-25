@@ -15,12 +15,36 @@ namespace UnjaenaEncaseBridge
             public string ArtifactType;
             public string Kind;
             public string[] Patterns;
+            public CollectionProfilePattern[] Matchers;
             public long MaxBytes;
         }
 
+        private sealed class CollectionProfilePattern
+        {
+            public bool PathPattern;
+            public Regex Regex;
+            public Regex SuffixRegex;
+            public string ExtensionKey;
+        }
+
+        private sealed class ProfileMatcherEntry
+        {
+            public string ArtifactType;
+            public long MaxBytes;
+            public bool PathPattern;
+            public Regex Regex;
+            public Regex SuffixRegex;
+            public int Order;
+        }
+
         private static readonly object ProfileLock = new object();
+        private static readonly object TlsLock = new object();
+        private static bool tlsConfigured;
         private static string collectionProfileId = string.Empty;
         private static CollectionProfileTarget[] collectionProfileTargets = new CollectionProfileTarget[0];
+        private static ProfileMatcherEntry[] collectionProfileGenericMatchers = new ProfileMatcherEntry[0];
+        private static Dictionary<string, ProfileMatcherEntry[]> collectionProfileMatchersByExtension =
+            new Dictionary<string, ProfileMatcherEntry[]>(StringComparer.Ordinal);
 
         public int LastStatusCode { get; private set; }
         public string LastError { get; private set; }
@@ -109,6 +133,9 @@ namespace UnjaenaEncaseBridge
 
             string profileId = JsonString(response, "profile_id");
             CollectionProfileTarget[] targets = ParseCollectionProfileTargets(response);
+            ProfileMatcherEntry[] genericMatchers;
+            Dictionary<string, ProfileMatcherEntry[]> matchersByExtension;
+            BuildProfileMatcherIndexes(targets, out genericMatchers, out matchersByExtension);
             if (IsBlank(profileId))
             {
                 return ErrorJson("invalid_collection_profile", "Collection profile response missing profile_id.");
@@ -122,6 +149,8 @@ namespace UnjaenaEncaseBridge
             {
                 collectionProfileId = profileId;
                 collectionProfileTargets = targets;
+                collectionProfileGenericMatchers = genericMatchers;
+                collectionProfileMatchersByExtension = matchersByExtension;
             }
 
             LastSucceeded = true;
@@ -199,65 +228,81 @@ namespace UnjaenaEncaseBridge
 
             string normalizedPath = NormalizeMatchValue(path);
             string normalizedName = NormalizeMatchValue(IsBlank(name) ? PathLeaf(normalizedPath) : name);
-            CollectionProfileTarget[] targets;
+            string extensionKey = NormalizeExtensionKey(extension, normalizedName);
+            ProfileMatcherEntry[] candidates;
+            bool profileLoaded;
             lock (ProfileLock)
             {
-                targets = collectionProfileTargets ?? new CollectionProfileTarget[0];
+                profileLoaded = collectionProfileTargets != null && collectionProfileTargets.Length > 0;
+                candidates = collectionProfileGenericMatchers ?? new ProfileMatcherEntry[0];
+                Dictionary<string, ProfileMatcherEntry[]> index = collectionProfileMatchersByExtension;
+                if (!IsBlank(extensionKey) && index != null && index.ContainsKey(extensionKey))
+                {
+                    candidates = index[extensionKey] ?? new ProfileMatcherEntry[0];
+                }
             }
 
-            if (targets.Length == 0)
+            if (!profileLoaded)
             {
                 LastSucceeded = false;
                 LastStatusCode = 0;
                 LastError = "collection_profile_not_loaded";
                 return string.Empty;
             }
-
-            for (int i = 0; i < targets.Length; i++)
+            if (candidates.Length == 0)
             {
-                CollectionProfileTarget target = targets[i];
-                if (target == null || IsBlank(target.ArtifactType) || target.Patterns == null)
-                {
-                    continue;
-                }
-                if (target.MaxBytes > 0 && fileSize > 0 && fileSize > target.MaxBytes)
-                {
-                    continue;
-                }
-                for (int j = 0; j < target.Patterns.Length; j++)
-                {
-                    string[] patternVariants = ExpandCollectionPatternVariants(target.Patterns[j]);
-                    for (int k = 0; k < patternVariants.Length; k++)
-                    {
-                        string pattern = patternVariants[k];
-                        if (IsBlank(pattern))
-                        {
-                            continue;
-                        }
+                LastSucceeded = true;
+                LastStatusCode = 200;
+                LastError = null;
+                return string.Empty;
+            }
 
-                        bool pathPattern = pattern.IndexOf('/') >= 0 || pattern.IndexOf(':') >= 0;
-                        string candidate = pathPattern ? normalizedPath : normalizedName;
-                        if (WildcardMatch(candidate, pattern))
-                        {
-                            LastSucceeded = true;
-                            LastStatusCode = 200;
-                            LastError = null;
-                            return target.ArtifactType;
-                        }
-                        if (pathPattern && !pattern.StartsWith("*", StringComparison.Ordinal) && WildcardMatch(normalizedPath, "*" + pattern))
-                        {
-                            LastSucceeded = true;
-                            LastStatusCode = 200;
-                            LastError = null;
-                            return target.ArtifactType;
-                        }
-                    }
-                }
+            string artifactType = MatchProfileMatcherEntries(candidates, normalizedPath, normalizedName, fileSize);
+            if (!IsBlank(artifactType))
+            {
+                LastSucceeded = true;
+                LastStatusCode = 200;
+                LastError = null;
+                return artifactType;
             }
 
             LastSucceeded = true;
             LastStatusCode = 200;
             LastError = null;
+            return string.Empty;
+        }
+
+        private static string MatchProfileMatcherEntries(
+            ProfileMatcherEntry[] matchers,
+            string normalizedPath,
+            string normalizedName,
+            long fileSize)
+        {
+            if (matchers == null || matchers.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            for (int i = 0; i < matchers.Length; i++)
+            {
+                ProfileMatcherEntry matcher = matchers[i];
+                if (matcher == null || matcher.Regex == null || IsBlank(matcher.ArtifactType))
+                {
+                    continue;
+                }
+                if (matcher.MaxBytes > 0 && fileSize > 0 && fileSize > matcher.MaxBytes)
+                {
+                    continue;
+                }
+
+                string candidate = matcher.PathPattern ? normalizedPath : normalizedName;
+                if (matcher.Regex.IsMatch(candidate)
+                    || (matcher.SuffixRegex != null && matcher.SuffixRegex.IsMatch(normalizedPath)))
+                {
+                    return matcher.ArtifactType;
+                }
+            }
+
             return string.Empty;
         }
 
@@ -577,8 +622,27 @@ namespace UnjaenaEncaseBridge
 
         private static void ConfigureTls()
         {
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-            ServicePointManager.Expect100Continue = false;
+            if (tlsConfigured)
+            {
+                return;
+            }
+
+            lock (TlsLock)
+            {
+                if (tlsConfigured)
+                {
+                    return;
+                }
+
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+                ServicePointManager.Expect100Continue = false;
+                ServicePointManager.UseNagleAlgorithm = false;
+                if (ServicePointManager.DefaultConnectionLimit < 16)
+                {
+                    ServicePointManager.DefaultConnectionLimit = 16;
+                }
+                tlsConfigured = true;
+            }
         }
 
         private string PostJson(string url, string json)
@@ -676,6 +740,9 @@ namespace UnjaenaEncaseBridge
             request.ReadWriteTimeout = timeoutMs;
             request.KeepAlive = false;
             request.AllowAutoRedirect = false;
+            request.ServicePoint.ConnectionLimit = Math.Max(request.ServicePoint.ConnectionLimit, 16);
+            request.ServicePoint.Expect100Continue = false;
+            request.ServicePoint.UseNagleAlgorithm = false;
             return request;
         }
 
@@ -1041,6 +1108,94 @@ namespace UnjaenaEncaseBridge
             return string.Empty;
         }
 
+        private static void BuildProfileMatcherIndexes(
+            CollectionProfileTarget[] targets,
+            out ProfileMatcherEntry[] genericMatchers,
+            out Dictionary<string, ProfileMatcherEntry[]> matchersByExtension)
+        {
+            List<ProfileMatcherEntry> generic = new List<ProfileMatcherEntry>();
+            Dictionary<string, List<ProfileMatcherEntry>> extensionSpecific =
+                new Dictionary<string, List<ProfileMatcherEntry>>(StringComparer.Ordinal);
+
+            int order = 0;
+            if (targets != null)
+            {
+                for (int i = 0; i < targets.Length; i++)
+                {
+                    CollectionProfileTarget target = targets[i];
+                    if (target == null || IsBlank(target.ArtifactType) || target.Matchers == null)
+                    {
+                        continue;
+                    }
+
+                    for (int j = 0; j < target.Matchers.Length; j++)
+                    {
+                        CollectionProfilePattern matcher = target.Matchers[j];
+                        if (matcher == null || matcher.Regex == null)
+                        {
+                            continue;
+                        }
+
+                        ProfileMatcherEntry entry = new ProfileMatcherEntry();
+                        entry.ArtifactType = target.ArtifactType;
+                        entry.MaxBytes = target.MaxBytes;
+                        entry.PathPattern = matcher.PathPattern;
+                        entry.Regex = matcher.Regex;
+                        entry.SuffixRegex = matcher.SuffixRegex;
+                        entry.Order = order++;
+
+                        if (IsBlank(matcher.ExtensionKey))
+                        {
+                            generic.Add(entry);
+                        }
+                        else
+                        {
+                            if (!extensionSpecific.ContainsKey(matcher.ExtensionKey))
+                            {
+                                extensionSpecific[matcher.ExtensionKey] = new List<ProfileMatcherEntry>();
+                            }
+                            extensionSpecific[matcher.ExtensionKey].Add(entry);
+                        }
+                    }
+                }
+            }
+
+            genericMatchers = generic.ToArray();
+            matchersByExtension = new Dictionary<string, ProfileMatcherEntry[]>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, List<ProfileMatcherEntry>> item in extensionSpecific)
+            {
+                matchersByExtension[item.Key] = MergeMatchersByOrder(generic, item.Value).ToArray();
+            }
+        }
+
+        private static List<ProfileMatcherEntry> MergeMatchersByOrder(
+            List<ProfileMatcherEntry> generic,
+            List<ProfileMatcherEntry> specific)
+        {
+            List<ProfileMatcherEntry> merged = new List<ProfileMatcherEntry>(
+                (generic == null ? 0 : generic.Count) + (specific == null ? 0 : specific.Count)
+            );
+            int g = 0;
+            int s = 0;
+            while ((generic != null && g < generic.Count) || (specific != null && s < specific.Count))
+            {
+                ProfileMatcherEntry nextGeneric = (generic != null && g < generic.Count) ? generic[g] : null;
+                ProfileMatcherEntry nextSpecific = (specific != null && s < specific.Count) ? specific[s] : null;
+
+                if (nextSpecific == null || (nextGeneric != null && nextGeneric.Order <= nextSpecific.Order))
+                {
+                    merged.Add(nextGeneric);
+                    g++;
+                }
+                else
+                {
+                    merged.Add(nextSpecific);
+                    s++;
+                }
+            }
+            return merged;
+        }
+
         private static CollectionProfileTarget[] ParseCollectionProfileTargets(string json)
         {
             string targetsJson = JsonArray(json, "targets");
@@ -1059,6 +1214,7 @@ namespace UnjaenaEncaseBridge
                 target.ArtifactType = artifactType;
                 target.Kind = JsonString(item, "kind");
                 target.Patterns = patterns;
+                target.Matchers = BuildCollectionProfilePatterns(patterns);
                 target.MaxBytes = JsonLong(item, "max_bytes", -1L);
                 targets.Add(target);
             }
@@ -1301,6 +1457,50 @@ namespace UnjaenaEncaseBridge
             return defaultValue;
         }
 
+        private static CollectionProfilePattern[] BuildCollectionProfilePatterns(string[] patterns)
+        {
+            List<CollectionProfilePattern> matchers = new List<CollectionProfilePattern>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+
+            if (patterns == null)
+            {
+                return matchers.ToArray();
+            }
+
+            for (int i = 0; i < patterns.Length; i++)
+            {
+                string[] variants = ExpandCollectionPatternVariants(patterns[i]);
+                for (int j = 0; j < variants.Length; j++)
+                {
+                    string pattern = NormalizeMatchValue(variants[j]);
+                    if (IsBlank(pattern) || !seen.Add(pattern))
+                    {
+                        continue;
+                    }
+
+                    bool pathPattern = pattern.IndexOf('/') >= 0 || pattern.IndexOf(':') >= 0;
+                    try
+                    {
+                        CollectionProfilePattern matcher = new CollectionProfilePattern();
+                        matcher.PathPattern = pathPattern;
+                        matcher.ExtensionKey = ExtractPatternExtensionKey(pattern);
+                        matcher.Regex = BuildWildcardRegex(pattern);
+                        if (pathPattern && !pattern.StartsWith("*", StringComparison.Ordinal))
+                        {
+                            matcher.SuffixRegex = BuildWildcardRegex("*" + pattern);
+                        }
+                        matchers.Add(matcher);
+                    }
+                    catch (ArgumentException)
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            return matchers.ToArray();
+        }
+
         private static string NormalizeMatchValue(string value)
         {
             if (value == null)
@@ -1313,6 +1513,71 @@ namespace UnjaenaEncaseBridge
                 result = result.Replace("//", "/");
             }
             return result;
+        }
+
+        private static string NormalizeExtensionKey(string extension, string normalizedName)
+        {
+            string value = string.Empty;
+            if (!IsBlank(normalizedName))
+            {
+                int dot = normalizedName.LastIndexOf('.');
+                if (dot >= 0 && dot + 1 < normalizedName.Length)
+                {
+                    value = normalizedName.Substring(dot);
+                }
+            }
+            if (IsBlank(value))
+            {
+                value = NormalizeMatchValue(extension);
+            }
+            if (IsBlank(value))
+            {
+                return string.Empty;
+            }
+            if (value.IndexOf('/') >= 0 || value.IndexOf('\\') >= 0)
+            {
+                return string.Empty;
+            }
+            if (!value.StartsWith(".", StringComparison.Ordinal))
+            {
+                value = "." + value;
+            }
+            if (value.IndexOf('*') >= 0 || value.IndexOf('?') >= 0
+                || value.IndexOf('[') >= 0 || value.IndexOf(']') >= 0)
+            {
+                return string.Empty;
+            }
+            return value;
+        }
+
+        private static string ExtractPatternExtensionKey(string normalizedPattern)
+        {
+            string pattern = NormalizeMatchValue(normalizedPattern);
+            if (IsBlank(pattern))
+            {
+                return string.Empty;
+            }
+
+            int slash = pattern.LastIndexOf('/');
+            string leaf = slash >= 0 ? pattern.Substring(slash + 1) : pattern;
+            if (IsBlank(leaf))
+            {
+                return string.Empty;
+            }
+
+            int dot = leaf.LastIndexOf('.');
+            if (dot < 0 || dot + 1 >= leaf.Length)
+            {
+                return string.Empty;
+            }
+
+            string extension = leaf.Substring(dot);
+            if (extension.IndexOf('*') >= 0 || extension.IndexOf('?') >= 0
+                || extension.IndexOf('[') >= 0 || extension.IndexOf(']') >= 0)
+            {
+                return string.Empty;
+            }
+            return extension;
         }
 
         private static string[] ExpandCollectionPatternVariants(string pattern)
@@ -1419,6 +1684,11 @@ namespace UnjaenaEncaseBridge
                 text,
                 WildcardPatternToRegex(pattern),
                 RegexOptions.CultureInvariant);
+        }
+
+        private static Regex BuildWildcardRegex(string pattern)
+        {
+            return new Regex(WildcardPatternToRegex(pattern), RegexOptions.CultureInvariant);
         }
 
         private static string WildcardPatternToRegex(string pattern)

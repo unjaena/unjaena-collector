@@ -68,6 +68,8 @@ class DeviceListPanel(QWidget):
         self._interaction_locked = bool(locked)
         self.refresh_btn.setEnabled(not locked)
         self.add_btn.setEnabled(not locked)
+        if hasattr(self, 'add_axiom_btn'):
+            self.add_axiom_btn.setEnabled(not locked)
         self.setAcceptDrops(not locked)
         for device_id, cb in self.device_checkboxes.items():
             device = self.device_manager.get_device(device_id)
@@ -114,6 +116,29 @@ class DeviceListPanel(QWidget):
         self.add_btn.clicked.connect(self._on_add_image_clicked)
         header.addWidget(self.add_btn)
 
+        self.add_axiom_btn = QPushButton("+ Add AXIOM DB")
+        self.add_axiom_btn.setFixedHeight(24)
+        self.add_axiom_btn.setObjectName("addAxiomButton")
+        self.add_axiom_btn.setStyleSheet(f"""
+            QPushButton#addAxiomButton {{
+                background-color: {COLORS['bg_elevated']};
+                border: 1px solid {COLORS['border_muted']};
+                border-radius: 4px;
+                color: {COLORS['text_primary']};
+                font-weight: 700;
+                padding: 4px 12px;
+            }}
+            QPushButton#addAxiomButton:hover {{
+                background-color: rgba(88, 166, 255, 0.12);
+                border-color: {COLORS['brand_accent']};
+            }}
+            QPushButton#addAxiomButton:pressed {{
+                background-color: rgba(88, 166, 255, 0.2);
+            }}
+        """)
+        self.add_axiom_btn.clicked.connect(self._on_add_axiom_clicked)
+        header.addWidget(self.add_axiom_btn)
+
         header.addStretch()
 
         self.summary_label = QLabel("0 selected")
@@ -125,9 +150,10 @@ class DeviceListPanel(QWidget):
         layout.addLayout(header)
 
         self.evidence_hint = QLabel(
-            "Add E01/RAW/VDI/VMDK/VHD/DMG/QCOW2 or a mobile FFS ZIP/CLBX, "
-            "then select the evidence source below. Ordinary ZIP, ISO, and "
-            "memory dump files are not disk-image sources in this collector."
+            "Add E01/RAW/VDI/VMDK/VHD/DMG/QCOW2, a mobile FFS ZIP/CLBX, "
+            "or a Magnet AXIOM result DB, then select the evidence source below. "
+            "Ordinary ZIP, ISO, generic DB, and memory dump files are not "
+            "disk-image sources in this collector."
         )
         self.evidence_hint.setWordWrap(True)
         self.evidence_hint.setStyleSheet(
@@ -179,8 +205,15 @@ class DeviceListPanel(QWidget):
         has_ios = any(
             did.startswith('ios_') for did in self.device_checkboxes
         )
-        has_android = any(
-            did.startswith('android_') for did in self.device_checkboxes
+        android_devices = [
+            self.device_manager.get_device(did)
+            for did in self.device_checkboxes
+            if did.startswith('android_')
+        ]
+        android_devices = [d for d in android_devices if d]
+        has_android = bool(android_devices)
+        has_authorized_android = any(
+            d.metadata.get('usb_debugging') for d in android_devices
         )
 
         ok = COLORS['success']       # #3fb950
@@ -221,9 +254,18 @@ class DeviceListPanel(QWidget):
 
         # --- Android ---
         adb = diag['android']
-        if has_android:
+        if has_authorized_android:
             sections.append(
                 f"<span style='color:{ok};'>● Android — Connected</span>"
+            )
+        elif has_android:
+            sections.append(
+                f"<span style='color:{warn};'>Android authorization required</span>"
+                f"<br><span style='color:{dim};'>"
+                "Unlock the Android device, tap <b>Allow USB Debugging</b>, "
+                "then click <b>Refresh</b>. Collection starts only after ADB "
+                "shell access is authorized."
+                "</span>"
             )
         elif not adb['adb_available']:
             sections.append(
@@ -249,7 +291,8 @@ class DeviceListPanel(QWidget):
         # --- E01/RAW hint ---
         sections.append(
             f"<span style='color:{dim};'>"
-            "● <b>E01/RAW</b>: Use <b>+ Add E01/RAW</b> button above"
+            "● <b>E01/RAW</b>: Use <b>+ Add Disk Image / FFS</b>; "
+            "<b>AXIOM</b>: use <b>+ Add AXIOM DB</b>"
             "</span>"
         )
 
@@ -322,9 +365,17 @@ class DeviceListPanel(QWidget):
         """Device updated"""
         if device.device_id in self.device_checkboxes:
             cb = self.device_checkboxes[device.device_id]
+            was_checked = cb.isChecked()
             cb.setText(self._get_device_label(device))
             cb.setToolTip(self._get_device_tooltip(device))
             cb.setEnabled(device.is_selectable and not self._interaction_locked)
+            cb.blockSignals(True)
+            cb.setChecked(device.is_selected)
+            cb.blockSignals(False)
+            self._update_summary()
+            self._update_mobile_guide()
+            if was_checked != device.is_selected:
+                self.selection_changed.emit()
 
     def _on_checkbox_changed(self, device_id: str, state: int):
         """Checkbox changed"""
@@ -359,9 +410,27 @@ class DeviceListPanel(QWidget):
 
         self._register_evidence_file(file_path)
 
+    def _on_add_axiom_clicked(self):
+        """Add Magnet AXIOM case result database."""
+        if self._interaction_locked:
+            return
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Magnet AXIOM Result Database",
+            "",
+            "Magnet AXIOM Result DB (*.mfdb *.db *.sqlite *.sqlite3);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        self._register_axiom_db_file(file_path)
+
     def _register_evidence_file(self, file_path: str):
         """Register a supported image or mobile FFS bundle."""
         if self._interaction_locked:
+            return
+        if file_path.lower().endswith(".mfdb"):
+            self._register_axiom_db_file(file_path)
             return
         if not self._is_supported_evidence_file(file_path):
             from PyQt6.QtWidgets import QMessageBox
@@ -387,6 +456,31 @@ class DeviceListPanel(QWidget):
                     "file exists and is a supported disk image or filesystem "
                     "volume image.",
                 )
+
+    def _register_axiom_db_file(self, file_path: str):
+        """Register a Magnet AXIOM result DB for direct upload."""
+        if self._interaction_locked:
+            return
+        device = self.device_manager.add_axiom_case_db_file(file_path)
+        if device:
+            self.image_file_requested.emit()
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                "AXIOM DB Registered",
+                f"<b>{device.display_name}</b><br><br>"
+                f"<b>Size</b>: {device.size_display}<br>"
+                "This database will be uploaded as one AXIOM evidence source. "
+                "Server parsing will expand AXIOM hits into searchable documents.",
+            )
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "AXIOM DB Registration Failed",
+                "Could not register this AXIOM result database. Verify that the "
+                "file exists, is readable, and is a SQLite-based AXIOM result DB.",
+            )
 
     def dragEnterEvent(self, event):
         """Accept supported evidence files dropped onto the source panel."""
@@ -428,6 +522,7 @@ class DeviceListPanel(QWidget):
             ".ntfs", ".fat", ".fat12", ".fat16", ".fat32", ".exfat",
             ".ext", ".ext2", ".ext3", ".ext4", ".xfs", ".btrfs",
             ".hfs", ".hfsx", ".apfs", ".ufs", ".zip", ".clbx",
+            ".mfdb",
         )
         return lower.endswith(suffixes)
 
@@ -446,6 +541,12 @@ class DeviceListPanel(QWidget):
                 "collector screen.\n\n"
                 "Use a disk image, a filesystem volume image, or a supported "
                 "mobile FFS bundle."
+            )
+        if lower.endswith((".db", ".sqlite", ".sqlite3")):
+            return (
+                "Generic database files are not disk-image sources in this collector screen.\n\n"
+                "For a Magnet AXIOM case result database, use the dedicated "
+                "+ Add AXIOM DB button."
             )
         if lower.endswith(".zip"):
             return (
@@ -562,6 +663,7 @@ class DeviceListPanel(QWidget):
             DeviceType.ANDROID_DEVICE: "📱",
             DeviceType.IOS_BACKUP: "🍎",
             DeviceType.IOS_DEVICE: "📲",
+            DeviceType.AXIOM_CASE_DB: "🗄",
         }
         icon = type_icons.get(device.device_type, "📁")
         label = device.display_name
@@ -613,6 +715,9 @@ class DeviceListPanel(QWidget):
             if present_count:
                 label = f"{label} [{present_count} artifact types]"
 
+        if device.device_type == DeviceType.AXIOM_CASE_DB:
+            label = f"{label} [AXIOM result DB]"
+
         return f"{icon} {label}"
 
     def _get_device_tooltip(self, device: UnifiedDeviceInfo) -> str:
@@ -631,6 +736,13 @@ class DeviceListPanel(QWidget):
             fs_type = device.metadata.get('filesystem_type', 'Unknown')
             lines.append(f"Filesystem: {fs_type}")
             lines.append(f"Detected OS: {detected_os.upper()}")
+
+        if device.device_type == DeviceType.AXIOM_CASE_DB:
+            lines.append("Upload type: axiom_case_db")
+            lines.append("Source tool: Magnet AXIOM")
+            source_path = device.metadata.get('file_path') or ''
+            if source_path:
+                lines.append(f"Path: {source_path}")
 
         if device.device_type == DeviceType.ANDROID_DEVICE:
             m = device.metadata

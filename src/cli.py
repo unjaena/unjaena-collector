@@ -255,7 +255,8 @@ class HeadlessCollector:
     def _compute_hashes(self, files: List[Tuple[str, str, Dict[str, Any]]]) -> List[Tuple[str, str, Dict[str, Any]]]:
         """Stage 2: Compute SHA-256 hashes for integrity verification.
 
-        Note: Upload security is handled by DirectUploader during Stage 3.
+        Upload security is handled by server-side raw evidence ingestion during
+        Stage 3.
         """
         from core.encryptor import FileHashCalculator
 
@@ -294,15 +295,16 @@ class HeadlessCollector:
         return verified
 
     def _upload(self, files: List[Tuple[str, str, Dict[str, Any]]]) -> bool:
-        """Stage 3: Upload files via presigned URLs."""
-        from core.uploader import DirectUploader
+        """Stage 3: Upload original files to the server for parsing."""
+        from core.uploader import SyncUploader
 
         if not files:
             logger.error("No files to upload.")
             return False
 
-        uploader = DirectUploader(
+        uploader = SyncUploader(
             server_url=self.server_url,
+            ws_url=self.server_url,
             session_id=self.session_id,
             collection_token=self.collection_token,
             case_id=self.case_id,

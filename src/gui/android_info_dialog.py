@@ -281,6 +281,12 @@ class AndroidDeviceInfoDialog(QDialog):
         proceed_btn = QPushButton("Proceed")
         proceed_btn.setObjectName("primaryButton")
         proceed_btn.setFixedWidth(100)
+        if not self.device_info.get('usb_debugging', False):
+            proceed_btn.setEnabled(False)
+            proceed_btn.setToolTip(
+                "Approve USB debugging on the Android device, refresh the "
+                "device list, then start collection again."
+            )
         proceed_btn.clicked.connect(self._on_proceed)
         layout.addWidget(proceed_btn)
 

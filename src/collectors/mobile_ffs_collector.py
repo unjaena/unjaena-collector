@@ -249,6 +249,7 @@ class MobileFFSBundleCollector:
                 metadata = {
                     "status": "success",
                     "source_path": entry.zip_entry_path,
+                    "original_path": entry.zip_entry_path,
                     "extracted_source_path": str(entry.extracted_path),
                     "sha256": entry.source_sha256,
                     "crc32": entry.source_crc32,
@@ -278,13 +279,25 @@ class MobileFFSBundleCollector:
     ) -> Dict[str, ResolvedArtifact]:
         """For every SQLite primary in *wanted*, also pull -wal/-shm
         sidecars so sqlite3.connect transparently merges WAL state on
-        the parser side. Sidecars are extracted to disk but not yielded
-        as separate artifacts."""
+        the parser side. Android apps often use extensionless SQLite
+        files (for example ``bugle_db`` or ``signal_v4.db`` variants),
+        so sidecar detection is based on adjacent filenames rather than
+        only on the primary extension. Sidecars are extracted to disk but
+        not yielded as separate artifacts."""
         sidecars: Dict[str, ResolvedArtifact] = {}
+        sidecar_suffixes = ("-wal", "-shm", "-journal")
+
+        for candidate in list(wanted):
+            for suffix in sidecar_suffixes:
+                if candidate.endswith(suffix):
+                    primary = candidate[:-len(suffix)]
+                    if primary in wanted:
+                        sidecars[candidate] = wanted[primary]
+                        wanted.pop(candidate, None)
+                    break
+
         for primary_path, ra in list(wanted.items()):
-            if not primary_path.lower().endswith(self.SQLITE_SUFFIXES):
-                continue
-            for suffix in ("-wal", "-shm"):
+            for suffix in sidecar_suffixes:
                 cand = primary_path + suffix
                 if cand in self._zip_entries and cand not in wanted:
                     sidecars[cand] = ra

@@ -442,6 +442,40 @@ def _save_hardware_metadata_standalone(
         return None
 
 
+def _save_collection_diagnostic_standalone(
+    output_dir,
+    artifact_type: str,
+    filename: str,
+    diagnostic: Dict[str, Any],
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Save a small collection diagnostic file for parser/user visibility."""
+    import json as _json
+
+    diag_path = Path(output_dir) / filename
+    payload = {
+        'artifact_type': artifact_type,
+        'generated_at': datetime.now(timezone.utc).isoformat(),
+        **diagnostic,
+    }
+    try:
+        diag_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(diag_path, 'w', encoding='utf-8') as f:
+            _json.dump(payload, f, indent=2)
+        return str(diag_path), {
+            'artifact_type': artifact_type,
+            'original_path': str(diag_path),
+            'filename': filename,
+            'type': artifact_type,
+            'name': filename,
+            'path': str(diag_path),
+            'size': diag_path.stat().st_size,
+            'is_metadata': True,
+            'collection_method': 'collection_diagnostic',
+        }
+    except Exception:
+        return None
+
+
 class LocalMFTCollector(_LocalMFTBase):
     """
     Local disk MFT-based collector
@@ -814,15 +848,46 @@ class LocalMFTCollector(_LocalMFTBase):
                                         'collection_method': 'process_memory_dump',
                                     }
                                 else:
-                                    logger.warning(
-                                        f"[MFT+Memory] Dump FAILED for {process_name}: "
-                                        f"{dump_result.get('error')}"
-                                    )
-                                    if dump_result.get('requires_admin'):
+                                    if artifact_type == 'server_managed_windows_app':
                                         logger.warning(
-                                            "[MFT+Memory] Re-run the collector as Administrator "
-                                            "to collect messenger process memory."
+                                            "[MFT+Memory] profile-managed appTalk protected data was only partially prepared."
                                         )
+                                    else:
+                                        logger.warning(
+                                            f"[MFT+Memory] Dump FAILED for {process_name}: "
+                                            f"{dump_result.get('error')}"
+                                        )
+                                    try:
+                                        failed_dump = Path(dump_path)
+                                        if failed_dump.exists():
+                                            failed_dump.unlink()
+                                    except Exception:
+                                        pass
+                                    if artifact_type == 'server_managed_windows_app':
+                                        diag_result = _save_collection_diagnostic_standalone(
+                                            artifact_dir,
+                                            artifact_type,
+                                            '_collection_status.json',
+                                            {
+                                                'collection_status': 'partial',
+                                                'detail_code': 'protected_live_context_unavailable',
+                                                'collected_file_count_before_diagnostic': None,
+                                                'impact': 'Some protected application records may be unavailable in this collection.',
+                                                'operator_action': 'Review collection prerequisites and retry with elevated collection mode when appropriate.',
+                                            },
+                                        )
+                                        if diag_result:
+                                            yield diag_result
+                                    if dump_result.get('requires_admin'):
+                                        if artifact_type == 'server_managed_windows_app':
+                                            logger.warning(
+                                                "[MFT+Memory] Some protected application data may require elevated collection mode."
+                                            )
+                                        else:
+                                            logger.warning(
+                                                "[MFT+Memory] Re-run the collector as Administrator "
+                                                "to collect messenger process memory."
+                                            )
                             except ImportError:
                                 logger.warning("[MFT+Memory] ProcessMemoryDumper not available (ImportError)")
                             except Exception as e:
@@ -1071,15 +1136,47 @@ class LocalMFTCollector(_LocalMFTBase):
                         }
                         collected_count += 1
                     else:
-                        logger.warning(
-                            f"[DirFallback+Memory] Dump FAILED for {process_name}: "
-                            f"{dump_result.get('error')}"
-                        )
-                        if dump_result.get('requires_admin'):
+                        if artifact_type == 'server_managed_windows_app':
                             logger.warning(
-                                "[DirFallback+Memory] Re-run the collector as Administrator "
-                                "to collect messenger process memory."
+                                "[DirFallback+Memory] profile-managed appTalk protected data was only partially prepared."
                             )
+                        else:
+                            logger.warning(
+                                f"[DirFallback+Memory] Dump FAILED for {process_name}: "
+                                f"{dump_result.get('error')}"
+                            )
+                        try:
+                            failed_dump = Path(dump_path)
+                            if failed_dump.exists():
+                                failed_dump.unlink()
+                        except Exception:
+                            pass
+                        if artifact_type == 'server_managed_windows_app':
+                            diag_result = _save_collection_diagnostic_standalone(
+                                artifact_dir,
+                                artifact_type,
+                                '_collection_status.json',
+                                {
+                                    'collection_status': 'partial',
+                                    'detail_code': 'protected_live_context_unavailable',
+                                    'collected_file_count_before_diagnostic': collected_count,
+                                    'impact': 'Some protected application records may be unavailable in this collection.',
+                                    'operator_action': 'Review collection prerequisites and retry with elevated collection mode when appropriate.',
+                                },
+                            )
+                            if diag_result:
+                                collected_count += 1
+                                yield diag_result
+                        if dump_result.get('requires_admin'):
+                            if artifact_type == 'server_managed_windows_app':
+                                logger.warning(
+                                    "[DirFallback+Memory] Some protected application data may require elevated collection mode."
+                                )
+                            else:
+                                logger.warning(
+                                    "[DirFallback+Memory] Re-run the collector as Administrator "
+                                    "to collect messenger process memory."
+                                )
                 except ImportError:
                     logger.warning("[DirFallback+Memory] ProcessMemoryDumper not available (ImportError)")
                 except Exception as e:
@@ -3118,6 +3215,26 @@ class ArtifactCollector:
                 }
             else:
                 logger.debug(f"[MEMORY] Dump skipped: {dump_result.get('error', 'process not found')}")
+                try:
+                    failed_dump = Path(dump_path)
+                    if failed_dump.exists():
+                        failed_dump.unlink()
+                except Exception:
+                    pass
+                if artifact_type == 'server_managed_windows_app':
+                    diag_result = _save_collection_diagnostic_standalone(
+                        artifact_dir,
+                        artifact_type,
+                        '_collection_status.json',
+                        {
+                            'collection_status': 'partial',
+                            'detail_code': 'protected_live_context_unavailable',
+                            'impact': 'Some protected application records may be unavailable in this collection.',
+                            'operator_action': 'Review collection prerequisites and retry with elevated collection mode when appropriate.',
+                        },
+                    )
+                    if diag_result:
+                        yield diag_result
         except ImportError:
             logger.debug("[MEMORY] ProcessMemoryDumper not available")
         except Exception as e:
@@ -3494,11 +3611,36 @@ class ArtifactCollector:
                     }
                 else:
                     logger.debug(f"[MEMORY] Dump failed: {dump_result.get('error')}")
-                    if dump_result.get('requires_admin'):
-                        logger.warning(
-                            "[MEMORY] Re-run the collector as Administrator to collect "
-                            "messenger process memory."
+                    try:
+                        failed_dump = Path(dump_path)
+                        if failed_dump.exists():
+                            failed_dump.unlink()
+                    except Exception:
+                        pass
+                    if artifact_type == 'server_managed_windows_app':
+                        diag_result = _save_collection_diagnostic_standalone(
+                            output_dir,
+                            artifact_type,
+                            '_collection_status.json',
+                            {
+                                'collection_status': 'partial',
+                                'detail_code': 'protected_live_context_unavailable',
+                                'impact': 'Some protected application records may be unavailable in this collection.',
+                                'operator_action': 'Review collection prerequisites and retry with elevated collection mode when appropriate.',
+                            },
                         )
+                        if diag_result:
+                            yield diag_result
+                    if dump_result.get('requires_admin'):
+                        if artifact_type == 'server_managed_windows_app':
+                            logger.warning(
+                                "[MEMORY] Some protected application data may require elevated collection mode."
+                            )
+                        else:
+                            logger.warning(
+                                "[MEMORY] Re-run the collector as Administrator to collect "
+                                "messenger process memory."
+                            )
             except ImportError:
                 logger.debug("[MEMORY] ProcessMemoryDumper not available")
             except Exception as e:

@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import stat
 import zipfile
 from dataclasses import dataclass
@@ -79,6 +80,15 @@ class FilenameLengthError(ContainerSafetyError):
 class CRCMismatchError(ContainerSafetyError):
     """Entry's central-directory CRC32 does not match the read bytes.
     Indicates corruption or tampering."""
+
+
+WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
+WINDOWS_INVALID_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
+MAX_OUTPUT_SEGMENT_CHARS = 180
 
 
 # =============================================================================
@@ -151,8 +161,10 @@ def _is_safe_relative(name: str, dest_root: Path,
     if "\x00" in name:
         raise PathTraversalError("NUL in filename")
 
+    rel_path = _sanitize_output_relative_path(name)
+
     # Resolve and verify containment. Use Path.resolve() to canonicalise.
-    candidate = (dest_root / name).resolve()
+    candidate = (dest_root / rel_path).resolve()
     dest_root_resolved = dest_root.resolve()
     try:
         candidate.relative_to(dest_root_resolved)
@@ -161,6 +173,41 @@ def _is_safe_relative(name: str, dest_root: Path,
             f"entry resolves outside dest: {name!r} -> {candidate}"
         )
     return candidate
+
+
+def _sanitize_output_relative_path(name: str) -> Path:
+    """Return a host-filesystem-safe relative output path.
+
+    FFS containers can contain valid Android/iOS filenames that are invalid on
+    Windows, such as ``||.entitystore``. The evidence path is preserved in
+    ExtractedEntry.zip_entry_path; this function only makes the temporary
+    extraction path writable on the examiner host.
+    """
+    parts = []
+    for raw_part in name.replace("\\", "/").split("/"):
+        if not raw_part:
+            continue
+        if raw_part in {".", ".."}:
+            raise PathTraversalError(f"path traversal segment: {name!r}")
+
+        safe_part = WINDOWS_INVALID_CHARS.sub("_", raw_part).rstrip(" .")
+        if not safe_part:
+            safe_part = "_"
+
+        stem = safe_part.split(".", 1)[0].lower()
+        if stem in WINDOWS_RESERVED_NAMES:
+            safe_part = f"_{safe_part}"
+
+        if len(safe_part) > MAX_OUTPUT_SEGMENT_CHARS:
+            suffix = hashlib.sha1(raw_part.encode("utf-8", "surrogateescape")).hexdigest()[:12]
+            safe_part = f"{safe_part[:MAX_OUTPUT_SEGMENT_CHARS - 13]}_{suffix}"
+
+        parts.append(safe_part)
+
+    if not parts:
+        raise PathTraversalError("empty relative output path")
+
+    return Path(*parts)
 
 
 def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:

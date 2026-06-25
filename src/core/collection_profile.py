@@ -501,6 +501,30 @@ def apply_collection_profile_to_mobile_ffs(targets: list[Any] | None) -> tuple[i
     seen_android = set()
     seen_ios = set()
 
+    for spec in getattr(spec_module, "ANDROID_PATH_SPECS", ()) or ():
+        key = (
+            getattr(spec, "artifact_type", None),
+            getattr(spec, "package", None),
+            getattr(spec, "relative_path", None),
+            getattr(getattr(spec, "container_kind", None), "value", None),
+        )
+        if key in seen_android:
+            continue
+        seen_android.add(key)
+        android_specs.append(spec)
+
+    for spec in getattr(spec_module, "IOS_PATH_SPECS", ()) or ():
+        key = (
+            getattr(spec, "artifact_type", None),
+            getattr(spec, "package", None),
+            getattr(spec, "relative_path", None),
+            getattr(getattr(spec, "container_kind", None), "value", None),
+        )
+        if key in seen_ios:
+            continue
+        seen_ios.add(key)
+        ios_specs.append(spec)
+
     for raw_target in targets:
         target = _target_dict(raw_target)
         metadata = dict(target.get("metadata") or {})

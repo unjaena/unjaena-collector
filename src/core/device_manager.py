@@ -47,6 +47,7 @@ class DeviceType(Enum):
     IOS_DEVICE = auto()  # iOS device via USB direct connection
     MOBILE_FFS_BUNDLE_IOS = auto()      # Cellebrite UFED FFS / CLBX iOS zip
     MOBILE_FFS_BUNDLE_ANDROID = auto()  # Cellebrite UFED FFS / CLBX Android zip
+    AXIOM_CASE_DB = auto()               # Magnet AXIOM case result database
 
 
 class DeviceStatus(Enum):
@@ -121,6 +122,10 @@ class UnifiedDeviceInfo:
         )
 
     @property
+    def is_axiom_case_db(self) -> bool:
+        return self.device_type == DeviceType.AXIOM_CASE_DB
+
+    @property
     def is_image(self) -> bool:
         """Check if image file"""
         return self.device_type in (
@@ -146,6 +151,11 @@ class UnifiedDeviceInfo:
             DeviceType.MACOS_LOCAL_SYSTEM,
             DeviceType.LINUX_LOCAL_SYSTEM,
         )
+
+    @property
+    def is_manual_file_source(self) -> bool:
+        """Check if this device was manually registered from a local file."""
+        return self.is_image or self.is_mobile_ffs_bundle or self.is_axiom_case_db
 
 
 # =============================================================================
@@ -243,7 +253,16 @@ class UnifiedDeviceManager(QObject):
                     else:
                         # Check for existing device status change
                         existing = self._devices[device.device_id]
-                        if existing.status != device.status:
+                        if (
+                            existing.status != device.status
+                            or existing.is_selectable != device.is_selectable
+                            or existing.selection_disabled_reason != device.selection_disabled_reason
+                            or existing.display_name != device.display_name
+                            or existing.metadata != device.metadata
+                        ):
+                            device.is_selected = existing.is_selected and device.is_selectable
+                            if not device.is_selectable:
+                                self._selected_devices.discard(device.device_id)
                             self._devices[device.device_id] = device
                             logger.info(f"Device updated: {device.display_name} -> {device.status.name}")
                             self.device_updated.emit(device)
@@ -251,11 +270,11 @@ class UnifiedDeviceManager(QObject):
             except Exception as e:
                 logger.error(f"Error polling {name} enumerator: {e}")
 
-        # Check for removed devices (exclude image files - manually added)
+        # Check for removed devices (exclude manually added file sources)
         removed = set(self._devices.keys()) - current_ids
         for device_id in removed:
             device = self._devices.get(device_id)
-            if device and not device.is_image:
+            if device and not device.is_manual_file_source:
                 del self._devices[device_id]
                 self._selected_devices.discard(device_id)
                 logger.info(f"Device removed: {device_id}")
@@ -436,6 +455,91 @@ class UnifiedDeviceManager(QObject):
             logger.error(f"Failed to add FFS bundle: {e}")
             return None
 
+    def add_axiom_case_db_file(self, file_path: str) -> Optional[UnifiedDeviceInfo]:
+        """Manually add a Magnet AXIOM case result database."""
+        from pathlib import Path
+
+        raw_path = str(file_path)
+        if '..' in raw_path:
+            logger.error("Failed to add AXIOM DB: path traversal detected")
+            return None
+
+        try:
+            path = Path(file_path).resolve()
+            if not path.exists() or not path.is_file():
+                raise FileNotFoundError(f"File not found: {path}")
+
+            if path.suffix.lower() not in {'.mfdb', '.db', '.sqlite', '.sqlite3'}:
+                raise ValueError(f"Unsupported AXIOM DB extension: {path.suffix}")
+
+            with open(path, 'rb') as db_file:
+                header = db_file.read(16)
+            if header != b'SQLite format 3\x00':
+                raise ValueError("Selected file is not a SQLite database")
+            self._validate_axiom_case_db(path)
+
+            device_id = f"axiom_case_db_{path.stem}_{path.stat().st_mtime_ns}"
+            size_bytes = path.stat().st_size
+            device = UnifiedDeviceInfo(
+                device_id=device_id,
+                device_type=DeviceType.AXIOM_CASE_DB,
+                display_name=f"AXIOM DB - {path.name}",
+                status=DeviceStatus.READY,
+                size_bytes=size_bytes,
+                metadata={
+                    "file_path": str(path),
+                    "original_path": str(path),
+                    "source_tool": "magnet_axiom",
+                    "upload_artifact_type": "axiom_case_db",
+                    "artifact_type": "axiom_case_db",
+                    "collection_method": "axiom_case_db_upload",
+                },
+            )
+
+            self._devices[device_id] = device
+            logger.info(f"AXIOM DB added: {device.display_name}")
+            self.device_added.emit(device)
+            return device
+        except Exception as e:
+            logger.error(f"Failed to add AXIOM DB: {e}")
+            return None
+
+    @staticmethod
+    def _validate_axiom_case_db(path) -> None:
+        import sqlite3
+
+        required_tables = {
+            "product_config",
+            "case_info",
+            "scan",
+            "scan_artifact_hit",
+            "artifact_version",
+            "fragment_definition",
+            "hit_fragment",
+            "hit_location",
+            "source",
+            "source_path",
+        }
+        conn = None
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+            ).fetchall()
+            names = {str(row[0]) for row in rows}
+            if not required_tables.issubset(names):
+                raise ValueError("Selected database does not match the AXIOM result schema")
+
+            row = conn.execute(
+                "SELECT software_name FROM product_config LIMIT 1"
+            ).fetchone()
+            software_name = str(row[0] if row else "").strip().lower()
+            if software_name != "axiom":
+                raise ValueError("Selected database is not a Magnet AXIOM result DB")
+        finally:
+            if conn is not None:
+                conn.close()
+
     def remove_bundle_file(self, device_id: str):
         if device_id in self._devices:
             device = self._devices[device_id]
@@ -445,6 +549,15 @@ class UnifiedDeviceManager(QObject):
                 if 'mobile_ffs' in self._enumerators:
                     self._enumerators['mobile_ffs'].unregister_bundle(device_id)
                 logger.info(f"FFS bundle removed: {device_id}")
+                self.device_removed.emit(device_id)
+
+    def remove_axiom_case_db_file(self, device_id: str):
+        if device_id in self._devices:
+            device = self._devices[device_id]
+            if device.is_axiom_case_db:
+                del self._devices[device_id]
+                self._selected_devices.discard(device_id)
+                logger.info(f"AXIOM DB removed: {device_id}")
                 self.device_removed.emit(device_id)
 
     def remove_image_file(self, device_id: str):

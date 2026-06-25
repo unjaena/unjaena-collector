@@ -38,11 +38,11 @@ jobs:
         run: python tools/public_preflight.py
       - name: Compile source
         run: PYTHONPATH=src python -m compileall -q src build.py tools/public_preflight.py
-      - name: Import upload stack
+      - name: Import server upload stack
         run: |
           PYTHONPATH=src python - <<'PY'
-          from core.uploader import SyncUploader, R2DirectUploader
-          print(SyncUploader.__name__, R2DirectUploader.__name__)
+          from core.uploader import SyncUploader
+          print(SyncUploader.__name__)
           PY
 
   encase-bridge:
