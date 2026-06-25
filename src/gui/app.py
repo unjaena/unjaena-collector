@@ -93,6 +93,38 @@ class TokenValidationWorker(QThread):
             self.token = ""
 
 
+class ServerHealthWorker(QThread):
+    """Run server health checks away from the UI thread."""
+
+    result_ready = pyqtSignal(object, object)  # (success, error_detail)
+
+    def __init__(self, server_url: str):
+        super().__init__()
+        self.server_url = server_url
+
+    def run(self):
+        try:
+            validator = TokenValidator(self.server_url)
+            success, error_detail = validator.check_server_health()
+            self.result_ready.emit(success, error_detail)
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Server health worker failed")
+            self.result_ready.emit(False, str(exc) or exc.__class__.__name__)
+
+
+class UpdateCheckWorker(QThread):
+    """Run update checks away from the UI thread."""
+
+    update_ready = pyqtSignal(object)
+
+    def run(self):
+        try:
+            from core.updater import check_for_update
+            self.update_ready.emit(check_for_update())
+        except Exception:
+            self.update_ready.emit(None)
+
+
 class CollectorWindow(QMainWindow):
     """Main application window with unified device management"""
 
@@ -113,6 +145,8 @@ class CollectorWindow(QMainWindow):
         self._mapped_allowed_artifacts = set()
         self.request_signer = None
         self._token_validation_worker = None
+        self._server_health_worker = None
+        self._update_check_worker = None
         self._token_validation_in_progress = False
         self._collection_in_progress = False
         self._close_after_worker_finish = False
@@ -1727,15 +1761,20 @@ class CollectorWindow(QMainWindow):
             )
 
     def check_server_connection(self):
-        """Check if server is reachable"""
-        validator = TokenValidator(self.config['server_url'])
-        result = validator.check_server_health()
-        # Support both old (bool) and new (tuple) return
-        if isinstance(result, tuple):
-            success, error_detail = result
-        else:
-            success, error_detail = result, None
+        """Check if server is reachable without blocking the GUI."""
+        if self._server_health_worker and self._server_health_worker.isRunning():
+            return
 
+        self.server_status.setText("Server: Checking...")
+        self.server_status.setStyleSheet("color: #ffc107;")
+        worker = ServerHealthWorker(self.config['server_url'])
+        self._server_health_worker = worker
+        worker.result_ready.connect(self._on_server_health_result)
+        worker.finished.connect(self._on_server_health_finished)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_server_health_result(self, success, error_detail):
         if success:
             self.server_status.setText("Server: Connected")
             self.server_status.setStyleSheet("color: #4cc9f0;")
@@ -1749,6 +1788,11 @@ class CollectorWindow(QMainWindow):
                 self._log(f"Cannot connect to server: {self.config['server_url']}", error=True)
             if error_detail:
                 self._log(f"Detail: {error_detail}", error=True)
+
+    def _on_server_health_finished(self):
+        worker = self.sender()
+        if self._server_health_worker is worker:
+            self._server_health_worker = None
 
     def _toggle_token_visibility(self):
         """Toggle token visibility"""
@@ -2834,14 +2878,30 @@ class CollectorWindow(QMainWindow):
             )
 
     def _check_for_updates(self):
-        """Check for updates via GitHub Releases API (background)"""
+        """Check for updates via GitHub Releases API without blocking the GUI."""
+        if self._update_check_worker and self._update_check_worker.isRunning():
+            return
+
+        worker = UpdateCheckWorker()
+        self._update_check_worker = worker
+        worker.update_ready.connect(self._on_update_check_result)
+        worker.finished.connect(self._on_update_check_finished)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_update_check_result(self, update_info):
+        if not update_info:
+            return
         try:
-            from core.updater import check_for_update, show_update_dialog
-            update_info = check_for_update()
-            if update_info:
-                show_update_dialog(self, update_info)
+            from core.updater import show_update_dialog
+            show_update_dialog(self, update_info)
         except Exception:
-            pass  # Never block the app for update check failures
+            pass
+
+    def _on_update_check_finished(self):
+        worker = self.sender()
+        if self._update_check_worker is worker:
+            self._update_check_worker = None
 
     def _confirm_abort_collection(self, action: str = "cancel") -> bool:
         """Ask before destructive collection abort/reset."""

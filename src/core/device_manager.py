@@ -18,9 +18,30 @@ from typing import Optional, List, Dict, Any, Set
 from datetime import datetime
 import logging
 
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, QTimer
 
 logger = logging.getLogger(__name__)
+
+
+class _DevicePollWorker(QThread):
+    """Run slow device enumerators away from the GUI thread."""
+
+    devices_ready = pyqtSignal(object, object)  # (devices, errors)
+
+    def __init__(self, enumerators: Dict[str, 'BaseDeviceEnumerator'], parent=None):
+        super().__init__(parent)
+        self._enumerators = enumerators
+
+    def run(self):
+        devices = []
+        errors = []
+        for name, enumerator in list(self._enumerators.items()):
+            try:
+                devices.extend(enumerator.enumerate())
+            except Exception as e:
+                logger.error(f"Error polling {name} enumerator: {e}")
+                errors.append((name, str(e)))
+        self.devices_ready.emit(devices, errors)
 
 
 # =============================================================================
@@ -199,6 +220,9 @@ class UnifiedDeviceManager(QObject):
         # Polling timer
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_devices)
+        self._poll_worker: Optional[_DevicePollWorker] = None
+        self._poll_in_progress = False
+        self._poll_requested = False
 
         # Initialization flag
         self._initialized = False
@@ -227,48 +251,62 @@ class UnifiedDeviceManager(QObject):
 
         logger.info(f"Starting device monitoring (interval: {poll_interval_ms}ms)")
         self._poll_timer.start(poll_interval_ms)
-        self._poll_devices()  # Immediate first scan
+        QTimer.singleShot(0, self._poll_devices)  # First scan after UI paints
         self._initialized = True
 
     def stop_monitoring(self):
         """Stop device monitoring"""
         self._poll_timer.stop()
+        if self._poll_worker and self._poll_worker.isRunning():
+            self._poll_worker.wait(1500)
         logger.info("Device monitoring stopped")
 
     def _poll_devices(self):
         """Poll devices from all enumerators"""
+        if self._poll_in_progress:
+            self._poll_requested = True
+            return
+
+        self._poll_in_progress = True
         self.scan_started.emit()
+        worker = _DevicePollWorker(self._enumerators, self)
+        self._poll_worker = worker
+        worker.devices_ready.connect(self._apply_polled_devices)
+        worker.finished.connect(self._on_poll_worker_finished)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _apply_polled_devices(self, devices, errors):
+        """Apply worker poll results on the GUI thread."""
         current_ids = set()
 
-        for name, enumerator in self._enumerators.items():
-            try:
-                for device in enumerator.enumerate():
-                    current_ids.add(device.device_id)
+        for name, error in errors or []:
+            logger.debug(f"Device poll warning from {name}: {error}")
 
-                    if device.device_id not in self._devices:
-                        # New device found
-                        self._devices[device.device_id] = device
-                        logger.info(f"Device added: {device.display_name} ({device.device_type.name})")
-                        self.device_added.emit(device)
-                    else:
-                        # Check for existing device status change
-                        existing = self._devices[device.device_id]
-                        if (
-                            existing.status != device.status
-                            or existing.is_selectable != device.is_selectable
-                            or existing.selection_disabled_reason != device.selection_disabled_reason
-                            or existing.display_name != device.display_name
-                            or existing.metadata != device.metadata
-                        ):
-                            device.is_selected = existing.is_selected and device.is_selectable
-                            if not device.is_selectable:
-                                self._selected_devices.discard(device.device_id)
-                            self._devices[device.device_id] = device
-                            logger.info(f"Device updated: {device.display_name} -> {device.status.name}")
-                            self.device_updated.emit(device)
+        for device in devices or []:
+            current_ids.add(device.device_id)
 
-            except Exception as e:
-                logger.error(f"Error polling {name} enumerator: {e}")
+            if device.device_id not in self._devices:
+                # New device found
+                self._devices[device.device_id] = device
+                logger.info(f"Device added: {device.display_name} ({device.device_type.name})")
+                self.device_added.emit(device)
+            else:
+                # Check for existing device status change
+                existing = self._devices[device.device_id]
+                if (
+                    existing.status != device.status
+                    or existing.is_selectable != device.is_selectable
+                    or existing.selection_disabled_reason != device.selection_disabled_reason
+                    or existing.display_name != device.display_name
+                    or existing.metadata != device.metadata
+                ):
+                    device.is_selected = existing.is_selected and device.is_selectable
+                    if not device.is_selectable:
+                        self._selected_devices.discard(device.device_id)
+                    self._devices[device.device_id] = device
+                    logger.info(f"Device updated: {device.display_name} -> {device.status.name}")
+                    self.device_updated.emit(device)
 
         # Check for removed devices (exclude manually added file sources)
         removed = set(self._devices.keys()) - current_ids
@@ -280,7 +318,15 @@ class UnifiedDeviceManager(QObject):
                 logger.info(f"Device removed: {device_id}")
                 self.device_removed.emit(device_id)
 
+    def _on_poll_worker_finished(self):
+        worker = self.sender()
+        if self._poll_worker is worker:
+            self._poll_worker = None
+        self._poll_in_progress = False
         self.scan_completed.emit()
+        if self._poll_requested:
+            self._poll_requested = False
+            QTimer.singleShot(0, self._poll_devices)
 
     def refresh(self):
         """Refresh device list (manual)"""

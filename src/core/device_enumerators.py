@@ -85,14 +85,14 @@ class WindowsDiskEnumerator(BaseDeviceEnumerator):
 
     def __init__(self):
         self._wmi_available = False
-        self._wmi = None
+        self._wmi_module = None
 
         if sys.platform == 'win32':
             try:
                 import wmi
-                self._wmi = wmi.WMI()
+                self._wmi_module = wmi
                 self._wmi_available = True
-                logger.info("WMI initialized successfully")
+                logger.info("WMI module available")
             except ImportError:
                 logger.warning("WMI module not available. Install with: pip install wmi")
             except Exception as e:
@@ -109,14 +109,26 @@ class WindowsDiskEnumerator(BaseDeviceEnumerator):
             return []
 
         devices = []
+        com_initialized = False
+        pythoncom = None
 
         try:
+            try:
+                import pythoncom as _pythoncom
+                pythoncom = _pythoncom
+                pythoncom.CoInitialize()
+                com_initialized = True
+            except Exception:
+                pythoncom = None
+
+            wmi_client = self._wmi_module.WMI()
+
             # Build disk -> drive letter mapping via WMI
             # Use Win32_LogicalDisk → associators to find physical disk
             disk_to_volumes = {}  # disk_index -> list of drive letters
             try:
                 # Method: For each logical disk, trace back to physical disk
-                for logical_disk in self._wmi.Win32_LogicalDisk():
+                for logical_disk in wmi_client.Win32_LogicalDisk():
                     try:
                         drive_letter = logical_disk.DeviceID  # e.g., "C:", "D:"
                         if not drive_letter:
@@ -145,7 +157,7 @@ class WindowsDiskEnumerator(BaseDeviceEnumerator):
             except Exception as e:
                 logger.warning(f"Volume mapping failed (will use fallback): {e}")
 
-            for disk in self._wmi.Win32_DiskDrive():
+            for disk in wmi_client.Win32_DiskDrive():
                 try:
                     size = int(disk.Size or 0)
                     disk_index = disk.Index
@@ -182,6 +194,12 @@ class WindowsDiskEnumerator(BaseDeviceEnumerator):
 
         except Exception as e:
             logger.error(f"Failed to enumerate Windows disks: {e}")
+        finally:
+            if com_initialized and pythoncom is not None:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
         return devices
 

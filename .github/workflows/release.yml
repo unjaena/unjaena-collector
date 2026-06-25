@@ -297,17 +297,23 @@ jobs:
           fi
 
           echo "[NOTARIZE] Submitting $DMG_FILE..."
+          set +e
           SUBMIT_OUTPUT=$(xcrun notarytool submit "$DMG_FILE" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --output-format json 2>&1)
+          SUBMIT_STATUS=$?
+          set -e
           echo "$SUBMIT_OUTPUT"
 
           SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('id',''))" 2>/dev/null || true)
           if [ -z "$SUBMISSION_ID" ]; then
-            echo "[NOTARIZE] Submit failed  -  could not extract submission id"
-            exit 1
+            echo "[NOTARIZE] Submit did not return a submission id (status=$SUBMIT_STATUS)."
+            echo "[NOTARIZE] macOS DMG will be omitted from this release; Windows/Linux release continues."
+            echo "dmg_file=$DMG_FILE" >> "$GITHUB_OUTPUT"
+            echo "submission_id=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "[NOTARIZE] Submission id: $SUBMISSION_ID"
           echo "dmg_file=$DMG_FILE" >> "$GITHUB_OUTPUT"

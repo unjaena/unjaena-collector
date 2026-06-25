@@ -764,9 +764,45 @@ class SyncUploader:
         self.case_id = case_id
         self.consent_record = consent_record
         self.max_file_size = max_file_size or self.DEFAULT_MAX_FILE_SIZE
-        self._dev_mode = config.get('dev_mode', False) if config else False
+        self.config = config or {}
+        self._dev_mode = self.config.get('dev_mode', False)
         self.request_signer = request_signer
         self.profile_id = profile_id
+        self.upload_workers = self._tuning_int(
+            'upload_workers', 'COLLECTOR_UPLOAD_WORKERS', 10, 1, 16
+        )
+        self.http_pool_size = self._tuning_int(
+            'upload_http_pool_maxsize', 'COLLECTOR_UPLOAD_HTTP_POOL_MAXSIZE', 24, 1, 64
+        )
+        self.upload_timing_enabled = _coerce_bool(
+            os.getenv('COLLECTOR_UPLOAD_TIMING', self.config.get('upload_timing')),
+            default=False,
+        )
+        self._thread_local = threading.local()
+
+    def _tuning_int(
+        self, key: str, env_name: str, default: int, min_value: int, max_value: int
+    ) -> int:
+        return _coerce_int(
+            os.getenv(env_name, self.config.get(key)),
+            default,
+            min_value,
+            max_value,
+        )
+
+    def _http_session(self) -> requests.Session:
+        """Return a per-thread requests session for connection reuse."""
+        session = getattr(self._thread_local, 'session', None)
+        if session is None:
+            session = requests.Session()
+            adapter = HTTPAdapter(
+                pool_connections=self.http_pool_size,
+                pool_maxsize=self.http_pool_size,
+            )
+            session.mount('http://', adapter)
+            session.mount('https://', adapter)
+            self._thread_local.session = session
+        return session
 
     def upload_file(
         self,
@@ -854,7 +890,7 @@ class SyncUploader:
                             f"token_hash={token_hash}"
                         )
 
-                    response = requests.post(
+                    response = self._http_session().post(
                         f"{self.server_url}{_ENDPOINTS['raw_upload']}",
                         files=files,
                         data=data,
