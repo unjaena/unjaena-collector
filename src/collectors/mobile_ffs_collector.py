@@ -12,19 +12,35 @@ session.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import re
 import shutil
+import subprocess
+import zipfile
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 from .mobile_ffs import (
     CellebriteAdapter,
     ContainerSafetyError,
+    CRCMismatchError,
+    ExtractedEntry,
     ExtractionPolicy,
     FormatID,
     ResolvedArtifact,
     safe_iter_entries,
+)
+from .mobile_ffs.safe_zip import (
+    EntryCountError,
+    FilenameLengthError,
+    PathTraversalError,
+    SymlinkEntryError,
+    ZipBombError,
+    _dos_dt_to_unix,
+    _is_symlink_entry,
+    _parse_x5455_extra,
 )
 
 logger = logging.getLogger(__name__)
@@ -236,12 +252,8 @@ class MobileFFSBundleCollector:
         sidecars = self._collect_sqlite_sidecars(wanted)
         wanted_extract = {**wanted, **sidecars}
 
-        select = lambda info: info.filename in wanted_extract
         try:
-            for entry in safe_iter_entries(
-                self._adapter._zf, dest_dir,
-                select=select, policy=self._policy,
-            ):
+            for entry in self._iter_selected_entries(dest_dir, wanted_extract):
                 if entry.zip_entry_path in sidecars:
                     continue
                 ra = wanted[entry.zip_entry_path]
@@ -273,6 +285,218 @@ class MobileFFSBundleCollector:
                 "status": "error",
                 "error": f"Container safety violation: {type(e).__name__}: {e}",
             }
+
+    def _iter_selected_entries(
+        self,
+        dest_dir: Path,
+        wanted_extract: Dict[str, ResolvedArtifact],
+    ) -> Iterator[ExtractedEntry]:
+        """Yield selected entries with a 7z fallback for split UFED archives.
+
+        Python's zipfile can read a split ZIP central directory but cannot always
+        stream member bodies from multi-volume UFED exports. The normal safe_zip
+        path remains primary; 7z is used only after zipfile raises BadZipFile.
+        """
+        select = lambda info: info.filename in wanted_extract
+        yielded: set[str] = set()
+        try:
+            for entry in safe_iter_entries(
+                self._adapter._zf, dest_dir,
+                select=select, policy=self._policy,
+            ):
+                yielded.add(entry.zip_entry_path)
+                yield entry
+        except zipfile.BadZipFile as exc:
+            seven_zip = self._seven_zip_binary()
+            if not seven_zip:
+                raise ContainerSafetyError(
+                    "zipfile failed to read this UFED container and 7z/7zz was "
+                    f"not found for split-archive fallback: {exc}"
+                ) from exc
+            logger.warning(
+                "zipfile failed while extracting %s; retrying selected FFS "
+                "entries with %s fallback: %s",
+                self.zip_path.name,
+                seven_zip,
+                exc,
+            )
+            for entry in self._iter_selected_entries_with_7z(
+                dest_dir,
+                wanted_extract,
+                seven_zip,
+                already_yielded=yielded,
+            ):
+                yield entry
+
+    @staticmethod
+    def _seven_zip_binary() -> Optional[str]:
+        return shutil.which("7z") or shutil.which("7zz")
+
+    def _iter_selected_entries_with_7z(
+        self,
+        dest_dir: Path,
+        wanted_extract: Dict[str, ResolvedArtifact],
+        seven_zip: str,
+        *,
+        already_yielded: set[str],
+    ) -> Iterator[ExtractedEntry]:
+        if self._adapter is None or self._adapter._zf is None:
+            raise RuntimeError("adapter not opened")
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        stream_dir = dest_dir / "_7z_stream"
+        stream_dir.mkdir(parents=True, exist_ok=True)
+
+        entry_count = 0
+        bytes_written_total = 0
+        for info in self._adapter._zf.infolist():
+            entry_count += 1
+            if entry_count > self._policy.max_entries:
+                raise EntryCountError(
+                    f"entry count exceeds {self._policy.max_entries}"
+                )
+            if info.is_dir() or info.filename not in wanted_extract:
+                continue
+            if info.filename in already_yielded:
+                continue
+            if _is_symlink_entry(info):
+                raise SymlinkEntryError(
+                    f"symlink entry rejected: {info.filename!r}"
+                )
+            self._validate_7z_member_name(info.filename)
+
+            projected_out = bytes_written_total + (info.file_size or 0)
+            if projected_out > self._policy.max_out_bytes:
+                raise ZipBombError(
+                    f"projected output {projected_out} exceeds "
+                    f"{self._policy.max_out_bytes}"
+                )
+
+            out_path = self._fallback_output_path(stream_dir, info.filename)
+            if out_path.exists():
+                out_path.unlink()
+            sha256_hex, written = self._extract_member_with_7z(
+                seven_zip,
+                info,
+                out_path,
+            )
+            bytes_written_total += written
+
+            mtime_unix, atime_unix, btime_unix = _parse_x5455_extra(info.extra)
+            mtime_source = "x5455" if mtime_unix is not None else "dos"
+            if mtime_unix is None:
+                mtime_unix = _dos_dt_to_unix(info.date_time)
+            if mtime_unix is not None:
+                try:
+                    os.utime(out_path, (atime_unix or mtime_unix, mtime_unix))
+                except OSError:
+                    pass
+
+            yield ExtractedEntry(
+                zip_entry_path=info.filename,
+                extracted_path=out_path,
+                source_size=info.file_size,
+                source_sha256=sha256_hex,
+                source_crc32=info.CRC,
+                mtime_unix=mtime_unix,
+                atime_unix=atime_unix,
+                birthtime_unix=btime_unix,
+                mtime_source=mtime_source,
+            )
+
+    def _validate_7z_member_name(self, name: str) -> None:
+        if not name:
+            raise PathTraversalError("empty entry name")
+        if len(name.encode("utf-8", errors="surrogateescape")) > self._policy.max_filename_bytes:
+            raise FilenameLengthError(
+                f"filename exceeds {self._policy.max_filename_bytes} bytes"
+            )
+        normalized = name.replace("\\", "/")
+        if normalized.startswith("/") or normalized.startswith("../"):
+            raise PathTraversalError(f"unsafe member path: {name!r}")
+        if "/../" in normalized or normalized.endswith("/.."):
+            raise PathTraversalError(f"unsafe member path: {name!r}")
+        if len(normalized) >= 2 and normalized[1] == ":":
+            raise PathTraversalError(f"absolute drive path: {name!r}")
+        if "\x00" in normalized:
+            raise PathTraversalError("NUL in filename")
+
+    @staticmethod
+    def _fallback_output_path(stream_dir: Path, member_name: str) -> Path:
+        source_name = member_name.replace("\\", "/").rsplit("/", 1)[-1]
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", source_name).strip("._")
+        if not safe_name:
+            safe_name = "artifact.bin"
+        safe_name = safe_name[:96]
+        prefix = hashlib.sha1(
+            member_name.encode("utf-8", "surrogateescape")
+        ).hexdigest()[:16]
+        return stream_dir / f"{prefix}_{safe_name}"
+
+    def _extract_member_with_7z(
+        self,
+        seven_zip: str,
+        info,
+        out_path: Path,
+    ) -> Tuple[str, int]:
+        import zlib
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.Popen(
+            [seven_zip, "x", "-so", str(self.zip_path), info.filename],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        sha256 = hashlib.sha256()
+        crc = 0
+        written = 0
+        try:
+            assert proc.stdout is not None
+            with open(out_path, "wb") as dst:
+                while True:
+                    chunk = proc.stdout.read(self._policy.chunk_bytes)
+                    if not chunk:
+                        break
+                    sha256.update(chunk)
+                    crc = zlib.crc32(chunk, crc)
+                    dst.write(chunk)
+                    written += len(chunk)
+            stderr = proc.stderr.read() if proc.stderr is not None else b""
+            rc = proc.wait()
+        except Exception:
+            proc.kill()
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
+            raise
+
+        if rc != 0:
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
+            detail = stderr.decode("utf-8", errors="replace").strip()[:500]
+            raise ContainerSafetyError(
+                f"7z extraction failed for {info.filename!r}: {detail or rc}"
+            )
+        if info.file_size and written != info.file_size:
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
+            raise CRCMismatchError(
+                f"size mismatch: read {written}, central dir says {info.file_size}"
+            )
+        if info.CRC and crc != info.CRC:
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
+            raise CRCMismatchError(
+                f"crc mismatch: computed 0x{crc:08x}, central dir 0x{info.CRC:08x}"
+            )
+        return sha256.hexdigest(), written
 
     def _collect_sqlite_sidecars(
         self, wanted: Dict[str, ResolvedArtifact]

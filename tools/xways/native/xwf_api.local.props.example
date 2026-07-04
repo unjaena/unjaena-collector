@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="UserMacros">
+    <!-- Local-only path to the directory that contains the official X-Tension.h header. -->
+    <XwfApiSourceDir>C:\forensic-dev\XWF_API-source-2024-05-31\src</XwfApiSourceDir>
+    <XwfApiIncludeDir>$(XwfApiSourceDir)</XwfApiIncludeDir>
+  </PropertyGroup>
+</Project>

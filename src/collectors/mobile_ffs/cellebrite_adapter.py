@@ -168,13 +168,14 @@ class CellebriteAdapter:
                         spec_description=spec.description,
                     )
                 continue
-            expected = self._android_expected_path(spec)
-            present = expected in self._entry_set
+            expected_paths = self._android_expected_paths(spec)
+            expected = expected_paths[0]
+            actual = next((p for p in expected_paths if p in (self._entry_set or set())), None)
             yield ResolvedArtifact(
                 artifact_type=spec.artifact_type,
                 expected_zip_path=expected,
-                actual_zip_path=expected if present else None,
-                present=present,
+                actual_zip_path=actual,
+                present=actual is not None,
                 spec_description=spec.description,
             )
 
@@ -187,60 +188,95 @@ class CellebriteAdapter:
         switched the DB filename between versions and both legacy and
         modern forms need to be collected with one spec."""
         import fnmatch
-        prefix = self._android_expected_path(spec)
-        prefix_slash = prefix + ("/" if not prefix.endswith("/") else "")
+        prefixes = self._android_expected_paths(spec)
+        prefix_slashes = [p + ("/" if not p.endswith("/") else "") for p in prefixes]
         suffix_filter = tuple(
             s.lower() for s in (
                 getattr(spec, "child_suffix_filter", ()) or ()
             )
         )
         glob_filter = tuple(getattr(spec, "filename_globs", ()) or ())
-        for entry in self._entry_set or ():
-            if not entry.startswith(prefix_slash):
-                continue
-            if entry.endswith("/"):
-                continue
-            base = entry.rsplit("/", 1)[-1]
-            if suffix_filter:
-                lname = base.lower()
-                if not any(lname.endswith(s) for s in suffix_filter):
+        seen_tails = set()
+        entries = sorted(self._entry_set or ())
+        for prefix_slash in prefix_slashes:
+            for entry in entries:
+                if entry.endswith("/") or not entry.startswith(prefix_slash):
                     continue
-            if glob_filter:
-                if not any(fnmatch.fnmatch(base, g) for g in glob_filter):
+                tail = entry[len(prefix_slash):]
+                if tail in seen_tails:
                     continue
-            yield entry
+                base = entry.rsplit("/", 1)[-1]
+                if suffix_filter:
+                    lname = base.lower()
+                    if not any(lname.endswith(s) for s in suffix_filter):
+                        continue
+                if glob_filter:
+                    if not any(fnmatch.fnmatch(base, g) for g in glob_filter):
+                        continue
+                seen_tails.add(tail)
+                yield entry
 
     def _iter_ios(self) -> Iterator[ResolvedArtifact]:
         assert self._uuid_map is not None
         for spec in IOS_PATH_SPECS:
-            if spec.is_directory and spec.container_kind in (
-                ContainerKind.SYSTEM, ContainerKind.ROOT_SYSTEM,
-            ):
-                # Fan out: one ResolvedArtifact per child file under
-                # the directory prefix. If the directory has no
-                # children present, emit a single absent record so
-                # the case manifest still shows we looked.
-                children = list(self._ios_directory_children(spec))
-                if children:
-                    for child_path in children:
+            if spec.is_directory:
+                if spec.container_kind in (
+                    ContainerKind.SYSTEM, ContainerKind.ROOT_SYSTEM,
+                ):
+                    # Fan out: one ResolvedArtifact per child file under
+                    # the directory prefix. If the directory has no
+                    # children present, emit a single absent record so
+                    # the case manifest still shows we looked.
+                    children = list(self._ios_directory_children(spec))
+                    if children:
+                        for child_path in children:
+                            yield ResolvedArtifact(
+                                artifact_type=spec.artifact_type,
+                                expected_zip_path=child_path,
+                                actual_zip_path=child_path,
+                                present=True,
+                                spec_description=spec.description,
+                            )
+                    else:
                         yield ResolvedArtifact(
                             artifact_type=spec.artifact_type,
-                            expected_zip_path=child_path,
-                            actual_zip_path=child_path,
-                            present=True,
+                            expected_zip_path=(
+                                f"filesystem1/{spec.relative_path}/<children>"
+                            ),
+                            actual_zip_path=None,
+                            present=False,
                             spec_description=spec.description,
                         )
-                else:
-                    yield ResolvedArtifact(
-                        artifact_type=spec.artifact_type,
-                        expected_zip_path=(
-                            f"filesystem1/{spec.relative_path}/<children>"
-                        ),
-                        actual_zip_path=None,
-                        present=False,
-                        spec_description=spec.description,
-                    )
-                continue
+                    continue
+                if spec.container_kind in (
+                    ContainerKind.APP_DATA,
+                    ContainerKind.APP_GROUP,
+                    ContainerKind.APP_BUNDLE,
+                ):
+                    expected, actual, _present = self._ios_resolve(spec)
+                    children = list(
+                        self._ios_app_directory_children(actual, spec)
+                    ) if actual else []
+                    if children:
+                        for child_path in children:
+                            yield ResolvedArtifact(
+                                artifact_type=spec.artifact_type,
+                                expected_zip_path=child_path,
+                                actual_zip_path=child_path,
+                                present=True,
+                                spec_description=spec.description,
+                            )
+                    else:
+                        yield ResolvedArtifact(
+                            artifact_type=spec.artifact_type,
+                            expected_zip_path=(
+                                f"{expected or '<ios-app-dir>'}/<children>"
+                            ),
+                            actual_zip_path=None,
+                            present=False,
+                            spec_description=spec.description,
+                        )
+                    continue
             expected, actual, present = self._ios_resolve(spec)
             yield ResolvedArtifact(
                 artifact_type=spec.artifact_type,
@@ -258,6 +294,25 @@ class CellebriteAdapter:
         ".fseventsd", ".Spotlight-V100",
     })
 
+    def _ios_children_under(self, prefix: str, suffix_filter) -> Iterator[str]:
+        """Yield zip entry paths under an iOS directory prefix."""
+        prefix_slash = prefix + ("/" if not prefix.endswith("/") else "")
+        suffixes = tuple(s.lower() for s in (suffix_filter or ()))
+        for entry in self._entry_set or ():
+            if not entry.startswith(prefix_slash):
+                continue
+            if entry.endswith("/"):
+                continue
+            tail = entry[len(prefix_slash):]
+            base = tail.rsplit("/", 1)[-1]
+            if base in self._DIRECTORY_DOTFILE_SKIP:
+                continue
+            if suffixes:
+                lname = base.lower()
+                if not any(lname.endswith(s) for s in suffixes):
+                    continue
+            yield entry
+
     def _ios_directory_children(self, spec) -> Iterator[str]:
         """Yield zip entry paths under a SYSTEM/ROOT_SYSTEM directory
         spec. Recurses into subdirectories. Skips zip directory
@@ -274,34 +329,29 @@ class CellebriteAdapter:
         forensic artifacts (e.g. `.store.db`) start with a dot — a
         blanket dotfile skip would silently drop them.
         """
-        prefix = f"filesystem1/{spec.relative_path}"
-        # Trailing slash to ensure we match children, not the dir itself
-        prefix_slash = prefix + ("/" if not prefix.endswith("/") else "")
-        suffix_filter = tuple(
-            s.lower() for s in (spec.child_suffix_filter or ())
+        return self._ios_children_under(
+            f"filesystem1/{spec.relative_path}",
+            spec.child_suffix_filter,
         )
-        for entry in self._entry_set or ():
-            if not entry.startswith(prefix_slash):
-                continue
-            if entry.endswith("/"):
-                continue
-            tail = entry[len(prefix_slash):]
-            base = tail.rsplit("/", 1)[-1]
-            if base in self._DIRECTORY_DOTFILE_SKIP:
-                continue
-            if suffix_filter:
-                lname = base.lower()
-                if not any(lname.endswith(s) for s in suffix_filter):
-                    continue
-            yield entry
+
+    def _ios_app_directory_children(self, actual_prefix: str, spec) -> Iterator[str]:
+        """Yield child files under a resolved iOS app container path."""
+        return self._ios_children_under(actual_prefix, spec.child_suffix_filter)
+
+    def _android_expected_paths(self, spec: AndroidArtifactSpec) -> List[str]:
+        if spec.container_kind == ContainerKind.APP_DATA:
+            relative = f"{spec.package}/{spec.relative_path}".rstrip("/")
+            return [
+                f"Dump/data/data/{relative}",
+                f"Dump/data/user/0/{relative}",
+            ]
+        if spec.container_kind == ContainerKind.SYSTEM:
+            return [f"Dump/{spec.relative_path}"]
+        # Fallback for less-common kinds — direct join under Dump/
+        return [f"Dump/{spec.relative_path}"]
 
     def _android_expected_path(self, spec: AndroidArtifactSpec) -> str:
-        if spec.container_kind == ContainerKind.APP_DATA:
-            return f"Dump/data/data/{spec.package}/{spec.relative_path}"
-        if spec.container_kind == ContainerKind.SYSTEM:
-            return f"Dump/{spec.relative_path}"
-        # Fallback for less-common kinds — direct join under Dump/
-        return f"Dump/{spec.relative_path}"
+        return self._android_expected_paths(spec)[0]
 
     def _ios_resolve(self, spec: IOSArtifactSpec
                      ) -> Tuple[Optional[str], Optional[str], bool]:
@@ -335,7 +385,7 @@ class CellebriteAdapter:
                 f"(bundle={spec.package})"
             )
             present = (actual is not None) and (actual in self._entry_set)
-            return expected_repr, actual if present else None, present
+            return expected_repr, actual, present
 
         return None, None, False
 

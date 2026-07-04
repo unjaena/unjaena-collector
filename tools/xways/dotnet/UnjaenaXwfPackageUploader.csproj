@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>UnjaenaXwfPackageUploader</RootNamespace>
+    <AssemblyName>UnjaenaXwfPackageUploader</AssemblyName>
+    <LangVersion>7.3</LangVersion>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\encase\dotnet\CollectorClient.cs" Link="CollectorClient.cs" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+</Project>

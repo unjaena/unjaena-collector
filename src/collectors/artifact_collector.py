@@ -13,6 +13,7 @@ Collection methods:
 Note: MFT-based collection requires administrator privileges
 """
 import os
+import ntpath
 import re
 import sys
 import glob
@@ -1422,6 +1423,11 @@ class LocalMFTCollector(_LocalMFTBase):
         source = self._get_source_description()
         collected_count = 0
 
+        def _join_scan_path(parent: str, child: str) -> str:
+            if '\\' in parent or re.match(r'^[a-zA-Z]:', parent):
+                return ntpath.join(parent, child)
+            return os.path.join(parent, child)
+
         skip_dirs = {
             'windows', '$recycle.bin', 'system volume information',
             'programdata', '$windows.~bt', '$windows.~ws',
@@ -1434,7 +1440,7 @@ class LocalMFTCollector(_LocalMFTBase):
         }
         skip_prefixes = ('forensic_', 'e01_preview_')
 
-        users_dir = os.path.join(volume_root, 'Users')
+        users_dir = _join_scan_path(volume_root, 'Users')
         scan_dirs = []
         if os.path.exists(users_dir):
             scan_dirs.append(users_dir)
@@ -1467,7 +1473,7 @@ class LocalMFTCollector(_LocalMFTBase):
                     d for d in dirs
                     if d.lower() not in skip_subdirs
                     and not any(d.lower().startswith(prefix) for prefix in skip_prefixes)
-                    and not _excluded_path(os.path.join(root, d))
+                    and not _excluded_path(_join_scan_path(root, d))
                 ]
 
                 try:
@@ -1479,7 +1485,7 @@ class LocalMFTCollector(_LocalMFTBase):
                         if ext not in extensions and filename_lower not in target_files:
                             continue
 
-                        src_path = os.path.join(root, filename)
+                        src_path = _join_scan_path(root, filename)
                         if _excluded_path(src_path):
                             continue
                         if max_file_size > 0:

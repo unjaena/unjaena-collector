@@ -769,7 +769,10 @@ class SyncUploader:
         self.request_signer = request_signer
         self.profile_id = profile_id
         self.upload_workers = self._tuning_int(
-            'upload_workers', 'COLLECTOR_UPLOAD_WORKERS', 10, 1, 16
+            'upload_workers', 'COLLECTOR_UPLOAD_WORKERS', 5, 1, 16
+        )
+        self.request_retries = self._tuning_int(
+            'raw_upload_retries', 'COLLECTOR_RAW_UPLOAD_RETRIES', 5, 1, 10
         )
         self.http_pool_size = self._tuning_int(
             'upload_http_pool_maxsize', 'COLLECTOR_UPLOAD_HTTP_POOL_MAXSIZE', 24, 1, 64
@@ -845,11 +848,11 @@ class SyncUploader:
         # Dynamic timeout: 1MB/s baseline + 5min buffer, no upper cap for large files
         upload_timeout = max(300, (file_size / (1 * 1024 * 1024)) + 300)
 
-        # Retry with exponential backoff (network instability during large uploads)
-        MAX_RETRIES = 3
+        # Retry with backoff (network instability and server-side throttling during large uploads)
+        max_retries = self.request_retries
         last_error = None
 
-        for attempt in range(1, MAX_RETRIES + 1):
+        for attempt in range(1, max_retries + 1):
             try:
                 with open(file_path, 'rb') as f:
                     files = {
@@ -920,33 +923,50 @@ class SyncUploader:
                                 is_recoverable=False,
                                 is_credit_paused=True,
                             )
-                        # Non-retryable HTTP errors (4xx = client error)
+                        if response.status_code in (429, 502, 503, 504):
+                            retry_after = _safe_retry_after(response, default=min(60, 5 * attempt))
+                            last_error = (
+                                f"Upload failed ({response.status_code}): "
+                                f"{_user_upload_message(response.status_code, retry_after=retry_after)}"
+                            )
+                            sanitized_error = _sanitize_error_for_logging(error_text)
+                            logger.warning(
+                                f"[UPLOAD] HTTP {response.status_code} "
+                                f"(attempt {attempt}/{max_retries}), retrying in {retry_after}s: "
+                                f"{sanitized_error}"
+                            )
+                            if attempt < max_retries:
+                                time.sleep(retry_after)
+                                continue
+                            break
+
+                        # Non-retryable HTTP errors (client/request state issues)
                         if 400 <= response.status_code < 500:
                             sanitized_error = _sanitize_error_for_logging(error_text)
                             logger.error(f"[UPLOAD] HTTP {response.status_code}: {sanitized_error}")
                             return UploadResult.from_error(
                                 f"Upload failed ({response.status_code}): {_user_upload_message(response.status_code)}"
                             )
-                        # Server errors (5xx) are retryable
+
                         retry_after = _safe_retry_after(response)
                         last_error = f"Upload failed ({response.status_code}): {_user_upload_message(response.status_code, retry_after=retry_after)}"
                         sanitized_error = _sanitize_error_for_logging(error_text)
-                        logger.warning(f"[UPLOAD] HTTP {response.status_code} (attempt {attempt}/{MAX_RETRIES}): {sanitized_error}")
+                        logger.warning(f"[UPLOAD] HTTP {response.status_code} (attempt {attempt}/{max_retries}): {sanitized_error}")
 
             except requests.exceptions.Timeout:
                 last_error = f"Upload timeout after {upload_timeout}s"
-                logger.warning(f"[UPLOAD] Timeout (attempt {attempt}/{MAX_RETRIES})")
+                logger.warning(f"[UPLOAD] Timeout (attempt {attempt}/{max_retries})")
             except requests.exceptions.ConnectionError as e:
                 last_error = f"Connection error: {str(e)}"
                 sanitized_error = _sanitize_error_for_logging(str(e))
-                logger.warning(f"[UPLOAD] Connection error (attempt {attempt}/{MAX_RETRIES}): {sanitized_error}")
+                logger.warning(f"[UPLOAD] Connection error (attempt {attempt}/{max_retries}): {sanitized_error}")
             except Exception as e:
                 last_error = f"Upload error: {str(e)}"
                 sanitized_error = _sanitize_error_for_logging(str(e))
-                logger.warning(f"[UPLOAD] Exception (attempt {attempt}/{MAX_RETRIES}): {type(e).__name__}: {sanitized_error}")
+                logger.warning(f"[UPLOAD] Exception (attempt {attempt}/{max_retries}): {type(e).__name__}: {sanitized_error}")
 
             # Exponential backoff before retry (5s, 15s, 45s)
-            if attempt < MAX_RETRIES:
+            if attempt < max_retries:
                 backoff = 5 * (3 ** (attempt - 1))
                 logger.info(f"[UPLOAD] Retrying in {backoff}s...")
                 time.sleep(backoff)
@@ -1704,9 +1724,131 @@ class DirectUploader:
 class R2DirectUploader(DirectUploader):
     """Compatibility name for the presigned R2 uploader.
 
-    GUI usage provides a SyncUploader fallback, so one presigned request attempt
-    is enough before the collector switches to the server-streaming path.
+    The collector's long-term production policy is direct-to-R2 upload with
+    server-streaming upload kept as an explicit fallback/override. Raw objects
+    are temporary parser inputs and are deleted by the server after terminal
+    parse results.
     """
 
     def __init__(self, *args, retry_count: int = 1, **kwargs):
         super().__init__(*args, retry_count=retry_count, **kwargs)
+
+
+def resolve_collector_upload_mode(config: dict = None) -> str:
+    """Resolve collector raw upload mode.
+
+    Modes:
+      - r2_direct: client uploads raw bytes to R2; API records completion.
+      - server: client streams raw bytes through the API raw upload endpoint.
+
+    Defaulting to r2_direct keeps large evidence uploads off the API server
+    while preserving server mode for local development and incident rollback.
+    """
+    config = config or {}
+    raw_mode = os.getenv(
+        'COLLECTOR_UPLOAD_MODE',
+        config.get('upload_mode') or config.get('collector_upload_mode') or 'r2_direct',
+    )
+    normalized = str(raw_mode or '').strip().lower().replace('-', '_')
+    aliases = {
+        'auto': 'r2_direct',
+        'direct': 'r2_direct',
+        'direct_r2': 'r2_direct',
+        'r2': 'r2_direct',
+        'r2direct': 'r2_direct',
+        'r2_direct': 'r2_direct',
+        'presigned': 'r2_direct',
+        'presigned_r2': 'r2_direct',
+        'raw': 'server',
+        'sync': 'server',
+        'server': 'server',
+        'server_streaming': 'server',
+        'api': 'server',
+        'api_streaming': 'server',
+    }
+    mode = aliases.get(normalized)
+    if mode:
+        return mode
+    logger.warning(
+        "[UPLOAD_POLICY] Unknown COLLECTOR_UPLOAD_MODE=%r; using r2_direct",
+        raw_mode,
+    )
+    return 'r2_direct'
+
+
+def build_collector_uploader(
+    *,
+    server_url: str,
+    session_id: str,
+    collection_token: str,
+    ws_url: str = None,
+    case_id: str = None,
+    consent_record: dict = None,
+    max_file_size: int = None,
+    config: dict = None,
+    request_signer=None,
+    profile_id: str = None,
+):
+    """Build the uploader that matches the production storage policy.
+
+    The default path is direct-to-R2 with a server-streaming fallback. This
+    keeps high-volume uploads from consuming API bandwidth/disk while allowing
+    operators to force COLLECTOR_UPLOAD_MODE=server when R2 is unavailable.
+    """
+    config = config or {}
+    mode = resolve_collector_upload_mode(config)
+    ws_url = ws_url or server_url
+
+    def _server_uploader():
+        return SyncUploader(
+            server_url=server_url,
+            ws_url=ws_url,
+            session_id=session_id,
+            collection_token=collection_token,
+            case_id=case_id,
+            consent_record=consent_record,
+            max_file_size=max_file_size,
+            config=config,
+            request_signer=request_signer,
+            profile_id=profile_id,
+        )
+
+    if mode == 'server':
+        uploader = _server_uploader()
+        uploader.collector_upload_mode = 'server'
+        uploader.collector_fallback_enabled = False
+        return uploader
+
+    fallback_enabled = _coerce_bool(
+        os.getenv(
+            'COLLECTOR_DIRECT_UPLOAD_FALLBACK',
+            config.get('direct_upload_fallback', config.get('r2_direct_fallback')),
+        ),
+        default=True,
+    )
+    retry_count = _coerce_int(
+        os.getenv(
+            'COLLECTOR_DIRECT_UPLOAD_RETRIES',
+            config.get('direct_upload_retries', config.get('r2_direct_retries')),
+        ),
+        default=5,
+        min_value=1,
+        max_value=10,
+    )
+    fallback_uploader = _server_uploader() if fallback_enabled else None
+    uploader = R2DirectUploader(
+        server_url=server_url,
+        session_id=session_id,
+        collection_token=collection_token,
+        case_id=case_id,
+        consent_record=consent_record,
+        max_file_size=max_file_size,
+        config=config,
+        request_signer=request_signer,
+        profile_id=profile_id,
+        fallback_uploader=fallback_uploader,
+        retry_count=retry_count,
+    )
+    uploader.collector_upload_mode = 'r2_direct'
+    uploader.collector_fallback_enabled = fallback_enabled
+    return uploader

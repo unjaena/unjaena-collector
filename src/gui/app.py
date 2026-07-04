@@ -23,7 +23,7 @@ from PyQt6.QtGui import QFont
 
 from core.token_validator import TokenValidator, _get_ssl_verify
 from core.encryptor import FileHashCalculator
-from core.uploader import SyncUploader, RealTimeUploader
+from core.uploader import RealTimeUploader, build_collector_uploader
 from core.request_signer import RequestSigner
 from core.collection_profile import apply_collection_profile_to_mobile_ffs, apply_collection_profile_to_registry
 from collectors.artifact_collector import (
@@ -614,6 +614,12 @@ class CollectorWindow(QMainWindow):
             devices = self.device_manager.get_selected_devices()
         return [d for d in devices if d.device_type == DeviceType.AXIOM_CASE_DB]
 
+    def _selected_third_party_export_sources(self, selected_devices=None) -> List:
+        devices = selected_devices
+        if devices is None:
+            devices = self.device_manager.get_selected_devices()
+        return [d for d in devices if d.device_type == DeviceType.THIRD_PARTY_FORENSIC_EXPORT]
+
     def _update_scope_summary(self):
         """Update the compact collection scope summary."""
         if not hasattr(self, 'beginner_scope_label'):
@@ -622,6 +628,8 @@ class CollectorWindow(QMainWindow):
         checked = sum(1 for cb in self.artifact_checks.values() if cb.isChecked())
         enabled = sum(1 for cb in self.artifact_checks.values() if cb.isEnabled())
         axiom_count = len(self._selected_axiom_sources())
+        export_count = len(self._selected_third_party_export_sources())
+        tool_result_count = axiom_count + export_count
         deleted_text = (
             "Deleted files included where supported."
             if getattr(self, 'include_deleted_cb', None) and self.include_deleted_cb.isChecked()
@@ -633,10 +641,10 @@ class CollectorWindow(QMainWindow):
                 "Authenticate first. The server profile will enable the allowed "
                 "artifact set automatically."
             )
-        elif checked and axiom_count:
+        elif checked and tool_result_count:
             text = (
                 f"Scope ready: {checked} selected artifact type(s)"
-                f" out of {enabled} allowed, plus {axiom_count} AXIOM DB source(s). "
+                f" out of {enabled} allowed, plus {tool_result_count} verified tool result source(s). "
                 f"{deleted_text}"
             )
         elif checked:
@@ -644,10 +652,10 @@ class CollectorWindow(QMainWindow):
                 f"Recommended scope ready: {checked} selected artifact type(s)"
                 f" out of {enabled} allowed. {deleted_text}"
             )
-        elif axiom_count:
+        elif tool_result_count:
             text = (
-                f"AXIOM DB scope ready: {axiom_count} result DB source(s). "
-                "Server parsing will expand AXIOM hits into searchable documents."
+                f"Verified tool result scope ready: {tool_result_count} source(s). "
+                "Server parsing will expand AXIOM, Cellebrite, or Autopsy results into searchable documents."
             )
         else:
             text = (
@@ -674,7 +682,9 @@ class CollectorWindow(QMainWindow):
         source_done = bool(selected_devices)
         artifact_count = sum(1 for cb in self.artifact_checks.values() if cb.isChecked())
         axiom_count = len(self._selected_axiom_sources(selected_devices))
-        scope_done = artifact_count > 0 or axiom_count > 0
+        export_count = len(self._selected_third_party_export_sources(selected_devices))
+        tool_result_count = axiom_count + export_count
+        scope_done = artifact_count > 0 or tool_result_count > 0
 
         if self._token_validation_in_progress:
             token_detail = "Validating session token..."
@@ -690,12 +700,15 @@ class CollectorWindow(QMainWindow):
             else:
                 source_detail = f"{len(selected_devices)} evidence source(s) selected."
         else:
-            source_detail = "Select a local drive, connected device, image file, or FFS bundle."
+            source_detail = "Select a local drive, connected device, image file, FFS bundle, or verified tool result."
 
-        if scope_done and artifact_count and axiom_count:
-            scope_detail = f"{artifact_count} artifact type(s) and {axiom_count} AXIOM DB source(s) selected."
-        elif scope_done and axiom_count:
-            scope_detail = f"{axiom_count} AXIOM DB source(s) selected."
+        if scope_done and artifact_count and tool_result_count:
+            scope_detail = (
+                f"{artifact_count} artifact type(s) and "
+                f"{tool_result_count} verified tool result source(s) selected."
+            )
+        elif scope_done and tool_result_count:
+            scope_detail = f"{tool_result_count} verified tool result source(s) selected."
         elif scope_done:
             scope_detail = f"{artifact_count} artifact type(s) selected."
         elif token_done:
@@ -1610,8 +1623,9 @@ class CollectorWindow(QMainWindow):
         has_devices = len(selected_devices) > 0
         has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
         has_axiom_sources = bool(self._selected_axiom_sources(selected_devices))
+        has_export_sources = bool(self._selected_third_party_export_sources(selected_devices))
 
-        self.collect_btn.setEnabled(has_token and has_devices and (has_artifacts or has_axiom_sources))
+        self.collect_btn.setEnabled(has_token and has_devices and (has_artifacts or has_axiom_sources or has_export_sources))
         self._update_scope_summary()
         self._update_workflow_status()
 
@@ -2150,8 +2164,9 @@ class CollectorWindow(QMainWindow):
 
         selected = [k for k, cb in self.artifact_checks.items() if cb.isChecked()]
         axiom_sources = self._selected_axiom_sources(selected_devices)
-        if not selected and not axiom_sources:
-            QMessageBox.warning(self, "Error", "Please select at least one artifact type or AXIOM DB source")
+        export_sources = self._selected_third_party_export_sources(selected_devices)
+        if not selected and not axiom_sources and not export_sources:
+            QMessageBox.warning(self, "Error", "Please select at least one artifact type or verified tool result source")
             return
 
         self._log_mobile_preflight(selected_devices, selected)
@@ -2164,7 +2179,7 @@ class CollectorWindow(QMainWindow):
                 "Confirm Collection Targets",
                 f"Collecting from {len(selected_devices)} device(s):\n\n{device_list}\n\n"
                 f"Selected artifacts: {len(selected)}\n"
-                f"AXIOM DB sources: {len(axiom_sources)}\n\n"
+                f"Verified tool result sources: {len(axiom_sources) + len(export_sources)}\n\n"
                 "Evidence scope warning:\n"
                 "Only continue if all selected sources belong to the same "
                 "investigation scope.\n"
@@ -2801,8 +2816,9 @@ class CollectorWindow(QMainWindow):
 
         if selected:
             self._log(f"Starting collection for: {', '.join(selected)}")
-        if axiom_sources:
-            self._log(f"Starting AXIOM DB upload for {len(axiom_sources)} source(s)")
+        tool_result_total = len(axiom_sources) + len(export_sources)
+        if tool_result_total:
+            self._log(f"Starting verified tool result upload for {tool_result_total} source(s)")
 
         # Freeze every source/scope/auth input for the full collection and
         # upload lifetime. Individual UI events can otherwise re-enable the
@@ -3955,6 +3971,10 @@ class CollectionWorker(QThread):
     def _artifacts_for_device(self, device) -> List[str]:
         if device.device_type == DeviceType.AXIOM_CASE_DB:
             return ["axiom_case_db"]
+        if device.device_type == DeviceType.THIRD_PARTY_FORENSIC_EXPORT:
+            metadata = device.metadata or {}
+            upload_type = metadata.get("upload_artifact_type")
+            return [upload_type] if upload_type else []
         if device.device_type not in (
             DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
             DeviceType.MOBILE_FFS_BUNDLE_IOS,
@@ -4778,6 +4798,54 @@ class CollectionWorker(QThread):
                         )
                         continue
 
+
+                    if device.device_type == DeviceType.THIRD_PARTY_FORENSIC_EXPORT:
+                        item_index += 1
+                        stage_progress = int((item_index / max(total_items, 1)) * 100)
+                        overall_progress = self._calculate_overall_progress(1, stage_progress)
+                        remaining = self._estimate_remaining_time(1, stage_progress, item_index, total_items)
+                        self.progress_updated.emit(
+                            1, stage_progress, overall_progress,
+                            f"[{device_name}] Preparing forensic tool result upload...",
+                            remaining,
+                        )
+
+                        export_path = (device.metadata or {}).get('file_path')
+                        if not export_path or not Path(export_path).is_file():
+                            self.log_message.emit(
+                                f"[ERROR] [{device_name}] Forensic tool result file is missing or unreadable",
+                                True,
+                            )
+                            continue
+
+                        metadata = dict(device.metadata or {})
+                        upload_artifact_type = metadata.get('upload_artifact_type')
+                        if upload_artifact_type not in {'axiom_case_db', 'cellebrite_ufdr_xml', 'autopsy_case_db'}:
+                            self.log_message.emit(
+                                f"[ERROR] [{device_name}] Unsupported or missing tool result type",
+                                True,
+                            )
+                            continue
+                        metadata.update({
+                            'artifact_type': upload_artifact_type,
+                            'upload_artifact_type': upload_artifact_type,
+                            'collection_method': metadata.get('collection_method') or f'{upload_artifact_type}_upload',
+                            'device_id': device.device_id,
+                            'device_name': device_name,
+                            'device_type': device.device_type.name,
+                            'original_path': metadata.get('original_path') or export_path,
+                            'source_tool': metadata.get('source_tool') or 'unknown_third_party_forensic_result',
+                            'legal_boundary': metadata.get('legal_boundary') or 'verified_user_selected_forensic_result',
+                        })
+                        collected_raw_files.append((export_path, upload_artifact_type, metadata))
+                        self.file_collected.emit(Path(export_path).name, True)
+                        self.log_message.emit(
+                            f"[{device_name}] Forensic tool result queued for upload: "
+                            f"{Path(export_path).name} ({upload_artifact_type})",
+                            False,
+                        )
+                        continue
+
                     # Create appropriate collector based on device type
                     collector = self._create_collector_for_device(device, output_dir)
                     if not collector:
@@ -5218,11 +5286,10 @@ class CollectionWorker(QThread):
             # ========================================
             self.log_message.emit(f"☁️ Uploading {len(encrypted_files)} files...", False)
 
-            # Upload original evidence to the server for parsing. The server
-            # now deletes raw evidence after parsing and stores analysis
-            # outputs in object storage, so the GUI must not use R2 direct
-            # upload for raw evidence.
-            uploader = SyncUploader(
+            # Upload policy is centralized so production can default to
+            # direct-to-R2 while operators can force server streaming when
+            # R2 is unavailable or during local validation.
+            uploader = build_collector_uploader(
                 server_url=self.server_url,
                 ws_url=self.ws_url,
                 session_id=self.session_id,
@@ -5232,6 +5299,12 @@ class CollectionWorker(QThread):
                 config=self.config,
                 request_signer=self.request_signer,
                 profile_id=self.collection_profile_id,
+            )
+            self.log_message.emit(
+                "Upload mode: "
+                f"{getattr(uploader, 'collector_upload_mode', 'unknown')} "
+                f"(fallback={getattr(uploader, 'collector_fallback_enabled', False)})",
+                False,
             )
 
             success_count = 0

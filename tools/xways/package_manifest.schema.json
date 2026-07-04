@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unjaena.com/schemas/xways-package-manifest.schema.json",
+  "title": "unJaena X-Ways X-Tension Package Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "format_version",
+    "source_tool",
+    "created_at_utc",
+    "case",
+    "collection_profile",
+    "artifacts"
+  ],
+  "properties": {
+    "format": {
+      "const": "unjaena.xways.package"
+    },
+    "format_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source_tool": {
+      "type": "string",
+      "const": "xways_xtension"
+    },
+    "created_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "package_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "case_number": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "operator": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "collection_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "matched_locally"
+      ],
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "matched_locally": {
+          "type": "boolean"
+        },
+        "target_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "xways": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "xways_version": {
+          "type": "string"
+        },
+        "evidence_object": {
+          "type": "string"
+        },
+        "volume_snapshot_id": {
+          "type": "string"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artifact_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "error_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "artifact_type",
+        "file_name",
+        "relative_path",
+        "size",
+        "sha256",
+        "xways"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "artifact_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "file_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "relative_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "original_path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "created_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modified_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "accessed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_changed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "xways": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "item_id",
+            "scope"
+          ],
+          "properties": {
+            "item_id": {
+              "type": [
+                "integer",
+                "string"
+              ]
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "selected_items",
+                "volume_snapshot",
+                "tools_run"
+              ]
+            },
+            "evidence_object": {
+              "type": "string"
+            },
+            "volume_snapshot_path": {
+              "type": "string"
+            },
+            "file_type": {
+              "type": "string"
+            },
+            "deleted": {
+              "type": "boolean"
+            },
+            "recovered": {
+              "type": "boolean"
+            },
+            "report_tables": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "comments": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

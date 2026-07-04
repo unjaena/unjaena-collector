@@ -68,8 +68,8 @@ class DeviceListPanel(QWidget):
         self._interaction_locked = bool(locked)
         self.refresh_btn.setEnabled(not locked)
         self.add_btn.setEnabled(not locked)
-        if hasattr(self, 'add_axiom_btn'):
-            self.add_axiom_btn.setEnabled(not locked)
+        if hasattr(self, 'add_export_btn'):
+            self.add_export_btn.setEnabled(not locked)
         self.setAcceptDrops(not locked)
         for device_id, cb in self.device_checkboxes.items():
             device = self.device_manager.get_device(device_id)
@@ -116,11 +116,11 @@ class DeviceListPanel(QWidget):
         self.add_btn.clicked.connect(self._on_add_image_clicked)
         header.addWidget(self.add_btn)
 
-        self.add_axiom_btn = QPushButton("+ Add AXIOM DB")
-        self.add_axiom_btn.setFixedHeight(24)
-        self.add_axiom_btn.setObjectName("addAxiomButton")
-        self.add_axiom_btn.setStyleSheet(f"""
-            QPushButton#addAxiomButton {{
+        self.add_export_btn = QPushButton("+ Add Tool Result")
+        self.add_export_btn.setFixedHeight(24)
+        self.add_export_btn.setObjectName("addToolExportButton")
+        self.add_export_btn.setStyleSheet(f"""
+            QPushButton#addToolExportButton {{
                 background-color: {COLORS['bg_elevated']};
                 border: 1px solid {COLORS['border_muted']};
                 border-radius: 4px;
@@ -128,16 +128,16 @@ class DeviceListPanel(QWidget):
                 font-weight: 700;
                 padding: 4px 12px;
             }}
-            QPushButton#addAxiomButton:hover {{
+            QPushButton#addToolExportButton:hover {{
                 background-color: rgba(88, 166, 255, 0.12);
                 border-color: {COLORS['brand_accent']};
             }}
-            QPushButton#addAxiomButton:pressed {{
+            QPushButton#addToolExportButton:pressed {{
                 background-color: rgba(88, 166, 255, 0.2);
             }}
         """)
-        self.add_axiom_btn.clicked.connect(self._on_add_axiom_clicked)
-        header.addWidget(self.add_axiom_btn)
+        self.add_export_btn.clicked.connect(self._on_add_export_clicked)
+        header.addWidget(self.add_export_btn)
 
         header.addStretch()
 
@@ -151,9 +151,9 @@ class DeviceListPanel(QWidget):
 
         self.evidence_hint = QLabel(
             "Add E01/RAW/VDI/VMDK/VHD/DMG/QCOW2, a mobile FFS ZIP/CLBX, "
-            "or a Magnet AXIOM result DB, then select the evidence source below. "
-            "Ordinary ZIP, ISO, generic DB, and memory dump files are not "
-            "disk-image sources in this collector."
+            "or a verified tool result: AXIOM DB, Cellebrite UFDR/XML, or Autopsy autopsy.db. "
+            "Ordinary ZIP, ISO, and memory dump files are not disk-image sources; "
+            "generic DB and JSON/CSV exports require + Add Tool Export."
         )
         self.evidence_hint.setWordWrap(True)
         self.evidence_hint.setStyleSheet(
@@ -292,7 +292,7 @@ class DeviceListPanel(QWidget):
         sections.append(
             f"<span style='color:{dim};'>"
             "● <b>E01/RAW</b>: Use <b>+ Add Disk Image / FFS</b>; "
-            "<b>AXIOM</b>: use <b>+ Add AXIOM DB</b>"
+            "<b>AXIOM/Cellebrite/Autopsy</b>: use <b>+ Add Tool Result</b>"
             "</span>"
         )
 
@@ -425,12 +425,28 @@ class DeviceListPanel(QWidget):
 
         self._register_axiom_db_file(file_path)
 
+
+    def _on_add_export_clicked(self):
+        """Add a verified third-party forensic result file."""
+        if self._interaction_locked:
+            return
+        file_path, selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Select Verified Tool Result",
+            "",
+            "Magnet AXIOM Result DB (*.mfdb *.db *.sqlite *.sqlite3);;Cellebrite UFDR (*.ufdr);;Cellebrite XML Report (*.xml);;Autopsy Case DB (*.db *.sqlite *.sqlite3);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        self._register_third_party_export_file(
+            file_path,
+            self._artifact_type_from_tool_result_filter(selected_filter, file_path),
+        )
+
     def _register_evidence_file(self, file_path: str):
         """Register a supported image or mobile FFS bundle."""
         if self._interaction_locked:
-            return
-        if file_path.lower().endswith(".mfdb"):
-            self._register_axiom_db_file(file_path)
             return
         if not self._is_supported_evidence_file(file_path):
             from PyQt6.QtWidgets import QMessageBox
@@ -482,6 +498,53 @@ class DeviceListPanel(QWidget):
                 "file exists, is readable, and is a SQLite-based AXIOM result DB.",
             )
 
+
+    def _register_third_party_export_file(self, file_path: str, artifact_type: str = None):
+        """Register a verified third-party forensic result for direct upload."""
+        if self._interaction_locked:
+            return
+        device = self.device_manager.add_third_party_forensic_export_file(file_path, artifact_type)
+        if device:
+            self.image_file_requested.emit()
+            from PyQt6.QtWidgets import QMessageBox
+            upload_type = device.metadata.get('upload_artifact_type') or 'verified_tool_result'
+            QMessageBox.information(
+                self,
+                "Tool Result Registered",
+                f"<b>{device.display_name}</b><br><br>"
+                f"<b>Upload type</b>: {upload_type}<br>"
+                f"<b>Size</b>: {device.size_display}<br>"
+                "This user-selected forensic result will be uploaded as one source. "
+                "Server parsing will normalize supported records into searchable documents.",
+            )
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Tool Result Registration Failed",
+                "Could not register this forensic tool result. Only verified AXIOM DB, "
+                "Cellebrite UFDR/XML, and Autopsy autopsy.db files are enabled. "
+                "Generic XML/JSON/CSV/TSV exports are intentionally unsupported until validated.",
+            )
+
+    @staticmethod
+    def _artifact_type_from_tool_result_filter(selected_filter: str, file_path: str) -> str:
+        text = (selected_filter or '').lower()
+        lower_path = (file_path or '').lower()
+        if 'axiom' in text or 'magnet' in text:
+            return 'axiom_case_db'
+        if 'cellebrite' in text:
+            return 'cellebrite_ufdr_xml'
+        if 'autopsy' in text:
+            return 'autopsy_case_db'
+        if lower_path.endswith('.mfdb') or 'axiom' in lower_path:
+            return 'axiom_case_db'
+        if lower_path.endswith('.ufdr') or 'cellebrite' in lower_path or 'ufdr' in lower_path:
+            return 'cellebrite_ufdr_xml'
+        if lower_path.endswith(('autopsy.db', '/autopsy.db', '\\autopsy.db')) or 'autopsy' in lower_path:
+            return 'autopsy_case_db'
+        return None
+
     def dragEnterEvent(self, event):
         """Accept supported evidence files dropped onto the source panel."""
         if self._interaction_locked:
@@ -522,7 +585,6 @@ class DeviceListPanel(QWidget):
             ".ntfs", ".fat", ".fat12", ".fat16", ".fat32", ".exfat",
             ".ext", ".ext2", ".ext3", ".ext4", ".xfs", ".btrfs",
             ".hfs", ".hfsx", ".apfs", ".ufs", ".zip", ".clbx",
-            ".mfdb",
         )
         return lower.endswith(suffixes)
 
@@ -537,16 +599,16 @@ class DeviceListPanel(QWidget):
             )
         if lower.endswith((".mem", ".vmem", ".dmp", ".dump", ".mdmp")):
             return (
-                "Memory dump files are not supported as evidence sources in this "
-                "collector screen.\n\n"
+                "Memory dump files are not supported as evidence sources; "
+                "memory dump files are not disk-image sources in this collector "
+                "screen.\n\n"
                 "Use a disk image, a filesystem volume image, or a supported "
                 "mobile FFS bundle."
             )
-        if lower.endswith((".db", ".sqlite", ".sqlite3")):
+        if lower.endswith((".db", ".sqlite", ".sqlite3", ".mfdb")):
             return (
-                "Generic database files are not disk-image sources in this collector screen.\n\n"
-                "For a Magnet AXIOM case result database, use the dedicated "
-                "+ Add AXIOM DB button."
+                "Database files are not disk-image sources in this collector screen.\n\n"
+                "Use + Add Tool Result and choose Magnet AXIOM Result DB or Autopsy Case DB."
             )
         if lower.endswith(".zip"):
             return (
@@ -559,7 +621,7 @@ class DeviceListPanel(QWidget):
             "This file type is not supported as an evidence source.\n\n"
             "Supported disk sources: E01/RAW/VMDK/VHD/VHDX/QCOW2/VDI/DMG "
             "and filesystem volume images. Supported mobile source: Cellebrite "
-            "UFED/CLBX FFS ZIP."
+            "UFED/CLBX FFS ZIP. For forensic tool exports, use + Add Tool Export."
         )
 
     def _register_ffs_bundle(self, file_path: str) -> None:
@@ -664,6 +726,7 @@ class DeviceListPanel(QWidget):
             DeviceType.IOS_BACKUP: "🍎",
             DeviceType.IOS_DEVICE: "📲",
             DeviceType.AXIOM_CASE_DB: "🗄",
+            DeviceType.THIRD_PARTY_FORENSIC_EXPORT: "📄",
         }
         icon = type_icons.get(device.device_type, "📁")
         label = device.display_name
@@ -718,6 +781,10 @@ class DeviceListPanel(QWidget):
         if device.device_type == DeviceType.AXIOM_CASE_DB:
             label = f"{label} [AXIOM result DB]"
 
+        if device.device_type == DeviceType.THIRD_PARTY_FORENSIC_EXPORT:
+            upload_type = device.metadata.get('upload_artifact_type') or 'tool result'
+            label = f"{label} [{upload_type}]"
+
         return f"{icon} {label}"
 
     def _get_device_tooltip(self, device: UnifiedDeviceInfo) -> str:
@@ -740,6 +807,14 @@ class DeviceListPanel(QWidget):
         if device.device_type == DeviceType.AXIOM_CASE_DB:
             lines.append("Upload type: axiom_case_db")
             lines.append("Source tool: Magnet AXIOM")
+            source_path = device.metadata.get('file_path') or ''
+            if source_path:
+                lines.append(f"Path: {source_path}")
+
+        if device.device_type == DeviceType.THIRD_PARTY_FORENSIC_EXPORT:
+            lines.append(f"Upload type: {device.metadata.get('upload_artifact_type') or 'verified_tool_result'}")
+            lines.append(f"Source tool: {device.metadata.get('source_tool') or 'Unknown'}")
+            lines.append("Boundary: user-selected verified forensic result")
             source_path = device.metadata.get('file_path') or ''
             if source_path:
                 lines.append(f"Path: {source_path}")

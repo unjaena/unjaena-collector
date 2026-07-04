@@ -10,7 +10,7 @@ from copy import deepcopy
 from typing import Any, Mapping, MutableMapping
 
 
-_SOURCE_FILE_KINDS = {"source_file", "source_upload"}
+_SOURCE_FILE_KINDS = {"source_file", "source_upload", "evidence_source"}
 _CONFIG_ONLY_KINDS = {"collector_config", "profile_config"}
 _MFT_CONFIG_KEYS = {
     "base_path",
@@ -386,10 +386,11 @@ def apply_collection_profile_to_registry(
         profile_artifacts.add(artifact_type)
 
         kind = str(target.get("kind") or "glob")
+        kind_token = kind.strip().lower()
         patterns = [str(item) for item in target.get("patterns") or [] if item]
         metadata = _as_dict(target.get("metadata"))
 
-        if kind in _SOURCE_FILE_KINDS:
+        if kind_token in _SOURCE_FILE_KINDS:
             # Evidence-source uploads are handled by the source-file workflow,
             # not by local artifact path collectors.
             continue

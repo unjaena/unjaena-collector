@@ -1,0 +1,13 @@
+# Native and .NET build outputs
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Local run outputs and customer packages
+unjaena-xways-package/
+*.log

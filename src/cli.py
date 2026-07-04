@@ -296,13 +296,13 @@ class HeadlessCollector:
 
     def _upload(self, files: List[Tuple[str, str, Dict[str, Any]]]) -> bool:
         """Stage 3: Upload original files to the server for parsing."""
-        from core.uploader import SyncUploader
+        from core.uploader import build_collector_uploader
 
         if not files:
             logger.error("No files to upload.")
             return False
 
-        uploader = SyncUploader(
+        uploader = build_collector_uploader(
             server_url=self.server_url,
             ws_url=self.server_url,
             session_id=self.session_id,
@@ -311,6 +311,11 @@ class HeadlessCollector:
             config=self.config,
             request_signer=self.request_signer,
             profile_id=self.collection_profile_id,
+        )
+        logger.info(
+            "Upload mode: %s (fallback=%s)",
+            getattr(uploader, 'collector_upload_mode', 'unknown'),
+            getattr(uploader, 'collector_fallback_enabled', False),
         )
 
         success_count = 0

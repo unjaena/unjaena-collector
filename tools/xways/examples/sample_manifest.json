@@ -1,0 +1,55 @@
+{
+  "format": "unjaena.xways.package",
+  "format_version": 1,
+  "source_tool": "xways_xtension",
+  "created_at_utc": "2026-06-22T00:00:00Z",
+  "package_id": "sample-xwf-package",
+  "case": {
+    "case_id": "00000000-0000-4000-8000-000000000001",
+    "case_number": "XWF-SAMPLE",
+    "operator": "xways-operator"
+  },
+  "collection_profile": {
+    "profile_id": "sample-profile",
+    "matched_locally": true,
+    "target_count": 1
+  },
+  "xways": {
+    "api_version": "external",
+    "xways_version": "operator-supplied",
+    "evidence_object": "sample.e01",
+    "volume_snapshot_id": "sample-volume"
+  },
+  "artifacts": [
+    {
+      "artifact_id": "artifact-0001",
+      "artifact_type": "user_documents",
+      "file_name": "example.pdf",
+      "relative_path": "files/artifact-0001.bin",
+      "original_path": "/Users/Alice/Documents/example.pdf",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "created_at": null,
+      "modified_at": null,
+      "accessed_at": null,
+      "metadata_changed_at": null,
+      "xways": {
+        "item_id": 1,
+        "scope": "selected_items",
+        "evidence_object": "sample.e01",
+        "volume_snapshot_path": "/Users/Alice/Documents/example.pdf",
+        "file_type": "PDF",
+        "deleted": false,
+        "recovered": false,
+        "report_tables": [],
+        "comments": ""
+      }
+    }
+  ],
+  "totals": {
+    "artifact_count": 1,
+    "total_bytes": 0,
+    "skipped_count": 0,
+    "error_count": 0
+  }
+}

@@ -69,6 +69,7 @@ class DeviceType(Enum):
     MOBILE_FFS_BUNDLE_IOS = auto()      # Cellebrite UFED FFS / CLBX iOS zip
     MOBILE_FFS_BUNDLE_ANDROID = auto()  # Cellebrite UFED FFS / CLBX Android zip
     AXIOM_CASE_DB = auto()               # Magnet AXIOM case result database
+    THIRD_PARTY_FORENSIC_EXPORT = auto()  # Official forensic tool export/report
 
 
 class DeviceStatus(Enum):
@@ -147,6 +148,10 @@ class UnifiedDeviceInfo:
         return self.device_type == DeviceType.AXIOM_CASE_DB
 
     @property
+    def is_third_party_forensic_export(self) -> bool:
+        return self.device_type == DeviceType.THIRD_PARTY_FORENSIC_EXPORT
+
+    @property
     def is_image(self) -> bool:
         """Check if image file"""
         return self.device_type in (
@@ -176,7 +181,12 @@ class UnifiedDeviceInfo:
     @property
     def is_manual_file_source(self) -> bool:
         """Check if this device was manually registered from a local file."""
-        return self.is_image or self.is_mobile_ffs_bundle or self.is_axiom_case_db
+        return (
+            self.is_image
+            or self.is_mobile_ffs_bundle
+            or self.is_axiom_case_db
+            or self.is_third_party_forensic_export
+        )
 
 
 # =============================================================================
@@ -550,6 +560,110 @@ class UnifiedDeviceManager(QObject):
             logger.error(f"Failed to add AXIOM DB: {e}")
             return None
 
+
+    def add_third_party_forensic_export_file(
+        self,
+        file_path: str,
+        artifact_type: Optional[str] = None,
+    ) -> Optional[UnifiedDeviceInfo]:
+        """Manually add a verified third-party forensic result file."""
+        from pathlib import Path
+        import zipfile
+
+        raw_path = str(file_path)
+        if '..' in raw_path:
+            logger.error("Failed to add third-party forensic result: path traversal detected")
+            return None
+
+        try:
+            path = Path(file_path).resolve()
+            if not path.exists() or not path.is_file():
+                raise FileNotFoundError(f"File not found: {path}")
+
+            suffix = path.suffix.lower()
+            if path.stat().st_size <= 0:
+                raise ValueError("Selected forensic result file is empty")
+
+            upload_type = self._resolve_third_party_result_upload_type(path, artifact_type)
+            allowed_extensions = {
+                "axiom_case_db": {'.mfdb', '.db', '.sqlite', '.sqlite3'},
+                "cellebrite_ufdr_xml": {'.ufdr', '.xml'},
+                "autopsy_case_db": {'.db', '.sqlite', '.sqlite3'},
+            }
+            if suffix not in allowed_extensions[upload_type]:
+                raise ValueError(f"Unsupported extension {path.suffix} for {upload_type}")
+
+            if upload_type == "axiom_case_db":
+                with open(path, 'rb') as db_file:
+                    header = db_file.read(16)
+                if header != b'SQLite format 3\x00':
+                    raise ValueError("Selected file is not a SQLite database")
+                self._validate_axiom_case_db(path)
+            if upload_type == "cellebrite_ufdr_xml" and suffix == '.ufdr' and not zipfile.is_zipfile(path):
+                raise ValueError("UFDR result is not a ZIP-based report package")
+            if upload_type == "autopsy_case_db":
+                self._validate_autopsy_case_db(path)
+
+            source_tool = self._source_tool_for_upload_type(upload_type, path)
+            display_prefix = {
+                "axiom_case_db": "AXIOM DB",
+                "cellebrite_ufdr_xml": "Cellebrite UFDR/XML",
+                "autopsy_case_db": "Autopsy DB",
+            }[upload_type]
+            device_id = f"{upload_type}_{path.stem}_{path.stat().st_mtime_ns}"
+            size_bytes = path.stat().st_size
+            device = UnifiedDeviceInfo(
+                device_id=device_id,
+                device_type=DeviceType.THIRD_PARTY_FORENSIC_EXPORT,
+                display_name=f"{display_prefix} - {path.name}",
+                status=DeviceStatus.READY,
+                size_bytes=size_bytes,
+                metadata={
+                    "file_path": str(path),
+                    "original_path": str(path),
+                    "source_tool": source_tool,
+                    "source_format": suffix.lstrip('.'),
+                    "upload_artifact_type": upload_type,
+                    "artifact_type": upload_type,
+                    "collection_method": f"{upload_type}_upload",
+                    "legal_boundary": "verified_user_selected_forensic_result",
+                },
+            )
+
+            self._devices[device_id] = device
+            logger.info(f"Third-party forensic result added: {device.display_name}")
+            self.device_added.emit(device)
+            return device
+        except Exception as e:
+            logger.error(f"Failed to add third-party forensic result: {e}")
+            return None
+
+    @staticmethod
+    def _resolve_third_party_result_upload_type(path, requested_type: Optional[str] = None) -> str:
+        allowed = {"axiom_case_db", "cellebrite_ufdr_xml", "autopsy_case_db"}
+        if requested_type in allowed:
+            return requested_type
+
+        name = path.name.lower()
+        suffix = path.suffix.lower()
+        if suffix == '.mfdb' or 'axiom' in name:
+            return "axiom_case_db"
+        if suffix == '.ufdr' or 'cellebrite' in name or 'ufdr' in name:
+            return "cellebrite_ufdr_xml"
+        if suffix in {'.db', '.sqlite', '.sqlite3'} and ('autopsy' in name or name == 'autopsy.db'):
+            return "autopsy_case_db"
+        raise ValueError("Unsupported forensic tool result. Only AXIOM, Cellebrite UFDR/XML, and Autopsy DB are enabled.")
+
+    @staticmethod
+    def _source_tool_for_upload_type(upload_type: str, path) -> str:
+        if upload_type == "axiom_case_db":
+            return "Magnet AXIOM"
+        if upload_type == "cellebrite_ufdr_xml":
+            return "Cellebrite UFDR/XML"
+        if upload_type == "autopsy_case_db":
+            return "Autopsy"
+        return "Unsupported forensic tool result"
+
     @staticmethod
     def _validate_axiom_case_db(path) -> None:
         import sqlite3
@@ -586,6 +700,28 @@ class UnifiedDeviceManager(QObject):
             if conn is not None:
                 conn.close()
 
+    @staticmethod
+    def _validate_autopsy_case_db(path) -> None:
+        import sqlite3
+
+        required_tables = {
+            "tsk_files",
+            "blackboard_artifacts",
+            "blackboard_attributes",
+        }
+        conn = None
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+            ).fetchall()
+            names = {str(row[0]) for row in rows}
+            if not required_tables.issubset(names):
+                raise ValueError("Selected database does not match the Autopsy case schema")
+        finally:
+            if conn is not None:
+                conn.close()
+
     def remove_bundle_file(self, device_id: str):
         if device_id in self._devices:
             device = self._devices[device_id]
@@ -604,6 +740,15 @@ class UnifiedDeviceManager(QObject):
                 del self._devices[device_id]
                 self._selected_devices.discard(device_id)
                 logger.info(f"AXIOM DB removed: {device_id}")
+                self.device_removed.emit(device_id)
+
+    def remove_third_party_forensic_export_file(self, device_id: str):
+        if device_id in self._devices:
+            device = self._devices[device_id]
+            if device.is_third_party_forensic_export:
+                del self._devices[device_id]
+                self._selected_devices.discard(device_id)
+                logger.info(f"Third-party forensic export removed: {device_id}")
                 self.device_removed.emit(device_id)
 
     def remove_image_file(self, device_id: str):
