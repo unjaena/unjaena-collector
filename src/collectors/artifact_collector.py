@@ -112,6 +112,79 @@ LEVELDB_STORE_FILE_PATTERNS = ('*.ldb', '*.log', '*.sst', 'CURRENT', 'LOG', 'LOG
 def _leveldb_file_paths(leveldb_roots: List[str]) -> List[str]:
     return []
 
+def _messenger_process_names(config: Dict[str, Any]) -> List[str]:
+    names: List[str] = []
+    primary = config.get('process_name')
+    if primary:
+        if isinstance(primary, (list, tuple, set)):
+            names.extend(str(item) for item in primary if item)
+        else:
+            names.append(str(primary))
+    aliases = config.get('process_names') or []
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    names.extend(str(item) for item in aliases if item)
+
+    deduped: List[str] = []
+    seen = set()
+    for name in names:
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(name)
+    return deduped
+
+def _build_collected_file_metadata(
+    src_path: str,
+    dst_path: Path,
+    artifact_type: str,
+) -> Dict[str, Any]:
+    src = Path(src_path)
+    dst = Path(dst_path)
+    max_hash_size = 100 * 1024 * 1024
+    file_size = dst.stat().st_size
+    hash_skipped = False
+
+    if file_size <= max_hash_size:
+        sha256 = hashlib.sha256()
+        md5 = hashlib.md5(usedforsecurity=False)
+        with open(dst, 'rb') as f:
+            for chunk in iter(lambda: f.read(65536), b''):
+                sha256.update(chunk)
+                md5.update(chunk)
+        sha256_hex = sha256.hexdigest()
+        md5_hex = md5.hexdigest()
+    else:
+        sha256_hex = ''
+        md5_hex = ''
+        hash_skipped = True
+
+    try:
+        stat = src.stat()
+        timestamps = {
+            'created': datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc).isoformat(),
+            'modified': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            'accessed': datetime.fromtimestamp(stat.st_atime, tz=timezone.utc).isoformat(),
+        }
+    except (OSError, ValueError):
+        timestamps = {}
+
+    metadata = {
+        'artifact_type': artifact_type,
+        'original_path': str(src_path),
+        'filename': src.name,
+        'size': file_size,
+        'sha256': sha256_hex,
+        'md5': md5_hex,
+        'timestamps': timestamps,
+        'collected_at': datetime.utcnow().isoformat(),
+        'collection_method': 'legacy_file_api',
+    }
+    if hash_skipped:
+        metadata['hash_skipped'] = True
+    return metadata
+
 # Try to import ForensicDiskAccessor (pure Python - preferred)
 try:
     from collectors.forensic_disk import (
@@ -477,6 +550,95 @@ def _save_collection_diagnostic_standalone(
         return None
 
 
+def _dump_process_memory_for_artifact(
+    owner: Any,
+    artifact_type: str,
+    process_name: Any,
+    artifact_dir: Path,
+) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+    """Dump messenger process memory once per artifact type."""
+    if getattr(owner, f'_memory_dumped_{artifact_type}', False):
+        return
+    setattr(owner, f'_memory_dumped_{artifact_type}', True)
+
+    try:
+        from collectors.process_memory_dumper import ProcessMemoryDumper
+        dumper = ProcessMemoryDumper()
+        process_names = process_name
+        if isinstance(process_names, str):
+            process_names = [process_names]
+        process_names = [str(name) for name in (process_names or []) if name]
+        last_result: Dict[str, Any] = {}
+
+        for candidate_name in process_names:
+            dump_filename = f"{candidate_name.replace('.exe', '').lower()}_memory.dmp"
+            dump_path = str(artifact_dir / dump_filename)
+
+            logger.debug(f"[MEMORY] Dumping {candidate_name}...")
+            dump_result = dumper.dump_process_lightweight(candidate_name, dump_path)
+            last_result = dump_result
+
+            if dump_result.get('success'):
+                size_mb = dump_result.get('size', 0) / 1024 / 1024
+                logger.info(
+                    f"[MEMORY] Dump success: {dump_filename} "
+                    f"({size_mb:.1f} MB, PID={dump_result.get('pid')})"
+                )
+                yield dump_path, {
+                    'artifact_type': artifact_type,
+                    'original_path': dump_path,
+                    'type': artifact_type,
+                    'name': dump_filename,
+                    'path': dump_path,
+                    'size': dump_result.get('size', 0),
+                    'process_pid': dump_result.get('pid'),
+                    'process_name': candidate_name,
+                    'is_memory_dump': True,
+                    'collection_method': 'process_memory_dump',
+                }
+                return
+
+            try:
+                failed_dump = Path(dump_path)
+                if failed_dump.exists():
+                    failed_dump.unlink()
+            except Exception:
+                pass
+
+        logger.debug(
+            f"[MEMORY] Dump skipped: "
+            f"{last_result.get('error', 'process not found') if last_result else 'no process names'}"
+        )
+        if artifact_type == 'server_managed_windows_app':
+            diag_result = _save_collection_diagnostic_standalone(
+                artifact_dir,
+                artifact_type,
+                '_collection_status.json',
+                {
+                    'collection_status': 'partial',
+                    'detail_code': 'protected_live_context_unavailable',
+                    'impact': 'Some protected application records may be unavailable in this collection.',
+                    'operator_action': 'Review collection prerequisites and retry with elevated collection mode when appropriate.',
+                },
+            )
+            if diag_result:
+                yield diag_result
+        if last_result.get('requires_admin'):
+            if artifact_type == 'server_managed_windows_app':
+                logger.warning(
+                    "[MEMORY] Some protected application data may require elevated collection mode."
+                )
+            else:
+                logger.warning(
+                    "[MEMORY] Re-run the collector as Administrator to collect "
+                    "messenger process memory."
+                )
+    except ImportError:
+        logger.debug("[MEMORY] ProcessMemoryDumper not available")
+    except Exception as e:
+        logger.debug(f"[MEMORY] Error: {e}")
+
+
 class LocalMFTCollector(_LocalMFTBase):
     """
     Local disk MFT-based collector
@@ -815,84 +977,22 @@ class LocalMFTCollector(_LocalMFTBase):
                 # MFT-based collection (parent class)
                 yield from super().collect(artifact_type, progress_callback, **kwargs)
 
-                # Memory dump for PC messengers collected via MFT mode
-                # MFT mode collects files only; messenger analysis requires process memory
+                # Memory dump for PC messengers collected via MFT mode.
                 if artifact_type in ARTIFACT_TYPES:
                     at_config = ARTIFACT_TYPES[artifact_type]
                     if at_config.get('collector') == 'collect_messenger_with_memory':
-                        process_name = at_config.get('process_name')
+                        process_names = _messenger_process_names(at_config)
                         already_dumped = getattr(self, f'_memory_dumped_{artifact_type}', False)
-                        logger.info(f"[MFT+Memory] {artifact_type}: process_name={process_name}, already_dumped={already_dumped}")
-                        if process_name and not already_dumped:
-                            setattr(self, f'_memory_dumped_{artifact_type}', True)
-                            try:
-                                from collectors.process_memory_dumper import ProcessMemoryDumper
-                                dumper = ProcessMemoryDumper()
-                                artifact_dir = self.output_dir / artifact_type
-                                artifact_dir.mkdir(exist_ok=True)
-                                dump_filename = f"{process_name.replace('.exe', '').lower()}_memory.dmp"
-                                dump_path = str(artifact_dir / dump_filename)
-                                logger.info(f"[MFT+Memory] Dumping {process_name} -> {dump_path}")
-                                dump_result = dumper.dump_process_lightweight(process_name, dump_path)
-                                if dump_result.get('success'):
-                                    size_mb = dump_result.get('size', 0) / 1024 / 1024
-                                    logger.info(f"[MFT+Memory] Dump SUCCESS: {dump_filename} ({size_mb:.1f} MB, PID={dump_result.get('pid')})")
-                                    yield dump_path, {
-                                        'artifact_type': artifact_type,
-                                        'original_path': dump_path,
-                                        'type': artifact_type,
-                                        'name': dump_filename,
-                                        'path': dump_path,
-                                        'size': dump_result.get('size', 0),
-                                        'process_pid': dump_result.get('pid'),
-                                        'is_memory_dump': True,
-                                        'collection_method': 'process_memory_dump',
-                                    }
-                                else:
-                                    if artifact_type == 'server_managed_windows_app':
-                                        logger.warning(
-                                            "[MFT+Memory] profile-managed appTalk protected data was only partially prepared."
-                                        )
-                                    else:
-                                        logger.warning(
-                                            f"[MFT+Memory] Dump FAILED for {process_name}: "
-                                            f"{dump_result.get('error')}"
-                                        )
-                                    try:
-                                        failed_dump = Path(dump_path)
-                                        if failed_dump.exists():
-                                            failed_dump.unlink()
-                                    except Exception:
-                                        pass
-                                    if artifact_type == 'server_managed_windows_app':
-                                        diag_result = _save_collection_diagnostic_standalone(
-                                            artifact_dir,
-                                            artifact_type,
-                                            '_collection_status.json',
-                                            {
-                                                'collection_status': 'partial',
-                                                'detail_code': 'protected_live_context_unavailable',
-                                                'collected_file_count_before_diagnostic': None,
-                                                'impact': 'Some protected application records may be unavailable in this collection.',
-                                                'operator_action': 'Review collection prerequisites and retry with elevated collection mode when appropriate.',
-                                            },
-                                        )
-                                        if diag_result:
-                                            yield diag_result
-                                    if dump_result.get('requires_admin'):
-                                        if artifact_type == 'server_managed_windows_app':
-                                            logger.warning(
-                                                "[MFT+Memory] Some protected application data may require elevated collection mode."
-                                            )
-                                        else:
-                                            logger.warning(
-                                                "[MFT+Memory] Re-run the collector as Administrator "
-                                                "to collect messenger process memory."
-                                            )
-                            except ImportError:
-                                logger.warning("[MFT+Memory] ProcessMemoryDumper not available (ImportError)")
-                            except Exception as e:
-                                logger.error(f"[MFT+Memory] Error dumping {process_name}: {type(e).__name__}: {e}")
+                        logger.info(
+                            f"[MFT+Memory] {artifact_type}: process_names={process_names}, "
+                            f"already_dumped={already_dumped}"
+                        )
+                        artifact_dir = self.output_dir / artifact_type
+                        artifact_dir.mkdir(exist_ok=True)
+                        yield from _dump_process_memory_for_artifact(
+                            self,
+                            artifact_type, process_names, artifact_dir
+                        )
                         # Collect hardware metadata (for server-side processing)
                         if artifact_type == 'server_managed_windows_app':
                             hw_dir = self.output_dir / artifact_type
@@ -902,6 +1002,14 @@ class LocalMFTCollector(_LocalMFTBase):
                                 yield hw_result
                     else:
                         logger.debug(f"[MFT+Memory] {artifact_type}: collector={at_config.get('collector')}, skipping dump")
+
+    def _get_metadata(
+        self,
+        src_path: str,
+        dst_path: Path,
+        artifact_type: str
+    ) -> Dict[str, Any]:
+        return _build_collected_file_metadata(src_path, Path(dst_path), artifact_type)
 
     def _collect_directory_fallback(
         self,
@@ -1112,76 +1220,17 @@ class LocalMFTCollector(_LocalMFTBase):
                                 progress_callback(result[0])
 
             # 2. Collect process memory dump (if process is running)
-            process_name = config.get('process_name')
-            logger.info(f"[DirFallback+Memory] {artifact_type}: process_name={process_name}, collected={collected_count} files")
-            if process_name:
-                try:
-                    from collectors.process_memory_dumper import ProcessMemoryDumper
-                    dumper = ProcessMemoryDumper()
-                    dump_filename = f"{process_name.replace('.exe', '').lower()}_memory.dmp"
-                    dump_path = str(artifact_dir / dump_filename)
-                    logger.info(f"[DirFallback+Memory] Dumping {process_name} -> {dump_path}")
-                    dump_result = dumper.dump_process_lightweight(process_name, dump_path)
-                    if dump_result.get('success'):
-                        size_mb = dump_result.get('size', 0) / 1024 / 1024
-                        logger.info(f"[DirFallback+Memory] Dump SUCCESS: {dump_filename} ({size_mb:.1f} MB, PID={dump_result.get('pid')})")
-                        yield dump_path, {
-                            'artifact_type': artifact_type,
-                            'original_path': dump_path,
-                            'type': artifact_type,
-                            'name': dump_filename,
-                            'path': dump_path,
-                            'size': dump_result.get('size', 0),
-                            'process_pid': dump_result.get('pid'),
-                            'is_memory_dump': True,
-                        }
-                        collected_count += 1
-                    else:
-                        if artifact_type == 'server_managed_windows_app':
-                            logger.warning(
-                                "[DirFallback+Memory] profile-managed appTalk protected data was only partially prepared."
-                            )
-                        else:
-                            logger.warning(
-                                f"[DirFallback+Memory] Dump FAILED for {process_name}: "
-                                f"{dump_result.get('error')}"
-                            )
-                        try:
-                            failed_dump = Path(dump_path)
-                            if failed_dump.exists():
-                                failed_dump.unlink()
-                        except Exception:
-                            pass
-                        if artifact_type == 'server_managed_windows_app':
-                            diag_result = _save_collection_diagnostic_standalone(
-                                artifact_dir,
-                                artifact_type,
-                                '_collection_status.json',
-                                {
-                                    'collection_status': 'partial',
-                                    'detail_code': 'protected_live_context_unavailable',
-                                    'collected_file_count_before_diagnostic': collected_count,
-                                    'impact': 'Some protected application records may be unavailable in this collection.',
-                                    'operator_action': 'Review collection prerequisites and retry with elevated collection mode when appropriate.',
-                                },
-                            )
-                            if diag_result:
-                                collected_count += 1
-                                yield diag_result
-                        if dump_result.get('requires_admin'):
-                            if artifact_type == 'server_managed_windows_app':
-                                logger.warning(
-                                    "[DirFallback+Memory] Some protected application data may require elevated collection mode."
-                                )
-                            else:
-                                logger.warning(
-                                    "[DirFallback+Memory] Re-run the collector as Administrator "
-                                    "to collect messenger process memory."
-                                )
-                except ImportError:
-                    logger.warning("[DirFallback+Memory] ProcessMemoryDumper not available (ImportError)")
-                except Exception as e:
-                    logger.error(f"[DirFallback+Memory] Error dumping {process_name}: {type(e).__name__}: {e}")
+            process_names = _messenger_process_names(config)
+            logger.info(
+                f"[DirFallback+Memory] {artifact_type}: process_names={process_names}, "
+                f"collected={collected_count} files"
+            )
+            for result in _dump_process_memory_for_artifact(
+                self,
+                artifact_type, process_names, artifact_dir
+            ):
+                collected_count += 1
+                yield result
 
             # 3. Collect hardware metadata (for server-side processing)
             if artifact_type == 'server_managed_windows_app':
@@ -2367,10 +2416,10 @@ class ArtifactCollector:
         # ==========================================================
         # Process memory dump (live system only, for PC messengers)
         # ==========================================================
-        process_name = artifact_info.get('process_name')
-        if process_name:
+        process_names = _messenger_process_names(artifact_info)
+        if process_names:
             yield from self._dump_process_memory(
-                artifact_type, process_name, artifact_dir
+                artifact_type, process_names, artifact_dir
             )
 
         # ==========================================================
@@ -2932,7 +2981,7 @@ class ArtifactCollector:
         Digital forensics principles:
         - Apply extension filter (include or exclude)
         - Include deleted files
-        - Support user_path as string or list (e.g., WeChat dual layout)
+        - Support user_path as string or list (e.g., profile-managed dual layout)
         """
         users_dir = Path(r'C:\Users')
 
@@ -3079,10 +3128,10 @@ class ArtifactCollector:
                 logger.debug(f"[MFT] System path {sys_path} not found or inaccessible: {e}")
 
         # Process memory dump (live system only, for PC messengers)
-        process_name = artifact_info.get('process_name')
-        if process_name:
+        process_names = _messenger_process_names(artifact_info)
+        if process_names:
             yield from self._dump_process_memory(
-                artifact_type, process_name, artifact_dir
+                artifact_type, process_names, artifact_dir
             )
 
         # Hardware metadata (for server-side application data processing)
@@ -3101,7 +3150,7 @@ class ArtifactCollector:
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         Collect artifacts from user profile directories using MFT.
-        Supports user_path as string or list (e.g., WeChat dual layout).
+        Supports user_path as string or list (e.g., profile-managed dual layout).
         """
         users_dir = Path(r'C:\Users')
 
@@ -3187,64 +3236,16 @@ class ArtifactCollector:
     def _dump_process_memory(
         self,
         artifact_type: str,
-        process_name: str,
+        process_name: Any,
         artifact_dir: Path,
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         Dump process memory for forensic analysis (live system only).
         Gracefully fails on dead disk (E01) or when process is not running.
         """
-        if getattr(self, f'_memory_dumped_{artifact_type}', False):
-            return  # Already dumped in this session
-        setattr(self, f'_memory_dumped_{artifact_type}', True)
-
-        try:
-            from collectors.process_memory_dumper import ProcessMemoryDumper
-            dumper = ProcessMemoryDumper()
-            dump_filename = f"{process_name.replace('.exe', '').lower()}_memory.dmp"
-            dump_path = str(artifact_dir / dump_filename)
-
-            logger.debug(f"[MEMORY] Dumping {process_name}...")
-            dump_result = dumper.dump_process_lightweight(process_name, dump_path)
-
-            if dump_result.get('success'):
-                size_mb = dump_result.get('size', 0) / 1024 / 1024
-                logger.debug(f"[MEMORY] Dump success: {dump_filename} ({size_mb:.1f} MB)")
-                yield dump_path, {
-                    'type': artifact_type,
-                    'name': dump_filename,
-                    'path': dump_path,
-                    'size': dump_result.get('size', 0),
-                    'process_pid': dump_result.get('pid'),
-                    'is_memory_dump': True,
-                    'collection_method': 'process_memory_dump',
-                }
-            else:
-                logger.debug(f"[MEMORY] Dump skipped: {dump_result.get('error', 'process not found')}")
-                try:
-                    failed_dump = Path(dump_path)
-                    if failed_dump.exists():
-                        failed_dump.unlink()
-                except Exception:
-                    pass
-                if artifact_type == 'server_managed_windows_app':
-                    diag_result = _save_collection_diagnostic_standalone(
-                        artifact_dir,
-                        artifact_type,
-                        '_collection_status.json',
-                        {
-                            'collection_status': 'partial',
-                            'detail_code': 'protected_live_context_unavailable',
-                            'impact': 'Some protected application records may be unavailable in this collection.',
-                            'operator_action': 'Review collection prerequisites and retry with elevated collection mode when appropriate.',
-                        },
-                    )
-                    if diag_result:
-                        yield diag_result
-        except ImportError:
-            logger.debug("[MEMORY] ProcessMemoryDumper not available")
-        except Exception as e:
-            logger.debug(f"[MEMORY] Error: {e}")
+        yield from _dump_process_memory_for_artifact(
+            self, artifact_type, process_name, artifact_dir
+        )
 
     def _collect_legacy(
         self,
@@ -3589,68 +3590,11 @@ class ArtifactCollector:
 
         # 2. Collect process memory dump (only once per artifact type)
         artifact_info = ARTIFACT_TYPES.get(artifact_type, {})
-        process_name = artifact_info.get('process_name')
-
-        if process_name and not getattr(self, f'_memory_dumped_{artifact_type}', False):
-            setattr(self, f'_memory_dumped_{artifact_type}', True)
-
-            try:
-                from collectors.process_memory_dumper import ProcessMemoryDumper
-                dumper = ProcessMemoryDumper()
-                dump_filename = f"{process_name.replace('.exe', '').lower()}_memory.dmp"
-                dump_path = str(output_dir / dump_filename)
-
-                logger.debug(f"[MEMORY] Dumping {process_name}...")
-                dump_result = dumper.dump_process_lightweight(process_name, dump_path)
-
-                if dump_result.get('success'):
-                    size_mb = dump_result.get('size', 0) / 1024 / 1024
-                    logger.debug(f"[MEMORY] Dump success: {dump_filename} ({size_mb:.1f} MB)")
-                    yield dump_path, {
-                        'type': artifact_type,
-                        'name': dump_filename,
-                        'path': dump_path,
-                        'size': dump_result.get('size', 0),
-                        'process_pid': dump_result.get('pid'),
-                        'is_memory_dump': True,
-                        'collection_method': 'process_memory_dump',
-                    }
-                else:
-                    logger.debug(f"[MEMORY] Dump failed: {dump_result.get('error')}")
-                    try:
-                        failed_dump = Path(dump_path)
-                        if failed_dump.exists():
-                            failed_dump.unlink()
-                    except Exception:
-                        pass
-                    if artifact_type == 'server_managed_windows_app':
-                        diag_result = _save_collection_diagnostic_standalone(
-                            output_dir,
-                            artifact_type,
-                            '_collection_status.json',
-                            {
-                                'collection_status': 'partial',
-                                'detail_code': 'protected_live_context_unavailable',
-                                'impact': 'Some protected application records may be unavailable in this collection.',
-                                'operator_action': 'Review collection prerequisites and retry with elevated collection mode when appropriate.',
-                            },
-                        )
-                        if diag_result:
-                            yield diag_result
-                    if dump_result.get('requires_admin'):
-                        if artifact_type == 'server_managed_windows_app':
-                            logger.warning(
-                                "[MEMORY] Some protected application data may require elevated collection mode."
-                            )
-                        else:
-                            logger.warning(
-                                "[MEMORY] Re-run the collector as Administrator to collect "
-                                "messenger process memory."
-                            )
-            except ImportError:
-                logger.debug("[MEMORY] ProcessMemoryDumper not available")
-            except Exception as e:
-                logger.debug(f"[MEMORY] Error: {e}")
+        process_names = _messenger_process_names(artifact_info)
+        if process_names:
+            yield from self._dump_process_memory(
+                artifact_type, process_names, output_dir
+            )
 
         # 3. Collect hardware metadata for downstream processing.
         if artifact_type == 'server_managed_windows_app':
@@ -4055,51 +3999,7 @@ class ArtifactCollector:
         artifact_type: str
     ) -> Dict[str, Any]:
         """Generate metadata for a collected file (legacy)"""
-        src = Path(src_path)
-
-        # Calculate hash (skip for files larger than 100MB to avoid performance hangs)
-        MAX_HASH_SIZE = 100 * 1024 * 1024  # 100MB
-        file_size = dst_path.stat().st_size
-        hash_skipped = False
-
-        if file_size <= MAX_HASH_SIZE:
-            sha256 = hashlib.sha256()
-            md5 = hashlib.md5(usedforsecurity=False)
-            with open(dst_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(65536), b''):
-                    sha256.update(chunk)
-                    md5.update(chunk)
-            sha256_hex = sha256.hexdigest()
-            md5_hex = md5.hexdigest()
-        else:
-            sha256_hex = ''
-            md5_hex = ''
-            hash_skipped = True
-
-        try:
-            stat = src.stat()
-            timestamps = {
-                'created': datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc).isoformat(),
-                'modified': datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                'accessed': datetime.fromtimestamp(stat.st_atime, tz=timezone.utc).isoformat(),
-            }
-        except (OSError, ValueError):
-            timestamps = {}
-
-        metadata = {
-            'artifact_type': artifact_type,
-            'original_path': str(src_path),
-            'filename': src.name,
-            'size': file_size,
-            'sha256': sha256_hex,
-            'md5': md5_hex,
-            'timestamps': timestamps,
-            'collected_at': datetime.utcnow().isoformat(),
-            'collection_method': 'legacy_file_api',
-        }
-        if hash_skipped:
-            metadata['hash_skipped'] = True
-        return metadata
+        return _build_collected_file_metadata(src_path, Path(dst_path), artifact_type)
 
     # =========================================================================
     # Android Forensics Collection Methods
