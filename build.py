@@ -64,7 +64,10 @@ def _locale_from_env(locale_code: str) -> dict:
     raw = os.environ.get(f"COLLECTOR_UI_LOCALE_{upper}_JSON")
     raw_b64 = os.environ.get(f"COLLECTOR_UI_LOCALE_{upper}_JSON_B64")
     if raw_b64:
-        raw = base64.b64decode(raw_b64).decode("utf-8")
+        try:
+            raw = base64.b64decode(raw_b64, validate=True).decode("utf-8")
+        except Exception:
+            raw = raw_b64
     if not raw:
         return {}
     data = json.loads(raw)
