@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cwctype>
 #include <exception>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -55,6 +56,7 @@
 fptr_XWF_Read XWF_Read = NULL;
 fptr_XWF_GetItemName XWF_GetItemName = NULL;
 fptr_XWF_GetItemSize XWF_GetItemSize = NULL;
+fptr_XWF_GetItemCount XWF_GetItemCount = NULL;
 fptr_XWF_GetItemInformation XWF_GetItemInformation = NULL;
 fptr_XWF_GetItemType XWF_GetItemType = NULL;
 fptr_XWF_GetItemParent XWF_GetItemParent = NULL;
@@ -86,6 +88,7 @@ LONG __stdcall XT_RetrieveFunctionPointers() {
     UNJAENA_LOAD_XWF_FN(XWF_Read);
     UNJAENA_LOAD_XWF_FN(XWF_GetItemName);
     UNJAENA_LOAD_XWF_FN(XWF_GetItemSize);
+    UNJAENA_LOAD_XWF_FN(XWF_GetItemCount);
     UNJAENA_LOAD_XWF_FN(XWF_GetItemInformation);
     UNJAENA_LOAD_XWF_FN(XWF_GetItemType);
     UNJAENA_LOAD_XWF_FN(XWF_GetItemParent);
@@ -115,16 +118,16 @@ static const wchar_t* kXtParamPrefix = L"XTParam:UNJAENA:";
 static const DWORD kReadChunkBytes = 1024 * 1024;
 static const DWORD kUploadHeartbeatItemInterval = 50000;
 static const ULONGLONG kUploadHeartbeatMs = 5ULL * 60ULL * 1000ULL;
+static const uint64_t kProgressUpdateItemInterval = 1000;
 static const uint64_t kMaxDirectUploadBytes = 1000000000ULL;
 
 #define IDC_HOST_EDIT 1001
 #define IDC_PORT_EDIT 1002
 #define IDC_SSL_CHECK 1003
 #define IDC_TOKEN_EDIT 1004
-#define IDC_MAX_UPLOADS_EDIT 1005
-#define IDC_CONSENT_CHECK 1006
-#define IDC_OK_BUTTON 1007
-#define IDC_CANCEL_BUTTON 1008
+#define IDC_CONSENT_CHECK 1005
+#define IDC_OK_BUTTON 1006
+#define IDC_CANCEL_BUTTON 1007
 
 struct Config {
     std::wstring server_host;
@@ -154,6 +157,16 @@ struct ProfileTarget {
     uint64_t max_bytes;
 };
 
+struct ProfileMatcher {
+    std::string artifact_type;
+    uint64_t max_bytes;
+    bool path_pattern;
+    std::string pattern;
+    std::string suffix_pattern;
+    std::string extension_key;
+    size_t order;
+};
+
 struct ItemInfo {
     LONG item_id;
     HANDLE item;
@@ -176,22 +189,32 @@ struct HttpResponse {
 
 static Config g_config;
 static std::vector<ProfileTarget> g_profile_targets;
+static std::vector<ProfileMatcher> g_profile_generic_matchers;
+static std::map<std::string, std::vector<ProfileMatcher> > g_profile_matchers_by_extension;
 static HANDLE g_volume = NULL;
 static HWND g_main_window = NULL;
 static DWORD g_operation_type = XT_ACTION_RUN;
 static HINSTANCE g_module_instance = NULL;
 static bool g_ready = false;
 static bool g_cancelled_by_user = false;
+static std::wstring g_last_failure_message;
 static uint64_t g_processed_count = 0;
 static uint64_t g_uploaded_count = 0;
 static uint64_t g_skipped_count = 0;
 static uint64_t g_failed_count = 0;
+static uint64_t g_total_item_count = 0;
 static uint64_t g_skipped_no_profile_match = 0;
 static uint64_t g_skipped_zero_byte = 0;
 static uint64_t g_skipped_directory = 0;
 static uint64_t g_skipped_too_large = 0;
+static bool g_finalize_attempted = false;
+static uint64_t g_last_finalized_processed = 0;
+static uint64_t g_last_finalized_uploaded = 0;
+static uint64_t g_last_finalized_skipped = 0;
+static uint64_t g_last_finalized_failed = 0;
 static ULONGLONG g_last_heartbeat_ms = 0;
 static uint64_t g_last_heartbeat_item = 0;
+static uint64_t g_last_progress_item = 0;
 
 static std::string Utf8FromWide(const std::wstring& value) {
     if (value.empty()) {
@@ -250,6 +273,56 @@ static std::wstring LowerWide(std::wstring value) {
         value.begin(),
         [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
     return value;
+}
+
+static uint64_t ParseUint64(const std::wstring& value, uint64_t fallback);
+
+static std::wstring TrimWide(const std::wstring& value) {
+    size_t start = 0;
+    while (start < value.size() && std::iswspace(value[start])) {
+        ++start;
+    }
+    size_t end = value.size();
+    while (end > start && std::iswspace(value[end - 1])) {
+        --end;
+    }
+    return value.substr(start, end - start);
+}
+
+static void NormalizeConfig(Config* config) {
+    if (config == NULL) {
+        return;
+    }
+    config->server_host = TrimWide(config->server_host);
+    config->session_token = TrimWide(config->session_token);
+
+    std::wstring lowered_host = LowerWide(config->server_host);
+    if (lowered_host.compare(0, 8, L"https://") == 0) {
+        config->use_ssl = true;
+        config->server_host = config->server_host.substr(8);
+    } else if (lowered_host.compare(0, 7, L"http://") == 0) {
+        config->use_ssl = false;
+        config->server_host = config->server_host.substr(7);
+    }
+    size_t slash = config->server_host.find_first_of(L"/\\");
+    if (slash != std::wstring::npos) {
+        config->server_host = config->server_host.substr(0, slash);
+    }
+    size_t colon = config->server_host.find_last_of(L':');
+    if (colon != std::wstring::npos && colon + 1 < config->server_host.size()) {
+        std::wstring port_part = config->server_host.substr(colon + 1);
+        bool numeric = !port_part.empty();
+        for (size_t i = 0; i < port_part.size(); ++i) {
+            if (!std::iswdigit(port_part[i])) {
+                numeric = false;
+                break;
+            }
+        }
+        if (numeric) {
+            config->server_port = static_cast<INTERNET_PORT>(ParseUint64(port_part, config->server_port));
+            config->server_host = config->server_host.substr(0, colon);
+        }
+    }
 }
 
 static std::wstring BaseName(const std::wstring& path) {
@@ -325,9 +398,45 @@ static std::string CompactError(const std::string& body) {
 }
 
 static std::wstring DiagnosticLogPath() {
+    const wchar_t* stable_path = L"C:\\tmp\\UnjaenaXwfCollector.log";
+    CreateDirectoryW(L"C:\\tmp", NULL);
+    HANDLE stable_file = CreateFileW(
+        stable_path,
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
+    if (stable_file != INVALID_HANDLE_VALUE) {
+        CloseHandle(stable_file);
+        return stable_path;
+    }
+
+    const wchar_t* d_path = L"D:\\UnjaenaXwfCollector.log";
+    HANDLE d_file = CreateFileW(
+        d_path,
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
+    if (d_file != INVALID_HANDLE_VALUE) {
+        CloseHandle(d_file);
+        return d_path;
+    }
+
     wchar_t temp_path[MAX_PATH] = {0};
     DWORD len = GetTempPathW(static_cast<DWORD>(sizeof(temp_path) / sizeof(temp_path[0])), temp_path);
     if (len == 0 || len >= static_cast<DWORD>(sizeof(temp_path) / sizeof(temp_path[0]))) {
+        wchar_t program_data[MAX_PATH] = {0};
+        DWORD env_len = GetEnvironmentVariableW(L"ProgramData", program_data, static_cast<DWORD>(sizeof(program_data) / sizeof(program_data[0])));
+        if (env_len > 0 && env_len < static_cast<DWORD>(sizeof(program_data) / sizeof(program_data[0]))) {
+            std::wstring fallback(program_data);
+            fallback += L"\\Unjaena\\UnjaenaXwfCollector.log";
+            return fallback;
+        }
         return L"UnjaenaXwfCollector.log";
     }
     std::wstring path(temp_path);
@@ -338,15 +447,49 @@ static std::wstring DiagnosticLogPath() {
     return path;
 }
 
-static void AppendDiagnosticLog(const std::wstring& message) {
+static HANDLE OpenDiagnosticLogFile() {
+    std::wstring path = DiagnosticLogPath();
+    size_t slash = path.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) {
+        std::wstring dir = path.substr(0, slash);
+        if (!dir.empty()) {
+            CreateDirectoryW(dir.c_str(), NULL);
+        }
+    }
+
     HANDLE file = CreateFileW(
-        DiagnosticLogPath().c_str(),
+        path.c_str(),
         FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         NULL,
         OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL,
         NULL);
+    if (file != INVALID_HANDLE_VALUE) {
+        return file;
+    }
+
+    wchar_t program_data[MAX_PATH] = {0};
+    DWORD env_len = GetEnvironmentVariableW(L"ProgramData", program_data, static_cast<DWORD>(sizeof(program_data) / sizeof(program_data[0])));
+    if (env_len == 0 || env_len >= static_cast<DWORD>(sizeof(program_data) / sizeof(program_data[0]))) {
+        return INVALID_HANDLE_VALUE;
+    }
+    std::wstring fallback_dir(program_data);
+    fallback_dir += L"\\Unjaena";
+    CreateDirectoryW(fallback_dir.c_str(), NULL);
+    std::wstring fallback_path = fallback_dir + L"\\UnjaenaXwfCollector.log";
+    return CreateFileW(
+        fallback_path.c_str(),
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
+}
+
+static void AppendDiagnosticLog(const std::wstring& message) {
+    HANDLE file = OpenDiagnosticLogFile();
     if (file == INVALID_HANDLE_VALUE) {
         return;
     }
@@ -378,6 +521,15 @@ static void AppendDiagnosticLog(const std::wstring& message) {
     CloseHandle(file);
 }
 
+static void SetLastFailure(const std::wstring& message) {
+    g_last_failure_message = message;
+    AppendDiagnosticLog(L"FAILURE: " + message);
+}
+
+static void SetLastFailureUtf8(const std::string& message) {
+    SetLastFailure(WideFromUtf8(message));
+}
+
 static void OutputMessage(const std::wstring& message) {
     AppendDiagnosticLog(message);
 #if UNJAENA_XWF_HAS_OFFICIAL_API
@@ -392,6 +544,92 @@ static void OutputMessage(const std::wstring& message) {
 
 static void OutputMessageUtf8(const std::string& message) {
     OutputMessage(WideFromUtf8(message));
+}
+
+static void HideXwfProgress() {
+#if UNJAENA_XWF_HAS_OFFICIAL_API
+    if (XWF_HideProgress != NULL) {
+        XWF_HideProgress();
+    }
+#endif
+}
+
+static void ShowXwfProgress() {
+#if UNJAENA_XWF_HAS_OFFICIAL_API
+    if (XWF_ShowProgress != NULL) {
+        wchar_t caption[] = L"unJaena X-Ways collector";
+        XWF_ShowProgress(caption, 0);
+    }
+#endif
+}
+
+static bool HasReliableProgressTotal() {
+    return g_total_item_count >= 100 && g_total_item_count >= g_processed_count;
+}
+
+static void RefreshXwfTotalItemCount() {
+#if UNJAENA_XWF_HAS_OFFICIAL_API
+    if (XWF_GetItemCount != NULL) {
+        uint64_t count = static_cast<uint64_t>(XWF_GetItemCount(NULL));
+        if (count >= 100 || count >= g_processed_count) {
+            g_total_item_count = count;
+        }
+        if (g_processed_count > 0 && g_total_item_count < g_processed_count) {
+            g_total_item_count = 0;
+        }
+    }
+#endif
+}
+
+static DWORD BuildXwfProgressPercent() {
+    if (HasReliableProgressTotal()) {
+        uint64_t percent = (g_processed_count * 100ULL) / g_total_item_count;
+        if (percent == 0) {
+            return 1;
+        }
+        return static_cast<DWORD>(percent >= 100ULL ? 99ULL : percent);
+    }
+    if (g_processed_count == 0) {
+        return 1;
+    }
+    return static_cast<DWORD>(((g_processed_count / kProgressUpdateItemInterval) % 98ULL) + 1ULL);
+}
+
+static void UpdateXwfProgress(bool force) {
+#if UNJAENA_XWF_HAS_OFFICIAL_API
+    if (!force && g_processed_count - g_last_progress_item < kProgressUpdateItemInterval) {
+        return;
+    }
+    g_last_progress_item = g_processed_count;
+    if (XWF_SetProgressPercentage != NULL) {
+        XWF_SetProgressPercentage(BuildXwfProgressPercent());
+    }
+    if (XWF_SetProgressDescription != NULL) {
+        std::wstring message = L"Scanning: checked ";
+        message += std::to_wstring(g_processed_count);
+        if (HasReliableProgressTotal()) {
+            message += L"/";
+            message += std::to_wstring(g_total_item_count);
+        }
+        message += L", uploaded ";
+        message += std::to_wstring(g_uploaded_count);
+        if (g_failed_count > 0) {
+            message += L", issues ";
+            message += std::to_wstring(g_failed_count);
+        }
+        XWF_SetProgressDescription(const_cast<wchar_t*>(message.c_str()));
+    }
+#else
+    UNREFERENCED_PARAMETER(force);
+#endif
+}
+
+static bool ShouldStopXwfCollection() {
+#if UNJAENA_XWF_HAS_OFFICIAL_API
+    return XWF_ShouldStop != NULL && XWF_ShouldStop();
+#else
+    return false;
+#endif
 }
 
 static uint64_t ParseUint64(const std::wstring& value, uint64_t fallback) {
@@ -421,10 +659,9 @@ struct DialogState {
     HWND port_edit;
     HWND ssl_check;
     HWND token_edit;
-    HWND max_uploads_edit;
     HWND consent_check;
     bool accepted;
-    DialogState() : config(NULL), host_edit(NULL), port_edit(NULL), ssl_check(NULL), token_edit(NULL), max_uploads_edit(NULL), consent_check(NULL), accepted(false) {}
+    DialogState() : config(NULL), host_edit(NULL), port_edit(NULL), ssl_check(NULL), token_edit(NULL), consent_check(NULL), accepted(false) {}
 };
 
 static HWND MakeControl(HWND parent, const wchar_t* klass, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id) {
@@ -463,15 +700,11 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
             MakeControl(hwnd, L"STATIC", L"Session token", 0, 16, 84, 100, 22, 0);
             state->token_edit = MakeControl(hwnd, L"EDIT", state->config->session_token.c_str(), WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL, 130, 84, 260, 22, IDC_TOKEN_EDIT);
-            MakeControl(hwnd, L"STATIC", L"Max uploads", 0, 16, 118, 100, 22, 0);
-            wchar_t max_text[32] = {0};
-            wsprintfW(max_text, L"%llu", static_cast<unsigned long long>(state->config->max_uploads));
-            state->max_uploads_edit = MakeControl(hwnd, L"EDIT", max_text, WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL, 130, 118, 100, 22, IDC_MAX_UPLOADS_EDIT);
-            state->consent_check = MakeControl(hwnd, L"BUTTON", L"I confirm I have legal authority and consent to collect/upload this evidence.", BS_AUTOCHECKBOX | BS_MULTILINE, 16, 152, 380, 42, IDC_CONSENT_CHECK);
+            state->consent_check = MakeControl(hwnd, L"BUTTON", L"I confirm I have legal authority and consent to collect/upload this evidence.", BS_AUTOCHECKBOX | BS_MULTILINE, 16, 118, 380, 42, IDC_CONSENT_CHECK);
             SendMessageW(state->consent_check, BM_SETCHECK, state->config->collection_consent_accepted ? BST_CHECKED : BST_UNCHECKED, 0);
 
-            MakeControl(hwnd, L"BUTTON", L"Start", BS_DEFPUSHBUTTON, 210, 210, 80, 28, IDC_OK_BUTTON);
-            MakeControl(hwnd, L"BUTTON", L"Cancel", 0, 310, 210, 80, 28, IDC_CANCEL_BUTTON);
+            MakeControl(hwnd, L"BUTTON", L"Start", BS_DEFPUSHBUTTON, 210, 176, 80, 28, IDC_OK_BUTTON);
+            MakeControl(hwnd, L"BUTTON", L"Cancel", 0, 310, 176, 80, 28, IDC_CANCEL_BUTTON);
 
             HWND child = GetWindow(hwnd, GW_CHILD);
             while (child != NULL) {
@@ -492,8 +725,8 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 cfg.server_port = static_cast<INTERNET_PORT>(ParseUint64(GetWindowTextWide(state->port_edit), 443));
                 cfg.use_ssl = SendMessageW(state->ssl_check, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 cfg.session_token = GetWindowTextWide(state->token_edit);
-                cfg.max_uploads = ParseUint64(GetWindowTextWide(state->max_uploads_edit), 0);
                 cfg.collection_consent_accepted = SendMessageW(state->consent_check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                NormalizeConfig(&cfg);
 
                 if (cfg.server_host.empty() || cfg.session_token.find(L":") == std::wstring::npos) {
                     MessageBoxW(hwnd, L"Enter server host and the full session-id:secret token from the case page.", L"unJaena X-Ways Collector", MB_OK | MB_ICONWARNING);
@@ -541,7 +774,7 @@ static bool ShowConfigDialog(HWND parent, Config* config) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         430,
-        290,
+        256,
         parent,
         NULL,
         wc.hInstance,
@@ -629,8 +862,8 @@ static void ApplyConfigToken(Config* config, const std::wstring& token) {
     if (equal == std::wstring::npos) {
         return;
     }
-    std::wstring key = LowerWide(token.substr(0, equal));
-    std::wstring value = token.substr(equal + 1);
+    std::wstring key = LowerWide(TrimWide(token.substr(0, equal)));
+    std::wstring value = TrimWide(token.substr(equal + 1));
     if (key == L"host" || key == L"server_host") {
         config->server_host = value;
     } else if (key == L"port" || key == L"server_port") {
@@ -939,6 +1172,23 @@ static HINTERNET OpenHttpSession() {
         0);
 }
 
+static bool ShouldRetryHttp(const HttpResponse& response) {
+    return response.status == 0
+        || response.status == 408
+        || response.status == 429
+        || response.status == 500
+        || response.status == 502
+        || response.status == 503
+        || response.status == 504;
+}
+
+static void SleepBeforeRetry(int attempt) {
+    DWORD capped = static_cast<DWORD>(attempt < 1 ? 1 : (attempt > 4 ? 4 : attempt));
+    DWORD base_delay = 500UL << (capped - 1);
+    DWORD jitter = GetTickCount() % 250UL;
+    Sleep(base_delay + jitter);
+}
+
 static HttpResponse HttpRequest(
     const Config& cfg,
     const wchar_t* method,
@@ -947,7 +1197,8 @@ static HttpResponse HttpRequest(
     const std::wstring& content_type,
     const std::string& ticket = std::string(),
     const std::string& session_id = std::string(),
-    const std::string& collection_token = std::string()) {
+    const std::string& collection_token = std::string(),
+    DWORD timeout = 120000) {
     HttpResponse response;
     HINTERNET session = OpenHttpSession();
     if (session == NULL) {
@@ -969,7 +1220,6 @@ static HttpResponse HttpRequest(
         WinHttpCloseHandle(session);
         return response;
     }
-    DWORD timeout = 120000;
     WinHttpSetTimeouts(request, timeout, timeout, timeout, timeout);
     std::wstring headers = BuildHeaders(content_type, ticket, session_id, collection_token);
     BOOL sent = WinHttpSendRequest(
@@ -988,6 +1238,28 @@ static HttpResponse HttpRequest(
     WinHttpCloseHandle(request);
     WinHttpCloseHandle(connect);
     WinHttpCloseHandle(session);
+    return response;
+}
+
+static HttpResponse HttpRequestWithRetry(
+    const Config& cfg,
+    const wchar_t* method,
+    const std::string& path,
+    const std::string& body,
+    const std::wstring& content_type,
+    const std::string& ticket = std::string(),
+    const std::string& session_id = std::string(),
+    const std::string& collection_token = std::string(),
+    int max_attempts = 4,
+    DWORD timeout = 120000) {
+    HttpResponse response;
+    for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+        response = HttpRequest(cfg, method, path, body, content_type, ticket, session_id, collection_token, timeout);
+        if (attempt >= max_attempts || !ShouldRetryHttp(response)) {
+            return response;
+        }
+        SleepBeforeRetry(attempt);
+    }
     return response;
 }
 
@@ -1087,6 +1359,19 @@ static HttpResponse HttpPutItem(const Config& cfg, const std::string& path, HAND
     return response;
 }
 
+static HttpResponse HttpPutItemWithRetry(const Config& cfg, const std::string& path, HANDLE item, uint64_t size, const std::string& ticket) {
+    HttpResponse response;
+    const int max_attempts = 4;
+    for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+        response = HttpPutItem(cfg, path, item, size, ticket);
+        if (attempt >= max_attempts || !ShouldRetryHttp(response)) {
+            return response;
+        }
+        SleepBeforeRetry(attempt);
+    }
+    return response;
+}
+
 static bool WildcardMatch(const std::string& text, const std::string& pattern) {
     size_t ti = 0;
     size_t pi = 0;
@@ -1123,33 +1408,146 @@ static std::vector<std::string> PatternVariants(const std::string& pattern, cons
     return variants;
 }
 
+static std::string NormalizePattern(const std::string& pattern) {
+    std::string normalized = LowerAscii(pattern);
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    while (normalized.find("//") != std::string::npos) {
+        size_t pos = normalized.find("//");
+        normalized.replace(pos, 2, "/");
+    }
+    return normalized;
+}
+
+static std::string NormalizeExtensionKey(const std::string& extension, const std::string& normalized_name) {
+    std::string value;
+    size_t dot = normalized_name.find_last_of('.');
+    if (dot != std::string::npos && dot + 1 < normalized_name.size()) {
+        value = normalized_name.substr(dot);
+    }
+    if (value.empty()) {
+        value = NormalizePattern(extension);
+    }
+    if (value.empty() || value.find('/') != std::string::npos || value.find('\\') != std::string::npos) {
+        return std::string();
+    }
+    if (value[0] != '.') {
+        value = "." + value;
+    }
+    if (value.find('*') != std::string::npos || value.find('?') != std::string::npos ||
+        value.find('[') != std::string::npos || value.find(']') != std::string::npos) {
+        return std::string();
+    }
+    return value;
+}
+
+static std::string ExtractPatternExtensionKey(const std::string& pattern) {
+    std::string normalized = NormalizePattern(pattern);
+    if (normalized.empty()) {
+        return std::string();
+    }
+    size_t slash = normalized.find_last_of('/');
+    std::string leaf = slash == std::string::npos ? normalized : normalized.substr(slash + 1);
+    size_t dot = leaf.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= leaf.size()) {
+        return std::string();
+    }
+    std::string extension = leaf.substr(dot);
+    if (extension.find('*') != std::string::npos || extension.find('?') != std::string::npos ||
+        extension.find('[') != std::string::npos || extension.find(']') != std::string::npos) {
+        return std::string();
+    }
+    return extension;
+}
+
 static bool IsSourceFileTarget(const ProfileTarget& target) {
     std::string kind = LowerAscii(target.kind);
     return kind == "source_file" || kind == "source_upload" || kind == "evidence_source";
 }
 
-static std::string MatchProfileArtifact(const ItemInfo& item) {
+static std::vector<ProfileMatcher> MergeProfileMatchers(
+    const std::vector<ProfileMatcher>& generic,
+    const std::vector<ProfileMatcher>& specific) {
+    std::vector<ProfileMatcher> merged;
+    merged.reserve(generic.size() + specific.size());
+    size_t g = 0;
+    size_t s = 0;
+    while (g < generic.size() || s < specific.size()) {
+        const ProfileMatcher* next_generic = g < generic.size() ? &generic[g] : NULL;
+        const ProfileMatcher* next_specific = s < specific.size() ? &specific[s] : NULL;
+        if (next_specific == NULL || (next_generic != NULL && next_generic->order <= next_specific->order)) {
+            merged.push_back(*next_generic);
+            ++g;
+        } else {
+            merged.push_back(*next_specific);
+            ++s;
+        }
+    }
+    return merged;
+}
+
+static void BuildProfileMatcherIndex() {
+    g_profile_generic_matchers.clear();
+    g_profile_matchers_by_extension.clear();
+    std::map<std::string, std::vector<ProfileMatcher> > extension_specific;
+    size_t order = 0;
+
     for (size_t i = 0; i < g_profile_targets.size(); ++i) {
         const ProfileTarget& target = g_profile_targets[i];
         if (target.artifact_type.empty() || IsSourceFileTarget(target)) {
             continue;
         }
-        if (target.max_bytes > 0 && item.size > target.max_bytes) {
-            continue;
-        }
         for (size_t j = 0; j < target.patterns.size(); ++j) {
-            std::vector<std::string> variants = PatternVariants(target.patterns[j], item.extension);
+            std::vector<std::string> variants = PatternVariants(target.patterns[j], std::string());
             for (size_t k = 0; k < variants.size(); ++k) {
-                const std::string& pattern = variants[k];
-                bool path_pattern = pattern.find('/') != std::string::npos || pattern.find(':') != std::string::npos;
-                const std::string& candidate = path_pattern ? item.normalized_path : item.normalized_name;
-                if (WildcardMatch(candidate, pattern)) {
-                    return target.artifact_type;
+                std::string pattern = NormalizePattern(variants[k]);
+                if (pattern.empty()) {
+                    continue;
                 }
-                if (path_pattern && !pattern.empty() && pattern[0] != '*' && WildcardMatch(item.normalized_path, "*" + pattern)) {
-                    return target.artifact_type;
+                ProfileMatcher matcher;
+                matcher.artifact_type = target.artifact_type;
+                matcher.max_bytes = target.max_bytes;
+                matcher.path_pattern = pattern.find('/') != std::string::npos || pattern.find(':') != std::string::npos;
+                matcher.pattern = pattern;
+                matcher.extension_key = ExtractPatternExtensionKey(pattern);
+                matcher.order = order++;
+                if (matcher.path_pattern && !pattern.empty() && pattern[0] != '*') {
+                    matcher.suffix_pattern = "*" + pattern;
+                }
+                if (matcher.extension_key.empty()) {
+                    g_profile_generic_matchers.push_back(matcher);
+                } else {
+                    extension_specific[matcher.extension_key].push_back(matcher);
                 }
             }
+        }
+    }
+
+    for (std::map<std::string, std::vector<ProfileMatcher> >::const_iterator it = extension_specific.begin();
+         it != extension_specific.end(); ++it) {
+        g_profile_matchers_by_extension[it->first] = MergeProfileMatchers(g_profile_generic_matchers, it->second);
+    }
+}
+
+static std::string MatchProfileArtifact(const ItemInfo& item) {
+    std::string extension_key = NormalizeExtensionKey(item.extension, item.normalized_name);
+    const std::vector<ProfileMatcher>* candidates = &g_profile_generic_matchers;
+    std::map<std::string, std::vector<ProfileMatcher> >::const_iterator indexed =
+        g_profile_matchers_by_extension.find(extension_key);
+    if (!extension_key.empty() && indexed != g_profile_matchers_by_extension.end()) {
+        candidates = &indexed->second;
+    }
+
+    for (size_t i = 0; i < candidates->size(); ++i) {
+        const ProfileMatcher& matcher = (*candidates)[i];
+        if (matcher.max_bytes > 0 && item.size > matcher.max_bytes) {
+            continue;
+        }
+        const std::string& candidate = matcher.path_pattern ? item.normalized_path : item.normalized_name;
+        if (WildcardMatch(candidate, matcher.pattern)) {
+            return matcher.artifact_type;
+        }
+        if (!matcher.suffix_pattern.empty() && WildcardMatch(item.normalized_path, matcher.suffix_pattern)) {
+            return matcher.artifact_type;
         }
     }
     return std::string();
@@ -1158,6 +1556,8 @@ static std::string MatchProfileArtifact(const ItemInfo& item) {
 static bool ParseCollectionProfile(const std::string& body) {
     g_config.profile_id = WideFromUtf8(JsonString(body, "profile_id"));
     g_profile_targets.clear();
+    g_profile_generic_matchers.clear();
+    g_profile_matchers_by_extension.clear();
     std::string targets_raw = JsonArrayRaw(body, "targets");
     std::vector<std::string> objects = JsonObjectsInArray(targets_raw);
     for (size_t i = 0; i < objects.size(); ++i) {
@@ -1170,6 +1570,7 @@ static bool ParseCollectionProfile(const std::string& body) {
             g_profile_targets.push_back(target);
         }
     }
+    BuildProfileMatcherIndex();
     return !g_config.profile_id.empty() && !g_profile_targets.empty();
 }
 
@@ -1188,15 +1589,18 @@ static bool Authenticate() {
         "\"hardware_id\":\"" + JsonEscape(BuildHardwareId()) + "\","
         "\"client_info\":{\"client\":\"xways_xtension\",\"mode\":\"native_xwf\",\"version\":\"1.0.0\"}"
         "}";
-    HttpResponse response = HttpRequest(g_config, L"POST", "/api/v1/collector/xways/authenticate", body, L"application/json");
+    HttpResponse response = HttpRequestWithRetry(g_config, L"POST", "/api/v1/collector/xways/authenticate", body, L"application/json");
     if (!response.ok) {
-        OutputMessageUtf8("XWF authentication failed: " + response.error);
+        std::string message = "XWF authentication failed: " + response.error;
+        SetLastFailureUtf8(message);
+        OutputMessageUtf8(message);
         return false;
     }
     g_config.session_id = WideFromUtf8(JsonString(response.body, "session_id"));
     g_config.collection_token = WideFromUtf8(JsonString(response.body, "collection_token"));
     g_config.case_id = WideFromUtf8(JsonString(response.body, "case_id"));
     if (g_config.session_id.empty() || g_config.collection_token.empty() || g_config.case_id.empty()) {
+        SetLastFailure(L"XWF authentication response is missing session_id, collection_token, or case_id.");
         OutputMessage(L"XWF authentication response is missing session_id, collection_token, or case_id.");
         return false;
     }
@@ -1204,7 +1608,7 @@ static bool Authenticate() {
 }
 
 static bool LoadCollectionProfile() {
-    HttpResponse response = HttpRequest(
+    HttpResponse response = HttpRequestWithRetry(
         g_config,
         L"POST",
         "/api/v1/collector/collection/profile",
@@ -1214,10 +1618,13 @@ static bool LoadCollectionProfile() {
         Utf8FromWide(g_config.session_id),
         Utf8FromWide(g_config.collection_token));
     if (!response.ok) {
-        OutputMessageUtf8("XWF collection profile load failed: " + response.error);
+        std::string message = "XWF collection profile load failed: " + response.error;
+        SetLastFailureUtf8(message);
+        OutputMessageUtf8(message);
         return false;
     }
     if (!ParseCollectionProfile(response.body)) {
+        SetLastFailure(L"XWF collection profile response is missing profile_id or authorized targets.");
         OutputMessage(L"XWF collection profile response is missing profile_id or authorized targets.");
         return false;
     }
@@ -1230,9 +1637,11 @@ static bool ValidateSession() {
         "\"collection_token\":\"" + JsonEscape(Utf8FromWide(g_config.collection_token)) + "\","
         "\"profile_id\":" + JsonStringOrNull(Utf8FromWide(g_config.profile_id)) +
         "}";
-    HttpResponse response = HttpRequest(g_config, L"POST", "/api/v1/collector/validate-session", body, L"application/json");
+    HttpResponse response = HttpRequestWithRetry(g_config, L"POST", "/api/v1/collector/validate-session", body, L"application/json");
     if (!response.ok || !JsonBool(response.body, "valid")) {
-        OutputMessageUtf8("XWF session validation failed: " + (response.error.empty() ? CompactError(response.body) : response.error));
+        std::string message = "XWF session validation failed: " + (response.error.empty() ? CompactError(response.body) : response.error);
+        SetLastFailureUtf8(message);
+        OutputMessageUtf8(message);
         return false;
     }
     return true;
@@ -1240,17 +1649,20 @@ static bool ValidateSession() {
 
 static bool EnsureCollectionConsent() {
     if (!g_config.collection_consent_accepted) {
+        SetLastFailure(L"XWF collection consent was not accepted.");
         OutputMessage(L"XWF collection consent was not accepted.");
         return false;
     }
     std::string session_id = Utf8FromWide(g_config.session_id);
-    HttpResponse status = HttpRequest(g_config, L"GET", "/api/v1/collector/consent/status/" + session_id, std::string(), std::wstring());
+    HttpResponse status = HttpRequestWithRetry(g_config, L"GET", "/api/v1/collector/consent/status/" + session_id, std::string(), std::wstring());
     if (status.ok && JsonBool(status.body, "is_valid")) {
         return true;
     }
-    HttpResponse tmpl = HttpRequest(g_config, L"GET", "/api/v1/collector/consent?language=en&category=collection", std::string(), std::wstring());
+    HttpResponse tmpl = HttpRequestWithRetry(g_config, L"GET", "/api/v1/collector/consent?language=en&category=collection", std::string(), std::wstring());
     if (!tmpl.ok) {
-        OutputMessageUtf8("XWF consent template failed: " + tmpl.error);
+        std::string message = "XWF consent template failed: " + tmpl.error;
+        SetLastFailureUtf8(message);
+        OutputMessageUtf8(message);
         return false;
     }
     std::string template_id = JsonString(tmpl.body, "id");
@@ -1258,6 +1670,7 @@ static bool EnsureCollectionConsent() {
     std::string language = JsonString(tmpl.body, "language");
     std::string agreed_items = JsonArrayRaw(tmpl.body, "required_checkboxes");
     if (template_id.empty() || version.empty() || agreed_items.empty()) {
+        SetLastFailure(L"XWF consent template is incomplete.");
         OutputMessage(L"XWF consent template is incomplete.");
         return false;
     }
@@ -1277,9 +1690,11 @@ static bool EnsureCollectionConsent() {
         "\"signature_type\":\"checkbox\","
         "\"signature_data\":\"xways_operator_explicit_collection_consent\""
         "}";
-    HttpResponse accepted = HttpRequest(g_config, L"POST", "/api/v1/collector/consent/accept", body, L"application/json");
+    HttpResponse accepted = HttpRequestWithRetry(g_config, L"POST", "/api/v1/collector/consent/accept", body, L"application/json");
     if (!accepted.ok) {
-        OutputMessageUtf8("XWF consent accept failed: " + accepted.error);
+        std::string message = "XWF consent accept failed: " + accepted.error;
+        SetLastFailureUtf8(message);
+        OutputMessageUtf8(message);
         return false;
     }
     return true;
@@ -1300,17 +1715,72 @@ static bool MaybeHeartbeat() {
     return true;
 }
 
+static bool HasAuthenticatedSession() {
+    return !g_config.session_id.empty() &&
+        !g_config.collection_token.empty() &&
+        !g_config.case_id.empty();
+}
+
+static bool FinalizeCollectionWithReason(const char* reason, bool client_completed, int max_attempts = 4, DWORD timeout = 120000) {
+    if (g_config.session_id.empty() || g_config.collection_token.empty() || g_config.case_id.empty()) {
+        return false;
+    }
+    std::string safe_reason = reason != NULL && reason[0] != '\0' ? reason : "completed";
+    std::string body = "{"
+        "\"session_id\":\"" + JsonEscape(Utf8FromWide(g_config.session_id)) + "\","
+        "\"collection_token\":\"" + JsonEscape(Utf8FromWide(g_config.collection_token)) + "\","
+        "\"case_id\":\"" + JsonEscape(Utf8FromWide(g_config.case_id)) + "\","
+        "\"processed_count\":" + std::to_string(g_processed_count) + ","
+        "\"uploaded_count\":" + std::to_string(g_uploaded_count) + ","
+        "\"skipped_count\":" + std::to_string(g_skipped_count) + ","
+        "\"failed_count\":" + std::to_string(g_failed_count) + ","
+        "\"client_completed\":" + std::string(client_completed ? "true" : "false") + ","
+        "\"metadata\":{\"client\":\"xways_xtension\",\"transport\":\"raw_body\",\"reason\":\"" + JsonEscape(safe_reason) + "\"}"
+        "}";
+    HttpResponse response = HttpRequestWithRetry(
+        g_config,
+        L"POST",
+        "/api/v1/collector/xways/collection/finalize",
+        body,
+        L"application/json",
+        std::string(),
+        std::string(),
+        std::string(),
+        max_attempts,
+        timeout);
+    if (!response.ok) {
+        OutputMessageUtf8("XWF collection finalize failed: " + (response.error.empty() ? CompactError(response.body) : response.error));
+        return false;
+    }
+    return true;
+}
+
+static bool FinalizeCollection() {
+    return FinalizeCollectionWithReason("completed", true);
+}
+
+static bool ReleaseAuthenticatedSessionAfterFailure(const char* reason) {
+    if (!HasAuthenticatedSession()) {
+        return false;
+    }
+    std::string message = "Releasing XWF authenticated session after failure";
+    if (reason != NULL && reason[0] != '\0') {
+        message += ": ";
+        message += reason;
+    }
+    OutputMessageUtf8(message);
+    HideXwfProgress();
+    bool finalized = FinalizeCollectionWithReason(reason, false, 1, 10000);
+    if (!finalized) {
+        OutputMessage(L"XWF authenticated session release failed; server stale-session cleanup may be required.");
+    }
+    return finalized;
+}
+
 static std::string GetItemType(LONG item_id) {
 #if UNJAENA_XWF_HAS_OFFICIAL_API
-    if (XWF_GetItemType == NULL) {
-        return std::string();
-    }
-    wchar_t type_buffer[256] = {0};
-    LONG result = XWF_GetItemType(item_id, type_buffer, static_cast<DWORD>(sizeof(type_buffer) / sizeof(type_buffer[0])));
-    if (result < 0 || type_buffer[0] == L'\0') {
-        return std::string();
-    }
-    return Utf8FromWide(type_buffer);
+    UNREFERENCED_PARAMETER(item_id);
+    return std::string();
 #else
     UNREFERENCED_PARAMETER(item_id);
     return std::string();
@@ -1319,16 +1789,67 @@ static std::string GetItemType(LONG item_id) {
 
 static int64_t GetItemInfoInt64(LONG item_id, LONG info_type) {
 #if UNJAENA_XWF_HAS_OFFICIAL_API
-    if (XWF_GetItemInformation == NULL) {
-        return 0;
-    }
-    BOOL success = FALSE;
-    INT64 value = XWF_GetItemInformation(item_id, info_type, &success);
-    return success ? static_cast<int64_t>(value) : 0;
+    UNREFERENCED_PARAMETER(item_id);
+    UNREFERENCED_PARAMETER(info_type);
+    return 0;
 #else
     UNREFERENCED_PARAMETER(item_id);
     UNREFERENCED_PARAMETER(info_type);
     return 0;
+#endif
+}
+
+static std::wstring BuildFullItemPath(LONG item_id) {
+#if UNJAENA_XWF_HAS_OFFICIAL_API
+    if (XWF_GetItemName == NULL) {
+        return std::wstring();
+    }
+    std::vector<std::wstring> parts;
+    LONG current = item_id;
+    for (int depth = 0; depth < 128 && current >= 0; ++depth) {
+        const wchar_t* raw_name = XWF_GetItemName(current);
+        std::wstring name = raw_name == NULL ? L"" : raw_name;
+        if (!name.empty()) {
+            if (name.find_first_of(L"\\/") != std::wstring::npos) {
+                std::reverse(parts.begin(), parts.end());
+                std::wstring path = name;
+                for (size_t i = 0; i < parts.size(); ++i) {
+                    if (parts[i].empty()) {
+                        continue;
+                    }
+                    if (!path.empty() && path[path.size() - 1] != L'/' && path[path.size() - 1] != L'\\') {
+                        path += L"/";
+                    }
+                    path += parts[i];
+                }
+                return path;
+            }
+            parts.push_back(name);
+        }
+        if (XWF_GetItemParent == NULL) {
+            break;
+        }
+        LONG parent = XWF_GetItemParent(current);
+        if (parent < 0 || parent == current) {
+            break;
+        }
+        current = parent;
+    }
+    std::reverse(parts.begin(), parts.end());
+    std::wstring path;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (parts[i].empty()) {
+            continue;
+        }
+        if (!path.empty()) {
+            path += L"/";
+        }
+        path += parts[i];
+    }
+    return path;
+#else
+    UNREFERENCED_PARAMETER(item_id);
+    return std::wstring();
 #endif
 }
 
@@ -1339,8 +1860,7 @@ static ItemInfo BuildItemInfo(LONG item_id, HANDLE item) {
 #if UNJAENA_XWF_HAS_OFFICIAL_API
     INT64 signed_size = XWF_GetItemSize == NULL ? -1 : XWF_GetItemSize(item_id);
     info.size = signed_size < 0 ? 0 : static_cast<uint64_t>(signed_size);
-    const wchar_t* raw_name = XWF_GetItemName == NULL ? NULL : XWF_GetItemName(item_id);
-    info.raw_path = raw_name == NULL ? L"" : raw_name;
+    info.raw_path = BuildFullItemPath(item_id);
     info.file_name = BaseName(info.raw_path);
     if (info.file_name.empty()) {
         info.file_name = L"xways_item.bin";
@@ -1376,7 +1896,7 @@ static std::string BuildMetadataJson(const ItemInfo& item) {
     out << "\"item_id\":\"" << item.item_id << "\",";
     out << "\"scope\":\"" << (g_operation_type == XT_ACTION_DBC ? "selected_items" : (g_operation_type == XT_ACTION_RVS ? "volume_snapshot" : "tools_run")) << "\",";
     out << "\"file_type\":\"" << JsonEscape(item.file_type) << "\",";
-    out << "\"parent_item_id\":" << (XWF_GetItemParent == NULL ? -1 : XWF_GetItemParent(item.item_id)) << ",";
+    out << "\"parent_item_id\":-1,";
     out << "\"classification\":" << GetItemInfoInt64(item.item_id, XWF_ITEM_INFO_CLASSIFICATION) << ",";
     out << "\"deletion_status\":" << GetItemInfoInt64(item.item_id, XWF_ITEM_INFO_DELETION);
     out << "}";
@@ -1397,7 +1917,7 @@ static bool UploadItem(const ItemInfo& item, const std::string& artifact_type) {
         "\"profile_id\":" + JsonStringOrNull(Utf8FromWide(g_config.profile_id)) + ","
         "\"metadata\":" + BuildMetadataJson(item) +
         "}";
-    HttpResponse init = HttpRequest(g_config, L"POST", "/api/v1/collector/xways/uploads/init", body, L"application/json");
+    HttpResponse init = HttpRequestWithRetry(g_config, L"POST", "/api/v1/collector/xways/uploads/init", body, L"application/json");
     if (!init.ok) {
         OutputMessageUtf8("XWF upload init failed: " + init.error);
         return false;
@@ -1409,7 +1929,7 @@ static bool UploadItem(const ItemInfo& item, const std::string& artifact_type) {
         OutputMessage(L"XWF upload init response is missing upload_url, complete_url, or upload_ticket.");
         return false;
     }
-    HttpResponse data = HttpPutItem(g_config, upload_url, item.item, item.size, ticket);
+    HttpResponse data = HttpPutItemWithRetry(g_config, upload_url, item.item, item.size, ticket);
     if (!data.ok) {
         OutputMessageUtf8("XWF upload data failed: " + data.error);
         return false;
@@ -1419,7 +1939,7 @@ static bool UploadItem(const ItemInfo& item, const std::string& artifact_type) {
         "\"collection_token\":\"" + JsonEscape(Utf8FromWide(g_config.collection_token)) + "\","
         "\"case_id\":\"" + JsonEscape(Utf8FromWide(g_config.case_id)) + "\""
         "}";
-    HttpResponse complete = HttpRequest(g_config, L"POST", complete_url, complete_body, L"application/json", ticket);
+    HttpResponse complete = HttpRequestWithRetry(g_config, L"POST", complete_url, complete_body, L"application/json", ticket);
     if (!complete.ok) {
         OutputMessageUtf8("XWF upload complete failed: " + complete.error);
         return false;
@@ -1431,6 +1951,7 @@ static bool InitializeCollector(HWND parent) {
     g_cancelled_by_user = false;
     OutputMessage(L"XWF collector initialization started.");
     ApplyCommandLineConfig(&g_config);
+    NormalizeConfig(&g_config);
     if (g_config.session_token.empty() || !g_config.collection_consent_accepted) {
         if (!ShowConfigDialog(parent, &g_config)) {
             g_cancelled_by_user = true;
@@ -1444,19 +1965,23 @@ static bool InitializeCollector(HWND parent) {
     }
     OutputMessage(L"XWF collector authentication succeeded; loading collection profile.");
     if (!LoadCollectionProfile()) {
+        ReleaseAuthenticatedSessionAfterFailure("profile_load_failed");
         return false;
     }
     OutputMessage(L"XWF collection profile loaded; verifying consent.");
     if (!EnsureCollectionConsent()) {
+        ReleaseAuthenticatedSessionAfterFailure("consent_failed");
         return false;
     }
     OutputMessage(L"XWF consent verified; validating collection session.");
     if (!ValidateSession()) {
+        ReleaseAuthenticatedSessionAfterFailure("session_validation_failed");
         return false;
     }
     OutputMessage(L"XWF collector initialization completed.");
     g_last_heartbeat_ms = GetTickCount64();
     g_last_heartbeat_item = 0;
+    RefreshXwfTotalItemCount();
     return true;
 }
 
@@ -1466,7 +1991,14 @@ static bool CollectItem(LONG item_id, HANDLE item) {
         ++g_skipped_count;
         return false;
     }
+    if (ShouldStopXwfCollection()) {
+        SetLastFailure(L"XWF collection was cancelled by the user.");
+        g_cancelled_by_user = true;
+        ++g_failed_count;
+        return false;
+    }
     ++g_processed_count;
+    UpdateXwfProgress(false);
     if (!MaybeHeartbeat()) {
         ++g_failed_count;
         return false;
@@ -1499,9 +2031,11 @@ static bool CollectItem(LONG item_id, HANDLE item) {
     }
     if (UploadItem(info, artifact_type)) {
         ++g_uploaded_count;
+        UpdateXwfProgress(true);
         return true;
     }
     ++g_failed_count;
+    UpdateXwfProgress(true);
     return false;
 #else
     UNREFERENCED_PARAMETER(item_id);
@@ -1511,20 +2045,102 @@ static bool CollectItem(LONG item_id, HANDLE item) {
 #endif
 }
 
+static bool HasItemProcessingActivity() {
+    return g_processed_count > 0 || g_uploaded_count > 0 || g_skipped_count > 0 || g_failed_count > 0;
+}
+
+static bool IsXtDoneFinalizeReason(const wchar_t* reason) {
+    return reason != NULL && std::wstring(reason) == L"XT_Done";
+}
+
+static void RecordFinalizeCheckpoint() {
+    g_finalize_attempted = true;
+    g_last_finalized_processed = g_processed_count;
+    g_last_finalized_uploaded = g_uploaded_count;
+    g_last_finalized_skipped = g_skipped_count;
+    g_last_finalized_failed = g_failed_count;
+}
+
+static bool HasUnfinalizedActivity() {
+    if (!HasItemProcessingActivity()) {
+        return false;
+    }
+    return !g_finalize_attempted ||
+        g_processed_count != g_last_finalized_processed ||
+        g_uploaded_count != g_last_finalized_uploaded ||
+        g_skipped_count != g_last_finalized_skipped ||
+        g_failed_count != g_last_finalized_failed;
+}
+
+static bool FinalizeCurrentCollectionIfNeeded(const wchar_t* reason) {
+    if (!g_ready || !HasUnfinalizedActivity()) {
+        return true;
+    }
+    if (g_uploaded_count == 0) {
+        if (IsXtDoneFinalizeReason(reason)) {
+            OutputMessage(L"XT_Done reached without uploaded XWF artifacts; releasing session without marking it completed.");
+            bool released = ReleaseAuthenticatedSessionAfterFailure("no_artifacts_uploaded");
+            if (released) {
+                RecordFinalizeCheckpoint();
+            } else {
+                SetLastFailure(L"XWF collection release failed after no artifacts were uploaded.");
+            }
+            return released;
+        }
+        std::wstring deferred = L"Deferring XWF collection finalize because no artifacts were uploaded yet";
+        if (reason != NULL && reason[0] != L'\0') {
+            deferred += L" from ";
+            deferred += reason;
+        }
+        deferred += L".";
+        OutputMessage(deferred);
+        return true;
+    }
+    std::wstring message = L"Finalizing XWF collection phase";
+    if (reason != NULL && reason[0] != L'\0') {
+        message += L" from ";
+        message += reason;
+    }
+    OutputMessage(message);
+    bool finalized = FinalizeCollection();
+    if (finalized) {
+        RecordFinalizeCheckpoint();
+    } else {
+        SetLastFailure(L"XWF collection finalize failed.");
+    }
+    return finalized;
+}
+
 static void ResetRunState() {
     g_ready = false;
     g_cancelled_by_user = false;
+    g_last_failure_message.clear();
+    g_config.session_token.clear();
+    g_config.session_id.clear();
+    g_config.collection_token.clear();
+    g_config.case_id.clear();
+    g_config.profile_id.clear();
+    g_config.collection_consent_accepted = false;
     g_profile_targets.clear();
+    g_profile_generic_matchers.clear();
+    g_profile_matchers_by_extension.clear();
     g_processed_count = 0;
     g_uploaded_count = 0;
     g_skipped_count = 0;
     g_failed_count = 0;
+    g_total_item_count = 0;
     g_skipped_no_profile_match = 0;
     g_skipped_zero_byte = 0;
     g_skipped_directory = 0;
     g_skipped_too_large = 0;
+    g_finalize_attempted = false;
+    g_last_finalized_processed = 0;
+    g_last_finalized_uploaded = 0;
+    g_last_finalized_skipped = 0;
+    g_last_finalized_failed = 0;
     g_last_heartbeat_ms = 0;
     g_last_heartbeat_item = 0;
+    g_last_progress_item = 0;
 }
 
 static void PrintSummary() {
@@ -1566,7 +2182,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
     return TRUE;
 }
 
-extern "C" LONG __stdcall XT_Init(DWORD nVersion, DWORD nFlags, HANDLE hMainWnd, void* lpReserved) {
+LONG __stdcall XT_Init(DWORD nVersion, DWORD nFlags, HANDLE hMainWnd, void* lpReserved) {
     try {
         UNREFERENCED_PARAMETER(nVersion);
         UNREFERENCED_PARAMETER(lpReserved);
@@ -1577,6 +2193,7 @@ extern "C" LONG __stdcall XT_Init(DWORD nVersion, DWORD nFlags, HANDLE hMainWnd,
         }
         XT_RetrieveFunctionPointers();
         if (XWF_GetItemName == NULL || XWF_GetItemSize == NULL || XWF_Read == NULL) {
+            unjaena_xwf::SetLastFailure(L"Required XWF item read functions are missing.");
             unjaena_xwf::OutputMessage(L"unJaena X-Tension cannot start: required XWF item read functions are missing.");
             return 0;
         }
@@ -1592,7 +2209,7 @@ extern "C" LONG __stdcall XT_Init(DWORD nVersion, DWORD nFlags, HANDLE hMainWnd,
     }
 }
 
-extern "C" LONG __stdcall XT_About(HANDLE hParentWnd, void* lpReserved) {
+LONG __stdcall XT_About(HANDLE hParentWnd, void* lpReserved) {
     try {
         UNREFERENCED_PARAMETER(lpReserved);
         MessageBoxW(
@@ -1608,62 +2225,96 @@ extern "C" LONG __stdcall XT_About(HANDLE hParentWnd, void* lpReserved) {
     }
 }
 
-extern "C" LONG __stdcall XT_Done(void* lpReserved) {
+LONG __stdcall XT_Done(void* lpReserved) {
     try {
         UNREFERENCED_PARAMETER(lpReserved);
         unjaena_xwf::OutputMessage(L"UnjaenaXwfCollector XT_Done called.");
+        unjaena_xwf::FinalizeCurrentCollectionIfNeeded(L"XT_Done");
+        unjaena_xwf::HideXwfProgress();
+        unjaena_xwf::ResetRunState();
     } catch (...) {
     }
     return 0;
 }
 
-extern "C" LONG __stdcall XT_Prepare(HANDLE hVolume, HANDLE hEvidence, DWORD nOpType, void* lpReserved) {
+LONG __stdcall XT_Prepare(HANDLE hVolume, HANDLE hEvidence, DWORD nOpType, void* lpReserved) {
     try {
         UNREFERENCED_PARAMETER(hEvidence);
         UNREFERENCED_PARAMETER(lpReserved);
+        if (unjaena_xwf::g_ready) {
+            unjaena_xwf::g_volume = hVolume;
+            unjaena_xwf::g_operation_type = nOpType;
+            unjaena_xwf::OutputMessage(L"XT_Prepare called while collection session is active; reusing authenticated session.");
+            unjaena_xwf::RefreshXwfTotalItemCount();
+            unjaena_xwf::ShowXwfProgress();
+            unjaena_xwf::UpdateXwfProgress(true);
+            return 1;
+        }
         unjaena_xwf::ResetRunState();
         unjaena_xwf::g_volume = hVolume;
         unjaena_xwf::g_operation_type = nOpType;
 
-#if UNJAENA_XWF_HAS_OFFICIAL_API
-        if (XWF_ShowProgress != NULL) {
-            wchar_t caption[] = L"unJaena X-Ways collector";
-            XWF_ShowProgress(caption, 0);
-        }
-#endif
+        unjaena_xwf::ShowXwfProgress();
 
         unjaena_xwf::g_ready = unjaena_xwf::InitializeCollector(unjaena_xwf::g_main_window);
         if (!unjaena_xwf::g_ready) {
             unjaena_xwf::OutputMessage(L"unJaena X-Ways collector was cancelled or failed during initialization.");
             if (!unjaena_xwf::g_cancelled_by_user && unjaena_xwf::g_main_window != NULL) {
+                std::wstring details = L"unJaena X-Ways collector failed during initialization.";
+                if (!unjaena_xwf::g_last_failure_message.empty()) {
+                    details += L"\r\n\r\nReason: ";
+                    details += unjaena_xwf::g_last_failure_message;
+                }
+                details += L"\r\n\r\nLog: ";
+                details += unjaena_xwf::DiagnosticLogPath();
                 MessageBoxW(
                     unjaena_xwf::g_main_window,
-                    L"unJaena X-Ways collector failed during initialization. Check %TEMP%\\UnjaenaXwfCollector.log for details.",
+                    details.c_str(),
                     L"unJaena X-Ways Collector",
                     MB_OK | MB_ICONERROR);
             }
+            unjaena_xwf::HideXwfProgress();
+            unjaena_xwf::ResetRunState();
             return 0;
         }
+        unjaena_xwf::UpdateXwfProgress(true);
         return 1;
     } catch (const std::exception& ex) {
-        return unjaena_xwf::ReportUnhandledException("XT_Prepare", ex.what());
+        unjaena_xwf::HideXwfProgress();
+        unjaena_xwf::ResetRunState();
+        unjaena_xwf::ReportUnhandledException("XT_Prepare", ex.what());
+        return 0;
     } catch (...) {
-        return unjaena_xwf::ReportUnhandledException("XT_Prepare", "unknown exception");
+        unjaena_xwf::HideXwfProgress();
+        unjaena_xwf::ResetRunState();
+        unjaena_xwf::ReportUnhandledException("XT_Prepare", "unknown exception");
+        return 0;
     }
 }
 
-extern "C" LONG __stdcall XT_Finalize(HANDLE hVolume, HANDLE hEvidence, DWORD nOpType, void* lpReserved) {
+LONG __stdcall XT_Finalize(HANDLE hVolume, HANDLE hEvidence, DWORD nOpType, void* lpReserved) {
     try {
         UNREFERENCED_PARAMETER(hVolume);
         UNREFERENCED_PARAMETER(hEvidence);
         UNREFERENCED_PARAMETER(nOpType);
         UNREFERENCED_PARAMETER(lpReserved);
         unjaena_xwf::PrintSummary();
-#if UNJAENA_XWF_HAS_OFFICIAL_API
-        if (XWF_HideProgress != NULL) {
-            XWF_HideProgress();
+        bool hide_progress = true;
+        if (unjaena_xwf::g_ready) {
+            if (unjaena_xwf::HasItemProcessingActivity()) {
+                unjaena_xwf::FinalizeCurrentCollectionIfNeeded(L"XT_Finalize");
+                if (unjaena_xwf::g_uploaded_count == 0) {
+                    hide_progress = false;
+                    unjaena_xwf::OutputMessage(L"XT_Finalize deferred with zero uploads; keeping XWF progress visible for the next processing phase.");
+                }
+            } else {
+                unjaena_xwf::OutputMessage(L"XT_Finalize received before item processing; keeping authenticated session for the next XWF phase.");
+                hide_progress = false;
+            }
         }
-#endif
+        if (hide_progress) {
+            unjaena_xwf::HideXwfProgress();
+        }
     } catch (const std::exception& ex) {
         return unjaena_xwf::ReportUnhandledException("XT_Finalize", ex.what());
     } catch (...) {
@@ -1672,7 +2323,7 @@ extern "C" LONG __stdcall XT_Finalize(HANDLE hVolume, HANDLE hEvidence, DWORD nO
     return 0;
 }
 
-extern "C" LONG __stdcall XT_ProcessItem(LONG nItemID, void* lpReserved) {
+LONG __stdcall XT_ProcessItem(LONG nItemID, void* lpReserved) {
     try {
         UNREFERENCED_PARAMETER(lpReserved);
 #if UNJAENA_XWF_HAS_OFFICIAL_API
@@ -1696,16 +2347,13 @@ extern "C" LONG __stdcall XT_ProcessItem(LONG nItemID, void* lpReserved) {
     return 0;
 }
 
-extern "C" LONG __stdcall XT_ProcessItemEx(LONG nItemID, HANDLE hItem, void* lpReserved) {
+LONG __stdcall XT_ProcessItemEx(LONG nItemID, HANDLE hItem, void* lpReserved) {
     try {
         UNREFERENCED_PARAMETER(lpReserved);
-        unjaena_xwf::CollectItem(nItemID, hItem);
-#if UNJAENA_XWF_HAS_OFFICIAL_API
-        if (XWF_SetProgressDescription != NULL) {
-            std::wstring message = L"Processed item " + std::to_wstring(nItemID);
-            XWF_SetProgressDescription(const_cast<wchar_t*>(message.c_str()));
+        if (hItem == NULL) {
+            return 0;
         }
-#endif
+        unjaena_xwf::CollectItem(nItemID, hItem);
     } catch (const std::exception& ex) {
         return unjaena_xwf::ReportUnhandledException("XT_ProcessItemEx", ex.what());
     } catch (...) {
