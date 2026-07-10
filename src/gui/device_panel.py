@@ -59,6 +59,7 @@ class DeviceListPanel(QWidget):
         self.device_manager = device_manager
         self.device_checkboxes: Dict[str, QCheckBox] = {}
         self._interaction_locked = False
+        self._file_actions_visible = True
         self.setAcceptDrops(True)
         self._setup_ui()
         self._connect_signals()
@@ -74,6 +75,16 @@ class DeviceListPanel(QWidget):
         for device_id, cb in self.device_checkboxes.items():
             device = self.device_manager.get_device(device_id)
             cb.setEnabled(False if locked else bool(device and device.is_selectable))
+
+    def set_file_action_buttons_visible(self, visible: bool):
+        """Show or hide file/action buttons when a parent UI provides them."""
+        self._file_actions_visible = bool(visible)
+        self.add_btn.setVisible(visible)
+        if hasattr(self, 'add_export_btn'):
+            self.add_export_btn.setVisible(visible)
+        if hasattr(self, 'evidence_hint'):
+            self.evidence_hint.setVisible(visible)
+        self._update_mobile_guide()
 
     def _setup_ui(self):
         """Setup UI"""
@@ -153,7 +164,7 @@ class DeviceListPanel(QWidget):
             "Add E01/RAW/VDI/VMDK/VHD/DMG/QCOW2, a mobile FFS ZIP/CLBX, "
             "or a verified tool result: AXIOM DB, Cellebrite UFDR/XML, or Autopsy autopsy.db. "
             "Ordinary ZIP, ISO, and memory dump files are not disk-image sources; "
-            "generic DB and JSON/CSV exports require + Add Tool Export."
+            "generic DB, JSON, CSV, and TSV exports are not enabled until validated."
         )
         self.evidence_hint.setWordWrap(True)
         self.evidence_hint.setStyleSheet(
@@ -288,6 +299,15 @@ class DeviceListPanel(QWidget):
                 "</span>"
             )
 
+        if not self._file_actions_visible:
+            hint = (
+                "E01/RAW/FFS: use <b>Add Evidence File</b> above; "
+                "AXIOM/Cellebrite/Autopsy: use <b>Add Tool Result</b> above"
+            )
+            sections.append(f"<span style='color:{dim};'>{hint}</span>")
+            self.mobile_guide.setText("<br>".join(sections))
+            return
+
         # --- E01/RAW hint ---
         sections.append(
             f"<span style='color:{dim};'>"
@@ -393,6 +413,14 @@ class DeviceListPanel(QWidget):
         self.device_manager.refresh()
         self._update_mobile_guide()
 
+    def request_add_evidence_file(self):
+        """Open the existing disk image / mobile FFS registration flow."""
+        self._on_add_image_clicked()
+
+    def request_add_tool_result(self):
+        """Open the existing verified tool-result registration flow."""
+        self._on_add_export_clicked()
+
     def _on_add_image_clicked(self):
         """Add image or mobile FFS bundle"""
         if self._interaction_locked:
@@ -462,6 +490,7 @@ class DeviceListPanel(QWidget):
         else:
             device = self.device_manager.add_image_file(file_path)
             if device:
+                self._select_registered_device(device)
                 self.image_file_requested.emit()
             else:
                 from PyQt6.QtWidgets import QMessageBox
@@ -479,6 +508,7 @@ class DeviceListPanel(QWidget):
             return
         device = self.device_manager.add_axiom_case_db_file(file_path)
         if device:
+            self._select_registered_device(device)
             self.image_file_requested.emit()
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.information(
@@ -505,6 +535,7 @@ class DeviceListPanel(QWidget):
             return
         device = self.device_manager.add_third_party_forensic_export_file(file_path, artifact_type)
         if device:
+            self._select_registered_device(device)
             self.image_file_requested.emit()
             from PyQt6.QtWidgets import QMessageBox
             upload_type = device.metadata.get('upload_artifact_type') or 'verified_tool_result'
@@ -621,7 +652,7 @@ class DeviceListPanel(QWidget):
             "This file type is not supported as an evidence source.\n\n"
             "Supported disk sources: E01/RAW/VMDK/VHD/VHDX/QCOW2/VDI/DMG "
             "and filesystem volume images. Supported mobile source: Cellebrite "
-            "UFED/CLBX FFS ZIP. For forensic tool exports, use + Add Tool Export."
+            "UFED/CLBX FFS ZIP. For verified forensic tool results, use + Add Tool Result."
         )
 
     def _register_ffs_bundle(self, file_path: str) -> None:
@@ -696,7 +727,19 @@ class DeviceListPanel(QWidget):
             f"<br><b>Detection signals</b>:<br><pre>{signals}</pre>"
         )
         QMessageBox.information(self, "Bundle Registered", body)
+        self._select_registered_device(device)
         self.image_file_requested.emit()
+
+    def _select_registered_device(self, device: UnifiedDeviceInfo):
+        """Select a user-added source and mirror that state in the checkbox."""
+        self.device_manager.select_device(device.device_id, True)
+        cb = self.device_checkboxes.get(device.device_id)
+        if cb is not None and not cb.isChecked():
+            cb.blockSignals(True)
+            cb.setChecked(True)
+            cb.blockSignals(False)
+        self._update_summary()
+        self.selection_changed.emit()
 
     # =========================================================================
     # Display Helpers

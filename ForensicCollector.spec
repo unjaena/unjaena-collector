@@ -50,6 +50,19 @@ def find_libusb_dll():
 
 usb_binaries = find_libusb_dll()
 
+
+def find_locale_datas():
+    """Bundle optional private UI locale files prepared by build.py."""
+    locale_dir = Path('locales')
+    if locale_dir.exists():
+        print(f"[I18N] Bundling UI locales from: {locale_dir.resolve()}")
+        return [(str(locale_dir), 'locales')]
+    print("[I18N] No UI locale directory found; using English fallback only.")
+    return []
+
+
+locale_datas = find_locale_datas()
+
 # =============================================================================
 # ADB Binary Detection (Windows only — fallback when libusb driver conflicts)
 # Downloaded at build time by GitHub Actions (Apache-2.0 license)
@@ -335,7 +348,7 @@ a = Analysis(
     datas=[
         ('resources', 'resources'),
         ('config.json', '.'),
-    ] + extra_datas,
+    ] + locale_datas + extra_datas,
     hiddenimports=all_hidden_imports,
     hookspath=[],
     hooksconfig={},

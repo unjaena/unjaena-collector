@@ -348,7 +348,9 @@ class MFTCollector:
         pattern: str,
         artifact_type: str = "unknown",
         include_deleted: bool = True,
-        recursive: bool = True
+        recursive: bool = True,
+        extensions: Optional[List[str]] = None,
+        exclude_extensions: Optional[List[str]] = None,
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         Collect files matching a pattern using ForensicDiskAccessor.
@@ -366,7 +368,8 @@ class MFTCollector:
         try:
             base_path = base_path.replace('\\', '/').strip('/')
             yield from self._walk_and_collect(
-                f"/{base_path}", pattern, artifact_type, include_deleted, recursive
+                f"/{base_path}", pattern, artifact_type, include_deleted, recursive,
+                extensions=extensions, exclude_extensions=exclude_extensions,
             )
         except Exception as e:
             _debug_print(f"[MFT] Error scanning {base_path}/{pattern}: {e}")
@@ -379,7 +382,9 @@ class MFTCollector:
         include_deleted: bool,
         recursive: bool,
         depth: int = 0,
-        max_depth: int = 20
+        max_depth: int = 20,
+        extensions: Optional[List[str]] = None,
+        exclude_extensions: Optional[List[str]] = None,
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """Walk directory tree and collect files matching pattern."""
         if depth > max_depth:
@@ -403,9 +408,26 @@ class MFTCollector:
             if entry.is_directory and recursive:
                 yield from self._walk_and_collect(
                     full_path, pattern, artifact_type,
-                    include_deleted, recursive, depth + 1, max_depth
+                    include_deleted, recursive, depth + 1, max_depth,
+                    extensions=extensions, exclude_extensions=exclude_extensions,
                 )
             elif not entry.is_directory:
+                filename_lower = entry.filename.lower()
+                if extensions:
+                    allowed = {
+                        ext.lower() if str(ext).startswith(".") else f".{str(ext).lower()}"
+                        for ext in extensions
+                    }
+                    if "." not in filename_lower or f".{filename_lower.rsplit('.', 1)[-1]}" not in allowed:
+                        continue
+                if exclude_extensions:
+                    blocked = {
+                        ext.lower() if str(ext).startswith(".") else f".{str(ext).lower()}"
+                        for ext in exclude_extensions
+                    }
+                    if "." in filename_lower and f".{filename_lower.rsplit('.', 1)[-1]}" in blocked:
+                        continue
+
                 # Match pattern
                 if fnmatch.fnmatch(entry.filename.lower(), pattern.lower()):
                     try:

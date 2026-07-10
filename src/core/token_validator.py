@@ -82,6 +82,7 @@ class ValidationResult:
     collection_profile_id: Optional[str] = None
     collection_profile_targets: Optional[list] = None
     collection_profile: Optional[dict] = None
+    upload_mode: Optional[str] = None
 
 
 @dataclass
@@ -281,6 +282,7 @@ class TokenValidator:
                     collection_profile_id=collection_profile.get('profile_id'),
                     collection_profile_targets=collection_profile.get('targets', []),
                     collection_profile=collection_profile,
+                    upload_mode=collection_profile.get('upload_mode') or data.get('upload_mode'),
                 )
             else:
                 # M1 Security: Prevent server error exposure - convert to user-friendly message

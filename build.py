@@ -10,6 +10,8 @@ Usage:
     python build.py --download-libusb  # Download libusb DLL
 """
 import argparse
+import base64
+import json
 import os
 import shutil
 import subprocess
@@ -21,6 +23,100 @@ from pathlib import Path
 # libusb release info
 LIBUSB_VERSION = "1.0.27"
 LIBUSB_DOWNLOAD_PAGE = "https://github.com/libusb/libusb/releases"
+SUPPORTED_UI_LOCALES = ("en", "ko", "ja")
+
+
+def _read_json_object(path: Path) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"Locale file must contain a JSON object: {path}")
+    return {str(k): str(v) for k, v in data.items()}
+
+
+def _write_json_object(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def _locale_from_env(locale_code: str) -> dict:
+    upper = locale_code.upper()
+    raw = os.environ.get(f"COLLECTOR_UI_LOCALE_{upper}_JSON")
+    raw_b64 = os.environ.get(f"COLLECTOR_UI_LOCALE_{upper}_JSON_B64")
+    if raw_b64:
+        raw = base64.b64decode(raw_b64).decode("utf-8")
+    if not raw:
+        return {}
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError(f"COLLECTOR_UI_LOCALE_{upper}_JSON must be a JSON object")
+    return {str(k): str(v) for k, v in data.items()}
+
+
+def prepare_ui_locales(collector_dir: Path) -> list:
+    """Prepare private UI locale JSON files for PyInstaller bundling.
+
+    Public source keeps English fallback strings in code. Private/customer
+    builds can inject locale files from:
+
+    - COLLECTOR_LOCALE_DIR/en.json, ko.json, ja.json
+    - collector/private/locales/en.json, ko.json, ja.json
+    - COLLECTOR_UI_LOCALE_<LOCALE>_JSON[_B64] CI secrets
+    """
+    locale_dir = collector_dir / "locales"
+    source_dir = Path(
+        os.environ.get(
+            "COLLECTOR_LOCALE_DIR",
+            str(collector_dir / "private" / "locales"),
+        )
+    )
+
+    included = set()
+    if source_dir.exists() and source_dir.resolve() != locale_dir.resolve():
+        for locale_code in SUPPORTED_UI_LOCALES:
+            source_file = source_dir / f"{locale_code}.json"
+            if not source_file.exists():
+                continue
+            data = _read_json_object(source_file)
+            _write_json_object(locale_dir / f"{locale_code}.json", data)
+            included.add(locale_code)
+
+    for locale_code in SUPPORTED_UI_LOCALES:
+        env_data = _locale_from_env(locale_code)
+        if not env_data:
+            continue
+        _write_json_object(locale_dir / f"{locale_code}.json", env_data)
+        included.add(locale_code)
+
+    if "en" not in included and not (locale_dir / "en.json").exists():
+        src_path = collector_dir / "src"
+        inserted = False
+        if str(src_path) not in sys.path:
+            sys.path.insert(0, str(src_path))
+            inserted = True
+        try:
+            from gui.i18n import DEFAULT_MESSAGES
+            _write_json_object(locale_dir / "en.json", DEFAULT_MESSAGES)
+            included.add("en")
+        finally:
+            if inserted:
+                try:
+                    sys.path.remove(str(src_path))
+                except ValueError:
+                    pass
+
+    if locale_dir.exists():
+        for locale_code in SUPPORTED_UI_LOCALES:
+            if (locale_dir / f"{locale_code}.json").exists():
+                included.add(locale_code)
+
+    if included:
+        print(f"[I18N] UI locales prepared: {', '.join(sorted(included))}")
+    else:
+        print("[I18N] No UI locale files found; English fallback only.")
+    return sorted(included)
 
 
 def check_usb_dependencies():
@@ -211,6 +307,11 @@ def main():
         action='store_true',
         help='CI mode: non-interactive, no prompts'
     )
+    parser.add_argument(
+        '--require-ui-locales',
+        action='store_true',
+        help='Fail the build unless all supported UI locale files are prepared'
+    )
     args = parser.parse_args()
 
     collector_dir = Path(__file__).parent
@@ -303,6 +404,25 @@ def main():
     # Ensure resources directory exists
     resources_dir = collector_dir / "resources"
     resources_dir.mkdir(exist_ok=True)
+
+    # Prepare optional private UI locale files for bundled release builds.
+    included_locales = prepare_ui_locales(collector_dir)
+    require_ui_locales = (
+        args.require_ui_locales
+        or os.environ.get('COLLECTOR_REQUIRE_UI_LOCALES', '').lower()
+        in {'1', 'true', 'yes'}
+    )
+    missing_locales = sorted(set(SUPPORTED_UI_LOCALES) - set(included_locales))
+    if require_ui_locales and missing_locales:
+        print(
+            "[I18N] Required UI locales missing: "
+            + ", ".join(missing_locales)
+        )
+        print(
+            "[I18N] Provide COLLECTOR_UI_LOCALE_<LOCALE>_JSON_B64 secrets "
+            "or collector/private/locales/<locale>.json before building."
+        )
+        sys.exit(1)
 
     # NOTE: Signing keys are now server-issued ephemeral keys (per-session).
     # No build-time key generation or embedding is needed.

@@ -138,6 +138,10 @@ keys/
 .env.*
 !.env.example
 
+# Private UI translation files are injected at build time.
+# Public source keeps English fallback strings only.
+locales/*.json
+
 # Deployment scripts (contain infrastructure references)
 upload_to_r2.py
 

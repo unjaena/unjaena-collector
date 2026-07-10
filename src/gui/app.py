@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QProgressBar,
     QLineEdit, QCheckBox, QGroupBox, QMessageBox, QFrame, QTextEdit,
-    QStatusBar, QSplitter, QScrollArea, QTabWidget,
+    QStatusBar, QSplitter, QScrollArea, QTabWidget, QComboBox,
     QApplication
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -45,6 +45,7 @@ except ImportError:
 
 # Platform unified theme and new components
 from gui.styles import get_platform_stylesheet, COLORS
+from gui.i18n import I18n, SUPPORTED_LOCALES, save_user_locale
 from core.device_manager import UnifiedDeviceManager, DeviceType
 from core.device_enumerators import create_default_enumerators
 from gui.device_panel import DeviceListPanel
@@ -131,6 +132,7 @@ class CollectorWindow(QMainWindow):
     def __init__(self, config: dict):
         super().__init__()
         self.config = config
+        self.i18n = I18n(config)
         self.session_token = None
         self.session_id = None
         self.case_id = None
@@ -209,6 +211,11 @@ class CollectorWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
+        self._apply_ui_language()
+
+    def _tr(self, key: str, **kwargs) -> str:
+        """Translate a UI string with English fallback."""
+        return self.i18n.tr(key, **kwargs)
 
     def _create_header(self) -> QWidget:
         """Create header section (compact)"""
@@ -231,7 +238,77 @@ class CollectorWindow(QMainWindow):
         self.server_status.setFont(QFont("Malgun Gothic", 9))
         layout.addWidget(self.server_status)
 
+        self.language_combo = QComboBox()
+        self.language_combo.setToolTip(self._tr("header.language"))
+        for locale_code in SUPPORTED_LOCALES:
+            self.language_combo.addItem(self.i18n.locale_label(locale_code), locale_code)
+        idx = self.language_combo.findData(self.i18n.locale)
+        if idx >= 0:
+            self.language_combo.setCurrentIndex(idx)
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        layout.addWidget(self.language_combo)
+
         return frame
+
+    def _on_language_changed(self, index: int):
+        """Switch UI language for the simplified collector surface."""
+        locale_code = self.language_combo.itemData(index)
+        if not locale_code:
+            return
+        self.i18n.set_locale(locale_code)
+        save_user_locale(locale_code)
+        self.config['ui_language'] = self.i18n.locale
+        self._apply_ui_language()
+        self._update_scope_summary()
+        self._update_workflow_status()
+
+    def _apply_ui_language(self):
+        """Apply translated labels to widgets owned by the simplified UI."""
+        widgets = {
+            'quick_group': ('setTitle', "simple.title"),
+            'token_group': ('setTitle', "group.connect"),
+            'device_group': ('setTitle', "group.source_details"),
+            'artifacts_group': ('setTitle', "group.expert_scope"),
+            'progress_group': ('setTitle', "group.progress"),
+            'status_group': ('setTitle', "group.status"),
+            'log_group': ('setTitle', "group.technical_log"),
+            'simple_intro': ('setText', "simple.intro"),
+            'source_hint': ('setText', "simple.choose_source"),
+            'simple_pc_btn': ('setText', "simple.btn.local"),
+            'simple_phone_btn': ('setText', "simple.btn.phone"),
+            'simple_image_btn': ('setText', "simple.btn.evidence"),
+            'simple_tool_btn': ('setText', "simple.btn.tool"),
+            'expert_controls_cb': ('setText', "simple.expert_toggle"),
+            'show_log_cb': ('setText', "log.show"),
+            'advanced_scope_cb': ('setText', "scope.advanced"),
+            'select_all_cb': ('setText', "scope.select_all"),
+            'include_deleted_cb': ('setText', "scope.deleted"),
+            'show_token_btn': ('setText', "token.show"),
+            'validate_btn': ('setText', "token.validate"),
+            'collect_btn': ('setText', "button.start"),
+            'cancel_btn': ('setText', "button.cancel"),
+        }
+        for attr, (method_name, key) in widgets.items():
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                getattr(widget, method_name)(self._tr(key))
+
+        if hasattr(self, 'token_input'):
+            self.token_input.setPlaceholderText(self._tr("token.placeholder"))
+        if hasattr(self, 'simple_pc_btn'):
+            self.simple_pc_btn.setToolTip(self._tr("simple.btn.local.tooltip"))
+        if hasattr(self, 'simple_phone_btn'):
+            self.simple_phone_btn.setToolTip(self._tr("simple.btn.phone.tooltip"))
+        if hasattr(self, 'simple_image_btn'):
+            self.simple_image_btn.setToolTip(self._tr("simple.btn.evidence.tooltip"))
+        if hasattr(self, 'simple_tool_btn'):
+            self.simple_tool_btn.setToolTip(self._tr("simple.btn.tool.tooltip"))
+        if hasattr(self, 'include_deleted_cb'):
+            self.include_deleted_cb.setToolTip(self._tr("scope.deleted.tooltip"))
+        if hasattr(self, 'language_combo'):
+            self.language_combo.setToolTip(self._tr("header.language"))
+        if getattr(self, '_token_validation_in_progress', False) and hasattr(self, 'validate_btn'):
+            self.validate_btn.setText(self._tr("token.validating"))
 
     def _create_left_panel(self) -> QWidget:
         """Create left panel with controls (scrollable)"""
@@ -248,34 +325,92 @@ class CollectorWindow(QMainWindow):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
 
-        # Quick start status
-        quick_group = QGroupBox("Quick Start")
-        quick_layout = QVBoxLayout(quick_group)
-        quick_layout.setContentsMargins(6, 14, 6, 6)
-        quick_layout.setSpacing(4)
+        # Simple workflow surface. This is the default user-facing flow; the
+        # detailed controls below remain available as the backup/expert UI.
+        self.quick_group = QGroupBox(self._tr("simple.title"))
+        quick_layout = QVBoxLayout(self.quick_group)
+        quick_layout.setContentsMargins(8, 16, 8, 8)
+        quick_layout.setSpacing(8)
+
+        self.simple_intro = QLabel(self._tr("simple.intro"))
+        self.simple_intro.setWordWrap(True)
+        self.simple_intro.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px;"
+        )
+        quick_layout.addWidget(self.simple_intro)
+
         self.workflow_status = QLabel("")
         self.workflow_status.setWordWrap(True)
         self.workflow_status.setTextFormat(Qt.TextFormat.RichText)
+        self.workflow_status.setStyleSheet(
+            f"background: {COLORS['bg_tertiary']}; "
+            f"border: 1px solid {COLORS['border_subtle']}; "
+            "border-radius: 4px; padding: 8px;"
+        )
         quick_layout.addWidget(self.workflow_status)
-        layout.addWidget(quick_group)
+
+        self.source_hint = QLabel(self._tr("simple.choose_source"))
+        self.source_hint.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; font-weight: 600;"
+        )
+        quick_layout.addWidget(self.source_hint)
+
+        source_btn_layout = QGridLayout()
+        source_btn_layout.setSpacing(6)
+
+        self.simple_pc_btn = QPushButton(self._tr("simple.btn.local"))
+        self.simple_pc_btn.setToolTip(self._tr("simple.btn.local.tooltip"))
+        self.simple_pc_btn.clicked.connect(self._select_simple_local_source)
+        source_btn_layout.addWidget(self.simple_pc_btn, 0, 0)
+
+        self.simple_phone_btn = QPushButton(self._tr("simple.btn.phone"))
+        self.simple_phone_btn.setToolTip(self._tr("simple.btn.phone.tooltip"))
+        self.simple_phone_btn.clicked.connect(self._select_simple_phone_source)
+        source_btn_layout.addWidget(self.simple_phone_btn, 0, 1)
+
+        self.simple_image_btn = QPushButton(self._tr("simple.btn.evidence"))
+        self.simple_image_btn.setToolTip(self._tr("simple.btn.evidence.tooltip"))
+        self.simple_image_btn.clicked.connect(self._open_simple_evidence_file)
+        source_btn_layout.addWidget(self.simple_image_btn, 1, 0)
+
+        self.simple_tool_btn = QPushButton(self._tr("simple.btn.tool"))
+        self.simple_tool_btn.setToolTip(self._tr("simple.btn.tool.tooltip"))
+        self.simple_tool_btn.clicked.connect(self._open_simple_tool_result)
+        source_btn_layout.addWidget(self.simple_tool_btn, 1, 1)
+
+        quick_layout.addLayout(source_btn_layout)
+
+        self.simple_source_status = QLabel(self._tr("simple.source.none"))
+        self.simple_source_status.setWordWrap(True)
+        self.simple_source_status.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px;"
+        )
+        quick_layout.addWidget(self.simple_source_status)
+
+        self.expert_controls_cb = QCheckBox(self._tr("simple.expert_toggle"))
+        self.expert_controls_cb.setChecked(False)
+        self.expert_controls_cb.stateChanged.connect(self._toggle_expert_controls)
+        quick_layout.addWidget(self.expert_controls_cb)
+
+        layout.addWidget(self.quick_group)
 
         # Step 1: Token
-        token_group = QGroupBox("1. Authenticate")
-        token_layout = QVBoxLayout(token_group)
+        self.token_group = QGroupBox(self._tr("group.connect"))
+        token_layout = QVBoxLayout(self.token_group)
         token_layout.setContentsMargins(6, 14, 6, 6)
         token_layout.setSpacing(4)
 
         self.token_input = QLineEdit()
-        self.token_input.setPlaceholderText("Paste the session token from the web case")
+        self.token_input.setPlaceholderText(self._tr("token.placeholder"))
         self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
         token_layout.addWidget(self.token_input)
 
         token_btn_layout = QHBoxLayout()
         token_btn_layout.setSpacing(4)
-        self.show_token_btn = QPushButton("Show")
+        self.show_token_btn = QPushButton(self._tr("token.show"))
         self.show_token_btn.setCheckable(True)
         self.show_token_btn.clicked.connect(self._toggle_token_visibility)
-        self.validate_btn = QPushButton("Validate Token")
+        self.validate_btn = QPushButton(self._tr("token.validate"))
         self.validate_btn.setObjectName("validateTokenButton")
         self.validate_btn.setStyleSheet(f"""
             QPushButton#validateTokenButton {{
@@ -316,24 +451,25 @@ class CollectorWindow(QMainWindow):
         self.token_progress.setVisible(False)
         token_layout.addWidget(self.token_progress)
 
-        layout.addWidget(token_group)
+        layout.addWidget(self.token_group)
 
         # Step 2: Evidence source
-        device_group = QGroupBox("2. Select Evidence Source")
-        device_layout = QVBoxLayout(device_group)
+        self.device_group = QGroupBox(self._tr("group.source_details"))
+        device_layout = QVBoxLayout(self.device_group)
         device_layout.setContentsMargins(6, 14, 6, 6)
         device_layout.setSpacing(4)
 
         self.device_panel = DeviceListPanel(self.device_manager)
         self.device_panel.selection_changed.connect(self._on_device_selection_changed)
         self.device_panel.image_file_requested.connect(self._on_image_file_added)
+        self.device_panel.set_file_action_buttons_visible(False)
         device_layout.addWidget(self.device_panel)
 
-        layout.addWidget(device_group)
+        layout.addWidget(self.device_group)
 
         # Step 3: Artifacts (tab-based)
-        artifacts_group = QGroupBox("3. Collection Scope")
-        artifacts_outer_layout = QVBoxLayout(artifacts_group)
+        self.artifacts_group = QGroupBox(self._tr("group.expert_scope"))
+        artifacts_outer_layout = QVBoxLayout(self.artifacts_group)
         artifacts_outer_layout.setContentsMargins(6, 14, 6, 6)
         artifacts_outer_layout.setSpacing(4)
 
@@ -346,7 +482,7 @@ class CollectorWindow(QMainWindow):
         )
         artifacts_outer_layout.addWidget(self.beginner_scope_label)
 
-        self.advanced_scope_cb = QCheckBox("Show advanced artifact options")
+        self.advanced_scope_cb = QCheckBox(self._tr("scope.advanced"))
         self.advanced_scope_cb.setChecked(False)
         self.advanced_scope_cb.stateChanged.connect(self._toggle_advanced_scope)
         artifacts_outer_layout.addWidget(self.advanced_scope_cb)
@@ -387,23 +523,23 @@ class CollectorWindow(QMainWindow):
 
         # Select All + Include Deleted option
         select_all_layout = QHBoxLayout()
-        self.select_all_cb = QCheckBox("Select All (current tab)")
+        self.select_all_cb = QCheckBox(self._tr("scope.select_all"))
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
         self.select_all_cb.setVisible(False)
         select_all_layout.addWidget(self.select_all_cb)
         select_all_layout.addStretch()
-        self.include_deleted_cb = QCheckBox("Include deleted files")
+        self.include_deleted_cb = QCheckBox(self._tr("scope.deleted"))
         self.include_deleted_cb.setChecked(True)
-        self.include_deleted_cb.setToolTip("Recover and collect deleted files from MFT (slower but more thorough)")
+        self.include_deleted_cb.setToolTip(self._tr("scope.deleted.tooltip"))
         self.include_deleted_cb.stateChanged.connect(self._on_artifact_selection_changed)
         select_all_layout.addWidget(self.include_deleted_cb)
         artifacts_outer_layout.addLayout(select_all_layout)
 
-        layout.addWidget(artifacts_group)
+        layout.addWidget(self.artifacts_group)
 
         # Step 4: Progress (stage-based progress display)
-        progress_group = QGroupBox("4. Collection Progress")
-        progress_outer_layout = QVBoxLayout(progress_group)
+        self.progress_group = QGroupBox(self._tr("group.progress"))
+        progress_outer_layout = QVBoxLayout(self.progress_group)
         progress_outer_layout.setContentsMargins(6, 14, 6, 6)
         progress_outer_layout.setSpacing(4)
 
@@ -496,13 +632,13 @@ class CollectorWindow(QMainWindow):
 
         progress_outer_layout.addWidget(progress_content)
 
-        layout.addWidget(progress_group)
+        layout.addWidget(self.progress_group)
 
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
 
-        self.collect_btn = QPushButton("Start Collection")
+        self.collect_btn = QPushButton(self._tr("button.start"))
         self.collect_btn.setEnabled(False)
         self.collect_btn.setFixedHeight(32)
         self.collect_btn.setMinimumWidth(120)
@@ -527,7 +663,7 @@ class CollectorWindow(QMainWindow):
             }}
         """)
 
-        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn = QPushButton(self._tr("button.cancel"))
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.setFixedHeight(32)
         self.cancel_btn.clicked.connect(self._cancel_collection)
@@ -539,29 +675,63 @@ class CollectorWindow(QMainWindow):
         # Fill remaining space with stretch
         layout.addStretch()
 
+        self._set_expert_controls_visible(False)
         self._update_scope_summary()
         self._update_workflow_status()
+        self._update_simple_source_status()
 
         # Set panel to scroll area
         scroll_area.setWidget(panel)
         return scroll_area
 
     def _create_right_panel(self) -> QWidget:
-        """Create right panel with log"""
+        """Create right panel with beginner status and optional technical log."""
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
-        log_group = QGroupBox("Activity Log")
-        log_layout = QVBoxLayout(log_group)
+        self.status_group = QGroupBox(self._tr("group.status"))
+        status_layout = QVBoxLayout(self.status_group)
+
+        self.simple_activity_label = QLabel(
+            self._tr("simple.status.ready")
+        )
+        self.simple_activity_label.setWordWrap(True)
+        self.simple_activity_label.setStyleSheet(
+            f"background: {COLORS['bg_tertiary']}; "
+            f"border: 1px solid {COLORS['border_subtle']}; "
+            "border-radius: 4px; padding: 10px; "
+            f"color: {COLORS['text_primary']};"
+        )
+        status_layout.addWidget(self.simple_activity_label)
+
+        self.show_log_cb = QCheckBox(self._tr("log.show"))
+        self.show_log_cb.setChecked(False)
+        self.show_log_cb.stateChanged.connect(
+            lambda state: self._set_technical_log_visible(
+                state == Qt.CheckState.Checked.value
+            )
+        )
+        status_layout.addWidget(self.show_log_cb)
+
+        layout.addWidget(self.status_group)
+
+        self.log_group = QGroupBox(self._tr("group.technical_log"))
+        log_layout = QVBoxLayout(self.log_group)
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Consolas", 9))
         log_layout.addWidget(self.log_text)
 
-        layout.addWidget(log_group)
+        layout.addWidget(self.log_group)
+        self._set_technical_log_visible(False)
 
         return panel
+
+    def _set_technical_log_visible(self, visible: bool):
+        """Toggle the raw log without changing logging behavior."""
+        if hasattr(self, 'log_group'):
+            self.log_group.setVisible(visible)
 
     # =========================================================================
     # Tab Creation Methods (Phase 2.1)
@@ -603,6 +773,136 @@ class CollectorWindow(QMainWindow):
         self._update_scope_summary()
         self._update_workflow_status()
 
+    def _toggle_expert_controls(self, state):
+        """Show or hide the detailed backup UI."""
+        visible = state == Qt.CheckState.Checked.value
+        self._set_expert_controls_visible(visible)
+
+    def _set_expert_controls_visible(self, visible: bool):
+        """Keep the original detailed controls available without making them primary."""
+        if hasattr(self, 'device_group'):
+            self.device_group.setVisible(visible)
+        if hasattr(self, 'artifacts_group'):
+            self.artifacts_group.setVisible(visible)
+        if hasattr(self, 'show_log_cb') and self.show_log_cb.isChecked() != visible:
+            self.show_log_cb.blockSignals(True)
+            self.show_log_cb.setChecked(visible)
+            self.show_log_cb.blockSignals(False)
+            self._set_technical_log_visible(visible)
+        self._update_simple_source_status()
+
+    def _select_simple_local_source(self):
+        """Select a local computer/disk source from the simplified UI."""
+        self._select_simple_source(
+            source_types=(
+                DeviceType.WINDOWS_PHYSICAL_DISK,
+                DeviceType.MACOS_LOCAL_SYSTEM,
+                DeviceType.LINUX_LOCAL_SYSTEM,
+            ),
+            empty_message=self._tr("simple.source.local.empty"),
+            multiple_message=self._tr("simple.source.local.multiple"),
+        )
+
+    def _select_simple_phone_source(self):
+        """Select a connected mobile source from the simplified UI."""
+        self._select_simple_source(
+            source_types=(
+                DeviceType.ANDROID_DEVICE,
+                DeviceType.IOS_DEVICE,
+                DeviceType.IOS_BACKUP,
+                DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
+                DeviceType.MOBILE_FFS_BUNDLE_IOS,
+            ),
+            empty_message=self._tr("simple.source.phone.empty"),
+            multiple_message=self._tr("simple.source.phone.multiple"),
+        )
+
+    def _select_simple_source(self, source_types: tuple, empty_message: str, multiple_message: str):
+        """Select one matching source, or reveal the detailed picker when needed."""
+        if getattr(self, '_collection_in_progress', False):
+            return
+
+        candidates = [
+            device for device in self.device_manager.get_all_devices()
+            if device.device_type in source_types and device.is_selectable
+        ]
+
+        if not candidates:
+            self.simple_source_status.setText(empty_message)
+            self.status_bar.showMessage("No matching evidence source is ready")
+            try:
+                self.device_manager.refresh()
+            except Exception:
+                pass
+            return
+
+        if len(candidates) > 1:
+            self.simple_source_status.setText(multiple_message)
+            self.status_bar.showMessage("Choose the exact evidence source")
+            self.expert_controls_cb.setChecked(True)
+            return
+
+        self.device_manager.deselect_all()
+        self.device_manager.select_device(candidates[0].device_id, True)
+        self._sync_device_panel_selection()
+        self.simple_source_status.setText(
+            self._tr("simple.source.selected", source=candidates[0].display_name)
+        )
+        self.status_bar.showMessage("Evidence source selected")
+        self._update_collect_button_state()
+
+    def _sync_device_panel_selection(self):
+        """Mirror UnifiedDeviceManager selection into the backup device list."""
+        panel = getattr(self, 'device_panel', None)
+        if panel is None:
+            return
+        for device_id, cb in getattr(panel, 'device_checkboxes', {}).items():
+            device = self.device_manager.get_device(device_id)
+            if device is None:
+                continue
+            cb.blockSignals(True)
+            cb.setChecked(bool(device.is_selected))
+            cb.blockSignals(False)
+        try:
+            panel._update_summary()
+        except Exception:
+            pass
+
+    def _open_simple_evidence_file(self):
+        """Open the existing disk image / mobile FFS picker from simple mode."""
+        if getattr(self, '_collection_in_progress', False):
+            return
+        if hasattr(self, 'device_panel'):
+            self.device_panel.request_add_evidence_file()
+
+    def _open_simple_tool_result(self):
+        """Open the existing verified tool-result picker from simple mode."""
+        if getattr(self, '_collection_in_progress', False):
+            return
+        if hasattr(self, 'device_panel'):
+            self.device_panel.request_add_tool_result()
+
+    def _update_simple_source_status(self):
+        """Update the simplified source summary."""
+        if not hasattr(self, 'simple_source_status'):
+            return
+
+        selected_devices = self.device_manager.get_selected_devices()
+        if not selected_devices:
+            self.simple_source_status.setText(self._tr("simple.source.none"))
+            return
+
+        if len(selected_devices) == 1:
+            device = selected_devices[0]
+            self.simple_source_status.setText(
+                self._tr("simple.source.selected", source=device.display_name)
+            )
+            return
+
+        self.simple_source_status.setText(
+            self._tr("simple.source.multiple", count=len(selected_devices))
+        )
+
     def _on_artifact_selection_changed(self, *_args):
         """Keep beginner summaries and start button in sync."""
         self._update_scope_summary()
@@ -631,42 +931,37 @@ class CollectorWindow(QMainWindow):
         export_count = len(self._selected_third_party_export_sources())
         tool_result_count = axiom_count + export_count
         deleted_text = (
-            "Deleted files included where supported."
+            self._tr("scope.summary.deleted_on")
             if getattr(self, 'include_deleted_cb', None) and self.include_deleted_cb.isChecked()
-            else "Deleted files excluded."
+            else self._tr("scope.summary.deleted_off")
         )
 
         if not self.collection_token:
-            text = (
-                "Authenticate first. The server profile will enable the allowed "
-                "artifact set automatically."
-            )
+            text = self._tr("scope.summary.auth_first")
         elif checked and tool_result_count:
-            text = (
-                f"Scope ready: {checked} selected artifact type(s)"
-                f" out of {enabled} allowed, plus {tool_result_count} verified tool result source(s). "
-                f"{deleted_text}"
+            text = self._tr(
+                "scope.summary.mixed",
+                checked=checked,
+                enabled=enabled,
+                tool_count=tool_result_count,
+                deleted=deleted_text,
             )
         elif checked:
-            text = (
-                f"Recommended scope ready: {checked} selected artifact type(s)"
-                f" out of {enabled} allowed. {deleted_text}"
+            text = self._tr(
+                "scope.summary.artifacts",
+                checked=checked,
+                enabled=enabled,
+                deleted=deleted_text,
             )
         elif tool_result_count:
-            text = (
-                f"Verified tool result scope ready: {tool_result_count} source(s). "
-                "Server parsing will expand AXIOM, Cellebrite, or Autopsy results into searchable documents."
-            )
+            text = self._tr("scope.summary.tool", tool_count=tool_result_count)
         else:
-            text = (
-                f"No artifact type selected. Open advanced options to choose artifacts. "
-                f"{enabled} artifact type(s) are allowed."
-            )
+            text = self._tr("scope.summary.empty", enabled=enabled)
         self.beginner_scope_label.setText(text)
 
     def _format_workflow_step(self, number: int, title: str, done: bool, detail: str) -> str:
         color = COLORS['success'] if done else COLORS['text_tertiary']
-        state = "Done" if done else "Needed"
+        state = self._tr("step.state.done") if done else self._tr("step.state.needed")
         return (
             f"<span style='color:{color};'><b>{number}. {title}</b> - {state}</span>"
             f"<br><span style='color:{COLORS['text_secondary']};'>{detail}</span>"
@@ -687,12 +982,12 @@ class CollectorWindow(QMainWindow):
         scope_done = artifact_count > 0 or tool_result_count > 0
 
         if self._token_validation_in_progress:
-            token_detail = "Validating session token..."
+            token_detail = self._tr("step.token.validating")
         elif token_done:
             case_label = (self.case_id[:8] + "...") if self.case_id else "validated"
-            token_detail = f"Authenticated case: {case_label}"
+            token_detail = self._tr("step.token.validated", case=case_label)
         else:
-            token_detail = "Paste the session token from the web case and validate it."
+            token_detail = self._tr("step.token.empty")
 
         if source_done:
             if len(selected_devices) == 1:
@@ -700,32 +995,64 @@ class CollectorWindow(QMainWindow):
             else:
                 source_detail = f"{len(selected_devices)} evidence source(s) selected."
         else:
-            source_detail = "Select a local drive, connected device, image file, FFS bundle, or verified tool result."
+            source_detail = self._tr("step.source.empty")
 
         if scope_done and artifact_count and tool_result_count:
-            scope_detail = (
-                f"{artifact_count} artifact type(s) and "
-                f"{tool_result_count} verified tool result source(s) selected."
+            scope_detail = self._tr(
+                "step.scope.mixed",
+                artifact_count=artifact_count,
+                tool_count=tool_result_count,
             )
         elif scope_done and tool_result_count:
-            scope_detail = f"{tool_result_count} verified tool result source(s) selected."
+            scope_detail = self._tr("step.scope.tool", tool_count=tool_result_count)
         elif scope_done:
-            scope_detail = f"{artifact_count} artifact type(s) selected."
+            scope_detail = self._tr("step.scope.artifacts", artifact_count=artifact_count)
         elif token_done:
-            scope_detail = "Open advanced options to choose artifacts."
+            scope_detail = self._tr("step.scope.choose")
         else:
-            scope_detail = "Collection scope is enabled after authentication."
+            scope_detail = self._tr("step.scope.locked")
 
         ready_done = token_done and source_done and scope_done
-        ready_detail = "Ready to start collection." if ready_done else "Complete the required steps above."
+        ready_detail = (
+            self._tr("step.start.ready")
+            if ready_done else self._tr("step.start.incomplete")
+        )
 
         html = "<br><br>".join([
-            self._format_workflow_step(1, "Authenticate", token_done, token_detail),
-            self._format_workflow_step(2, "Evidence", source_done, source_detail),
-            self._format_workflow_step(3, "Scope", scope_done, scope_detail),
-            self._format_workflow_step(4, "Start", ready_done, ready_detail),
+            self._format_workflow_step(1, self._tr("step.connect.title"), token_done, token_detail),
+            self._format_workflow_step(2, self._tr("step.evidence.title"), source_done, source_detail),
+            self._format_workflow_step(3, self._tr("step.scope.title"), scope_done, scope_detail),
+            self._format_workflow_step(4, self._tr("step.start.title"), ready_done, ready_detail),
         ])
         self.workflow_status.setText(html)
+        self._update_simple_source_status()
+
+        if hasattr(self, 'simple_activity_label'):
+            if getattr(self, '_collection_in_progress', False):
+                text = self._tr("simple.status.collecting")
+                color = COLORS['warning']
+            elif getattr(self, '_token_validation_in_progress', False):
+                text = self._tr("simple.status.validating")
+                color = COLORS['warning']
+            elif ready_done:
+                text = self._tr("simple.status.ready_to_collect")
+                color = COLORS['success']
+            elif not token_done:
+                text = self._tr("simple.status.need_token")
+                color = COLORS['text_primary']
+            elif not source_done:
+                text = self._tr("simple.status.need_source")
+                color = COLORS['text_primary']
+            else:
+                text = self._tr("simple.status.need_scope")
+                color = COLORS['text_primary']
+            self.simple_activity_label.setText(text)
+            self.simple_activity_label.setStyleSheet(
+                f"background: {COLORS['bg_tertiary']}; "
+                f"border: 1px solid {color}; "
+                "border-radius: 4px; padding: 10px; "
+                f"color: {COLORS['text_primary']};"
+            )
 
     def _create_windows_tab(self) -> QWidget:
         """Create Windows artifacts tab"""
@@ -805,6 +1132,7 @@ class CollectorWindow(QMainWindow):
     IOS_SUBCATEGORIES = [
         ('core',            'Core'),
         ('system',          'System'),
+        ('app_analysis',    'App Analysis'),
         ('messenger',       'Messenger'),
         ('sns',             'SNS'),
         ('email_browser',   'Email / Browser'),
@@ -816,6 +1144,7 @@ class CollectorWindow(QMainWindow):
     ANDROID_SUBCATEGORIES = [
         ('basic',               'Basic Collection (Non-Root)'),
         ('app_system',          'System DB [Root]'),
+        ('app_analysis',        'App Analysis'),
         ('app_messenger',       'Messenger'),
         ('app_sns',             'SNS [Root Only]'),
         ('app_korean',          'Korean Apps'),
@@ -954,14 +1283,26 @@ class CollectorWindow(QMainWindow):
             if platform == "android":
                 if source == "ffs":
                     from collectors.mobile_ffs.path_specs import ANDROID_PATH_SPECS
-                    return {spec.artifact_type for spec in ANDROID_PATH_SPECS}
+                    from collectors.mobile_ffs_collector import expand_mobile_ffs_selection
+                    supported = {spec.artifact_type for spec in ANDROID_PATH_SPECS}
+                    if expand_mobile_ffs_selection(
+                        "mobile_android_app", supported, platform="android"
+                    ):
+                        supported.add("mobile_android_app")
+                    return supported
                 from collectors.android_collector import ANDROID_ARTIFACT_TYPES
                 return set(ANDROID_ARTIFACT_TYPES.keys())
 
             if platform == "ios":
                 if source == "ffs":
                     from collectors.mobile_ffs.path_specs import IOS_PATH_SPECS
-                    return {spec.artifact_type for spec in IOS_PATH_SPECS}
+                    from collectors.mobile_ffs_collector import expand_mobile_ffs_selection
+                    supported = {spec.artifact_type for spec in IOS_PATH_SPECS}
+                    if expand_mobile_ffs_selection(
+                        "mobile_ios_app", supported, platform="ios"
+                    ):
+                        supported.add("mobile_ios_app")
+                    return supported
                 from collectors.ios_collector import IOS_ARTIFACT_TYPES
                 include_device = source == "usb_backup"
                 supported = set()
@@ -1629,6 +1970,18 @@ class CollectorWindow(QMainWindow):
         self._update_scope_summary()
         self._update_workflow_status()
 
+    def _set_simple_source_controls_enabled(self, enabled: bool):
+        """Enable or disable simplified source actions."""
+        for attr in (
+            'simple_pc_btn',
+            'simple_phone_btn',
+            'simple_image_btn',
+            'simple_tool_btn',
+        ):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setEnabled(enabled)
+
     def _set_collection_controls_locked(self, locked: bool):
         """Freeze all collection inputs while a collection/upload run is active."""
         self._collection_in_progress = bool(locked)
@@ -1640,6 +1993,9 @@ class CollectorWindow(QMainWindow):
         self.select_all_cb.setEnabled(not locked)
         self.include_deleted_cb.setEnabled(not locked)
         self.advanced_scope_cb.setEnabled(not locked)
+        if hasattr(self, 'expert_controls_cb'):
+            self.expert_controls_cb.setEnabled(not locked)
+        self._set_simple_source_controls_enabled(not locked)
         self.artifacts_tab.setEnabled(not locked)
         if hasattr(self, 'linux_mount_path'):
             self.linux_mount_path.setEnabled(not locked)
@@ -1886,10 +2242,13 @@ class CollectorWindow(QMainWindow):
         self.validate_btn.setEnabled(controls_enabled)
         self.show_token_btn.setEnabled(controls_enabled)
         self.token_input.setEnabled(controls_enabled)
+        self._set_simple_source_controls_enabled(controls_enabled)
+        if hasattr(self, 'expert_controls_cb'):
+            self.expert_controls_cb.setEnabled(controls_enabled)
 
         if busy:
-            self.validate_btn.setText("Validating...")
-            self.token_status.setText("Validating token...")
+            self.validate_btn.setText(self._tr("token.validating"))
+            self.token_status.setText(self._tr("token.status.validating"))
             self.token_status.setStyleSheet("color: #fbbf24;")
             self.token_progress.setRange(0, 0)
             self.token_progress.setVisible(True)
@@ -1898,11 +2257,14 @@ class CollectorWindow(QMainWindow):
             self._update_workflow_status()
             return
 
-        self.validate_btn.setText("Validate Token")
+        self.validate_btn.setText(self._tr("token.validate"))
         self.token_progress.setVisible(False)
         self.token_progress.setRange(0, 100)
         self.token_input.setEnabled(not getattr(self, '_collection_in_progress', False))
         self.show_token_btn.setEnabled(not getattr(self, '_collection_in_progress', False))
+        self._set_simple_source_controls_enabled(not getattr(self, '_collection_in_progress', False))
+        if hasattr(self, 'expert_controls_cb'):
+            self.expert_controls_cb.setEnabled(not getattr(self, '_collection_in_progress', False))
         self.status_bar.showMessage("Ready")
         self._update_collect_button_state()
 
@@ -1944,6 +2306,9 @@ class CollectorWindow(QMainWindow):
             self.collection_token = result.collection_token
             self.collection_profile_id = getattr(result, 'collection_profile_id', None)
             self.collection_profile_targets = getattr(result, 'collection_profile_targets', None) or []
+            upload_mode = getattr(result, 'upload_mode', None)
+            if upload_mode:
+                self.config['upload_mode'] = upload_mode
             self.profile_artifact_types = set()
             for registry, is_mft_registry in (
                 (ARTIFACT_TYPES, False),
@@ -2061,6 +2426,33 @@ class CollectorWindow(QMainWindow):
                 for artifact_type, info in ARTIFACT_TYPES.items():
                     if info.get('category') == server_name:
                         mapped_allowed.add(artifact_type)
+
+            try:
+                from collectors.mobile_ffs_collector import expand_mobile_ffs_selection
+                profile_ffs_types = {"android": set(), "ios": set()}
+                for raw_target in self.collection_profile_targets:
+                    target = raw_target if isinstance(raw_target, dict) else {}
+                    metadata = target.get('metadata') or {}
+                    collector_config = metadata.get('collector_config') or {}
+                    for spec in collector_config.get('mobile_ffs_specs') or []:
+                        if not isinstance(spec, dict):
+                            continue
+                        platform = str(spec.get('platform') or '').lower()
+                        artifact_type = str(
+                            spec.get('artifact_type') or target.get('artifact_type') or ''
+                        ).strip()
+                        if platform in profile_ffs_types and artifact_type:
+                            profile_ffs_types[platform].add(artifact_type)
+                if expand_mobile_ffs_selection(
+                    'mobile_android_app', profile_ffs_types['android'], platform='android'
+                ):
+                    mapped_allowed.add('mobile_android_app')
+                if expand_mobile_ffs_selection(
+                    'mobile_ios_app', profile_ffs_types['ios'], platform='ios'
+                ):
+                    mapped_allowed.add('mobile_ios_app')
+            except Exception:
+                pass
 
             # Allow all artifacts if 'all' is included or allowed_artifacts is empty
             allow_all = 'all' in self.allowed_artifacts or not result.allowed_artifacts

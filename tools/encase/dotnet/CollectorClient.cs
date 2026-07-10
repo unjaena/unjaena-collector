@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace UnjaenaEncaseBridge
 {
@@ -38,13 +39,21 @@ namespace UnjaenaEncaseBridge
         }
 
         private static readonly object ProfileLock = new object();
-        private static readonly object TlsLock = new object();
-        private static bool tlsConfigured;
         private static string collectionProfileId = string.Empty;
         private static CollectionProfileTarget[] collectionProfileTargets = new CollectionProfileTarget[0];
         private static ProfileMatcherEntry[] collectionProfileGenericMatchers = new ProfileMatcherEntry[0];
         private static Dictionary<string, ProfileMatcherEntry[]> collectionProfileMatchersByExtension =
             new Dictionary<string, ProfileMatcherEntry[]>(StringComparer.Ordinal);
+
+        private string authenticationPath = "/api/v1/collector/encase/authenticate";
+        private string uploadInitPath = "/api/v1/collector/encase/uploads/init";
+        private string finalizePath = "/api/v1/collector/encase/collection/finalize";
+        private string uploadTicketHeader = "X-EnCase-Upload-Ticket";
+        private string authenticationClient = "encase_dotnet";
+        private string authenticationMode = "embedded_dotnet";
+        private string consentClient = "encase_enscript";
+        private string defaultCollectorName = "EnCase operator";
+        private string userAgent = "unJaena-EnCase-DotNet/1.0";
 
         public int LastStatusCode { get; private set; }
         public string LastError { get; private set; }
@@ -53,6 +62,53 @@ namespace UnjaenaEncaseBridge
         public bool WasLastSucceeded()
         {
             return LastSucceeded;
+        }
+
+        public void ConfigureClientIdentity(
+            string authenticationPath,
+            string uploadInitPath,
+            string uploadTicketHeader,
+            string authenticationClient,
+            string authenticationMode,
+            string consentClient,
+            string defaultCollectorName,
+            string userAgent)
+        {
+            if (!IsBlank(authenticationPath))
+            {
+                this.authenticationPath = authenticationPath;
+            }
+            if (!IsBlank(uploadInitPath))
+            {
+                this.uploadInitPath = uploadInitPath;
+                this.finalizePath = uploadInitPath.IndexOf("/xways/", StringComparison.OrdinalIgnoreCase) >= 0
+                    ? "/api/v1/collector/xways/collection/finalize"
+                    : "/api/v1/collector/encase/collection/finalize";
+            }
+            if (!IsBlank(uploadTicketHeader))
+            {
+                this.uploadTicketHeader = uploadTicketHeader;
+            }
+            if (!IsBlank(authenticationClient))
+            {
+                this.authenticationClient = authenticationClient;
+            }
+            if (!IsBlank(authenticationMode))
+            {
+                this.authenticationMode = authenticationMode;
+            }
+            if (!IsBlank(consentClient))
+            {
+                this.consentClient = consentClient;
+            }
+            if (!IsBlank(defaultCollectorName))
+            {
+                this.defaultCollectorName = defaultCollectorName;
+            }
+            if (!IsBlank(userAgent))
+            {
+                this.userAgent = userAgent;
+            }
         }
 
         public int GetLastStatusCode()
@@ -89,12 +145,13 @@ namespace UnjaenaEncaseBridge
                 return ErrorJson("invalid_argument", "host, sessionToken, and hardwareId are required.");
             }
 
-            string url = BuildUrl(host, port, useSsl, "/api/v1/collector/encase/authenticate");
+            string url = BuildUrl(host, port, useSsl, authenticationPath);
             string body =
                 "{"
                 + "\"session_token\":\"" + JsonEscape(sessionToken) + "\","
                 + "\"hardware_id\":\"" + JsonEscape(hardwareId) + "\","
-                + "\"client_info\":{\"client\":\"encase_dotnet\",\"mode\":\"embedded_dotnet\",\"version\":\"1.0.0\"}"
+                + "\"client_info\":{\"client\":\"" + JsonEscape(authenticationClient)
+                + "\",\"mode\":\"" + JsonEscape(authenticationMode) + "\",\"version\":\"1.0.0\"}"
                 + "}";
 
             return PostJson(url, body);
@@ -216,6 +273,70 @@ namespace UnjaenaEncaseBridge
                 LastError = ResponseErrorSummary(response);
             }
             return response;
+        }
+
+        public string FinalizeCollection(
+            string host,
+            uint port,
+            bool useSsl,
+            string caseId,
+            string sessionId,
+            string collectionToken,
+            long processedCount,
+            long uploadedCount,
+            long skippedCount,
+            long failedCount)
+        {
+            return FinalizeCollection(
+                host,
+                PortToInt(port),
+                useSsl,
+                caseId,
+                sessionId,
+                collectionToken,
+                processedCount,
+                uploadedCount,
+                skippedCount,
+                failedCount);
+        }
+
+        public string FinalizeCollection(
+            string host,
+            int port,
+            bool useSsl,
+            string caseId,
+            string sessionId,
+            string collectionToken,
+            long processedCount,
+            long uploadedCount,
+            long skippedCount,
+            long failedCount)
+        {
+            ClearState();
+
+            if (IsBlank(host) || IsBlank(caseId) || IsBlank(sessionId) || IsBlank(collectionToken))
+            {
+                return ErrorJson("invalid_argument", "host, caseId, sessionId, and collectionToken are required.");
+            }
+
+            string url = BuildUrl(host, port, useSsl, finalizePath);
+            string body =
+                "{"
+                + "\"session_id\":\"" + JsonEscape(sessionId) + "\","
+                + "\"collection_token\":\"" + JsonEscape(collectionToken) + "\","
+                + "\"case_id\":\"" + JsonEscape(caseId) + "\","
+                + "\"processed_count\":" + SafeCount(processedCount) + ","
+                + "\"uploaded_count\":" + SafeCount(uploadedCount) + ","
+                + "\"skipped_count\":" + SafeCount(skippedCount) + ","
+                + "\"failed_count\":" + SafeCount(failedCount) + ","
+                + "\"client_completed\":true,"
+                + "\"metadata\":{"
+                + "\"client\":\"" + JsonEscape(consentClient) + "\","
+                + "\"transport\":\"raw_body\""
+                + "}"
+                + "}";
+
+            return PostJson(url, body);
         }
 
         public string MatchProfileArtifact(
@@ -403,11 +524,11 @@ namespace UnjaenaEncaseBridge
                 + "\"consent_version\":\"" + JsonEscape(version) + "\","
                 + "\"consent_language\":\"" + JsonEscape(templateLanguage) + "\","
                 + "\"agreed_items\":" + agreedItems + ","
-                + "\"collector_name\":\"" + JsonEscape(IsBlank(collectorName) ? "EnCase operator" : collectorName) + "\","
+                + "\"collector_name\":\"" + JsonEscape(IsBlank(collectorName) ? defaultCollectorName : collectorName) + "\","
                 + "\"collector_organization\":\"" + JsonEscape(collectorOrganization ?? string.Empty) + "\","
                 + "\"target_system_info\":{"
-                + "\"client\":\"encase_enscript\","
-                + "\"transport\":\"embedded_dotnet\","
+                + "\"client\":\"" + JsonEscape(consentClient) + "\","
+                + "\"transport\":\"" + JsonEscape(authenticationMode) + "\","
                 + "\"hardware_id\":\"" + JsonEscape(hardwareId ?? string.Empty) + "\","
                 + "\"operator_role\":\"device_owner\","
                 + "\"operator_legal_basis\":\"data_subject_consent\","
@@ -573,7 +694,7 @@ namespace UnjaenaEncaseBridge
 
             string metadata = NormalizeJsonObject(metadataJson);
             string profileId = GetCollectionProfileId();
-            string initUrl = BuildUrl(host, port, useSsl, "/api/v1/collector/encase/uploads/init");
+            string initUrl = BuildUrl(host, port, useSsl, uploadInitPath);
             string initBody =
                 "{"
                 + "\"session_id\":\"" + JsonEscape(sessionId) + "\","
@@ -622,42 +743,13 @@ namespace UnjaenaEncaseBridge
 
         private static void ConfigureTls()
         {
-            if (tlsConfigured)
-            {
-                return;
-            }
-
-            lock (TlsLock)
-            {
-                if (tlsConfigured)
-                {
-                    return;
-                }
-
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-                ServicePointManager.Expect100Continue = false;
-                ServicePointManager.UseNagleAlgorithm = false;
-                if (ServicePointManager.DefaultConnectionLimit < 16)
-                {
-                    ServicePointManager.DefaultConnectionLimit = 16;
-                }
-                tlsConfigured = true;
-            }
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+            ServicePointManager.Expect100Continue = false;
         }
 
         private string PostJson(string url, string json)
         {
-            byte[] body = Encoding.UTF8.GetBytes(json);
-            HttpWebRequest request = CreateRequest(url, "POST", "application/json");
-            request.Accept = "application/json";
-            request.ContentLength = body.Length;
-
-            using (Stream stream = request.GetRequestStream())
-            {
-                stream.Write(body, 0, body.Length);
-            }
-
-            return ReadResponse(request);
+            return PostJson(url, json, null, null, null);
         }
 
         private string PostJson(string url, string json, string uploadTicket)
@@ -667,12 +759,27 @@ namespace UnjaenaEncaseBridge
 
         private string PostJson(string url, string json, string uploadTicket, string sessionId, string collectionToken)
         {
+            string lastResponse = string.Empty;
+            for (int attempt = 1; attempt <= MaxTransientAttempts; attempt++)
+            {
+                lastResponse = PostJsonOnce(url, json, uploadTicket, sessionId, collectionToken);
+                if (!ShouldRetryLastResult(attempt))
+                {
+                    return lastResponse;
+                }
+                Thread.Sleep(RetryDelayMilliseconds(attempt));
+            }
+            return lastResponse;
+        }
+
+        private string PostJsonOnce(string url, string json, string uploadTicket, string sessionId, string collectionToken)
+        {
             byte[] body = Encoding.UTF8.GetBytes(json);
             HttpWebRequest request = CreateRequest(url, "POST", "application/json");
             request.Accept = "application/json";
             if (!IsBlank(uploadTicket))
             {
-                request.Headers["X-EnCase-Upload-Ticket"] = uploadTicket;
+                request.Headers[uploadTicketHeader] = uploadTicket;
             }
             if (!IsBlank(sessionId))
             {
@@ -706,12 +813,36 @@ namespace UnjaenaEncaseBridge
 
         private string PutStream(string url, Stream inputStream, long contentLength, string uploadTicket)
         {
+            string lastResponse = string.Empty;
+            for (int attempt = 1; attempt <= MaxTransientAttempts; attempt++)
+            {
+                if (attempt > 1)
+                {
+                    if (!inputStream.CanSeek)
+                    {
+                        return lastResponse;
+                    }
+                    inputStream.Position = 0;
+                }
+
+                lastResponse = PutStreamOnce(url, inputStream, contentLength, uploadTicket);
+                if (!ShouldRetryLastResult(attempt))
+                {
+                    return lastResponse;
+                }
+                Thread.Sleep(RetryDelayMilliseconds(attempt));
+            }
+            return lastResponse;
+        }
+
+        private string PutStreamOnce(string url, Stream inputStream, long contentLength, string uploadTicket)
+        {
             int timeoutMs = ComputeUploadTimeoutMilliseconds(contentLength);
             HttpWebRequest request = CreateRequest(url, "PUT", "application/octet-stream", timeoutMs);
             request.Accept = "application/json";
             if (!IsBlank(uploadTicket))
             {
-                request.Headers["X-EnCase-Upload-Ticket"] = uploadTicket;
+                request.Headers[uploadTicketHeader] = uploadTicket;
             }
             request.ContentLength = contentLength;
 
@@ -723,27 +854,54 @@ namespace UnjaenaEncaseBridge
             return ReadResponse(request);
         }
 
-        private static HttpWebRequest CreateRequest(string url, string method, string contentType)
+        private HttpWebRequest CreateRequest(string url, string method, string contentType)
         {
             return CreateRequest(url, method, contentType, 120000);
         }
 
-        private static HttpWebRequest CreateRequest(string url, string method, string contentType, int timeoutMs)
+        private HttpWebRequest CreateRequest(string url, string method, string contentType, int timeoutMs)
         {
             ConfigureTls();
 
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
             request.Method = method;
             request.ContentType = contentType;
-            request.UserAgent = "unJaena-EnCase-DotNet/1.0";
+            request.UserAgent = userAgent;
             request.Timeout = timeoutMs;
             request.ReadWriteTimeout = timeoutMs;
             request.KeepAlive = false;
             request.AllowAutoRedirect = false;
-            request.ServicePoint.ConnectionLimit = Math.Max(request.ServicePoint.ConnectionLimit, 16);
-            request.ServicePoint.Expect100Continue = false;
-            request.ServicePoint.UseNagleAlgorithm = false;
             return request;
+        }
+
+        private const int MaxTransientAttempts = 4;
+
+        private bool ShouldRetryLastResult(int attempt)
+        {
+            if (attempt >= MaxTransientAttempts)
+            {
+                return false;
+            }
+            return LastStatusCode == 0
+                || LastStatusCode == 408
+                || LastStatusCode == 429
+                || LastStatusCode == 500
+                || LastStatusCode == 502
+                || LastStatusCode == 503
+                || LastStatusCode == 504;
+        }
+
+        private static int RetryDelayMilliseconds(int attempt)
+        {
+            int cappedAttempt = Math.Max(1, Math.Min(attempt, 4));
+            int baseDelay = 500 * (1 << (cappedAttempt - 1));
+            int jitter = Math.Abs(Environment.TickCount) % 250;
+            return baseDelay + jitter;
+        }
+
+        private static string SafeCount(long value)
+        {
+            return Math.Max(0L, value).ToString(CultureInfo.InvariantCulture);
         }
 
         private static int ComputeUploadTimeoutMilliseconds(long contentLength)
@@ -1123,7 +1281,7 @@ namespace UnjaenaEncaseBridge
                 for (int i = 0; i < targets.Length; i++)
                 {
                     CollectionProfileTarget target = targets[i];
-                    if (target == null || IsBlank(target.ArtifactType) || target.Matchers == null)
+                    if (target == null || IsBlank(target.ArtifactType) || target.Matchers == null || IsSourceFileTarget(target.Kind))
                     {
                         continue;
                     }
@@ -1455,6 +1613,16 @@ namespace UnjaenaEncaseBridge
                 return parsed;
             }
             return defaultValue;
+        }
+
+        private static bool IsSourceFileTarget(string kind)
+        {
+            if (IsBlank(kind))
+            {
+                return false;
+            }
+            string normalized = kind.Trim().ToLowerInvariant();
+            return normalized == "source_file" || normalized == "source_upload" || normalized == "evidence_source";
         }
 
         private static CollectionProfilePattern[] BuildCollectionProfilePatterns(string[] patterns)

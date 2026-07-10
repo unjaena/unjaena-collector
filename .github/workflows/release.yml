@@ -70,7 +70,10 @@ jobs:
           echo "[ADB] Bundled $(resources/adb/adb.exe version 2>/dev/null | head -1)"
 
       - name: Build EXE
-        run: python build.py --production --ci --skip-usb-check
+        env:
+          COLLECTOR_UI_LOCALE_KO_JSON_B64: ${{ secrets.COLLECTOR_UI_LOCALE_KO_JSON_B64 }}
+          COLLECTOR_UI_LOCALE_JA_JSON_B64: ${{ secrets.COLLECTOR_UI_LOCALE_JA_JSON_B64 }}
+        run: python build.py --production --ci --skip-usb-check --require-ui-locales
 
       - name: Rename with version
         working-directory: dist
@@ -131,7 +134,10 @@ jobs:
           "
 
       - name: Build Linux binary
-        run: python build.py --production --ci --skip-usb-check
+        env:
+          COLLECTOR_UI_LOCALE_KO_JSON_B64: ${{ secrets.COLLECTOR_UI_LOCALE_KO_JSON_B64 }}
+          COLLECTOR_UI_LOCALE_JA_JSON_B64: ${{ secrets.COLLECTOR_UI_LOCALE_JA_JSON_B64 }}
+        run: python build.py --production --ci --skip-usb-check --require-ui-locales
 
       - name: Package tar.gz
         working-directory: dist
@@ -202,7 +208,10 @@ jobs:
           "
 
       - name: Build macOS binary
-        run: python build.py --production --ci --skip-usb-check
+        env:
+          COLLECTOR_UI_LOCALE_KO_JSON_B64: ${{ secrets.COLLECTOR_UI_LOCALE_KO_JSON_B64 }}
+          COLLECTOR_UI_LOCALE_JA_JSON_B64: ${{ secrets.COLLECTOR_UI_LOCALE_JA_JSON_B64 }}
+        run: python build.py --production --ci --skip-usb-check --require-ui-locales
 
       # -----------------------------------------------------------------
       # Code Signing + Notarization

@@ -35,7 +35,7 @@ import hashlib
 import logging
 import shlex
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Generator, Tuple, Dict, Any, Optional, List, Callable
 from dataclasses import dataclass
 
@@ -1430,7 +1430,7 @@ class AndroidCollector:
                                 pass
                             try:
                                 ts = int(parts[1])
-                                file_mtime = datetime.utcfromtimestamp(ts).isoformat()
+                                file_mtime = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
                             except (ValueError, OSError):
                                 pass
 

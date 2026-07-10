@@ -3089,10 +3089,14 @@ class ArtifactCollector:
             base_path = mft_config.get('base_path', '')
             pattern = mft_config.get('pattern', None)
             files = mft_config.get('files', None)
+            extensions = mft_config.get('extensions', None)
+            exclude_extensions = mft_config.get('exclude_extensions', None)
 
             if pattern:
                 for result in self.mft_collector.collect_by_pattern(
-                    base_path, pattern, artifact_type, include_deleted
+                    base_path, pattern, artifact_type, include_deleted,
+                    extensions=extensions,
+                    exclude_extensions=exclude_extensions,
                 ):
                     yield result
                     if progress_callback:
@@ -3111,12 +3115,16 @@ class ArtifactCollector:
         # System-wide paths (TeamViewer/AnyDesk ProgramData, etc.)
         for sys_path in mft_config.get('system_base_paths', []):
             extensions = mft_config.get('extensions', None)
+            exclude_extensions = mft_config.get('exclude_extensions', None)
             logger.debug(f"[MFT] System path scan: {sys_path}")
             try:
                 for result in self.mft_collector.collect_by_pattern(
-                    sys_path, '*', artifact_type, include_deleted
+                    sys_path, '*', artifact_type, include_deleted,
+                    extensions=extensions,
+                    exclude_extensions=exclude_extensions,
                 ):
-                    # Apply extension filter manually for MFT mode
+                    # Keep a post-filter for compatibility; modern MFT
+                    # collectors apply this before reading/saving content.
                     if extensions:
                         filename = result[0].lower() if isinstance(result[0], str) else str(result[0]).lower()
                         if not any(filename.endswith(ext.lower()) for ext in extensions):
@@ -3188,7 +3196,9 @@ class ArtifactCollector:
                 try:
                     if pattern:
                         for result in self.mft_collector.collect_by_pattern(
-                            full_base_path, pattern, artifact_type, include_deleted
+                            full_base_path, pattern, artifact_type, include_deleted,
+                            extensions=extensions,
+                            exclude_extensions=exclude_extensions,
                         ):
                             file_name = result[0].lower() if isinstance(result[0], str) else str(result[0]).lower()
 

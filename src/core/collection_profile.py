@@ -58,6 +58,14 @@ _WINDOWS_DISPLAY_CATEGORIES = {
     "pc_apps",
 }
 _WINDOWS_SUBCATEGORY_HINTS = {"pc_messenger", "pc_apps", "filesystem", "developer"}
+_MOBILE_FFS_PROFILE_ONLY_KEYS = {
+    "category",
+    "collector",
+    "description",
+    "mobile_ffs_specs",
+    "name",
+    "subcategory",
+}
 
 
 _IOS_SYSTEM_PREFIXES = (
@@ -358,6 +366,17 @@ def _install_ios_backup_targets(
         merged["pattern"] = True
 
 
+def _is_mobile_ffs_profile_only_target(
+    kind_token: str,
+    collector_config: Mapping[str, Any],
+) -> bool:
+    if kind_token not in _CONFIG_ONLY_KINDS:
+        return False
+    if not collector_config.get("mobile_ffs_specs"):
+        return False
+    return set(collector_config).issubset(_MOBILE_FFS_PROFILE_ONLY_KEYS)
+
+
 def apply_collection_profile_to_registry(
     targets: list[Any] | None,
     registry: MutableMapping[str, dict[str, Any]],
@@ -395,8 +414,14 @@ def apply_collection_profile_to_registry(
             # not by local artifact path collectors.
             continue
 
-        existing = deepcopy(registry.get(artifact_type) or {})
         collector_config = _collector_config_from_metadata(metadata)
+        if (
+            artifact_type not in registry
+            and _is_mobile_ffs_profile_only_target(kind_token, collector_config)
+        ):
+            continue
+
+        existing = deepcopy(registry.get(artifact_type) or {})
 
         if mft_registry:
             # ARTIFACT_MFT_FILTERS is consumed directly by BaseMFTCollector.

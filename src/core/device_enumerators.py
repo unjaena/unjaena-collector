@@ -963,6 +963,21 @@ class MobileFFSBundleEnumerator(BaseDeviceEnumerator):
                 for resolved in adapter.iter_known_artifacts():
                     if resolved.present and resolved.actual_zip_path:
                         counts[resolved.artifact_type] += 1
+
+            from collectors.mobile_ffs_collector import expand_mobile_ffs_selection
+
+            available = set(counts)
+            android_app_types = expand_mobile_ffs_selection(
+                "mobile_android_app", available, platform="android"
+            )
+            if android_app_types:
+                counts["mobile_android_app"] = sum(counts[t] for t in android_app_types)
+            ios_app_types = expand_mobile_ffs_selection(
+                "mobile_ios_app", available, platform="ios"
+            )
+            if ios_app_types:
+                counts["mobile_ios_app"] = sum(counts[t] for t in ios_app_types)
+
             return sorted(counts), dict(counts), True
         except Exception as e:
             logger.warning(f"FFS present-artifact scan failed for {path.name}: {e}")

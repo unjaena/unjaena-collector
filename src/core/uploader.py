@@ -781,6 +781,14 @@ class SyncUploader:
             os.getenv('COLLECTOR_UPLOAD_TIMING', self.config.get('upload_timing')),
             default=False,
         )
+        self.large_file_uploader = None
+        self.large_file_direct_threshold = self._tuning_int(
+            'server_large_file_direct_threshold',
+            'COLLECTOR_SERVER_LARGE_FILE_DIRECT_THRESHOLD',
+            95 * 1024 * 1024,
+            1 * 1024 * 1024,
+            self.DEFAULT_MAX_FILE_SIZE,
+        )
         self._thread_local = threading.local()
 
     def _tuning_int(
@@ -844,6 +852,22 @@ class SyncUploader:
                 error_solution="Please verify the file contents.",
                 is_recoverable=False,
             )
+
+        if self.large_file_uploader and file_size >= self.large_file_direct_threshold:
+            logger.info(
+                "[UPLOAD] Large file uses direct multipart path: %s (%d bytes)",
+                Path(file_path).name,
+                file_size,
+            )
+            try:
+                return self.large_file_uploader.upload_file(
+                    file_path=file_path,
+                    artifact_type=artifact_type,
+                    metadata=metadata,
+                    progress_callback=progress_callback,
+                )
+            except TypeError:
+                return self.large_file_uploader.upload_file(file_path, artifact_type, metadata)
 
         # Dynamic timeout: 1MB/s baseline + 5min buffer, no upper cap for large files
         upload_timeout = max(300, (file_size / (1 * 1024 * 1024)) + 300)
@@ -1741,13 +1765,14 @@ def resolve_collector_upload_mode(config: dict = None) -> str:
       - r2_direct: client uploads raw bytes to R2; API records completion.
       - server: client streams raw bytes through the API raw upload endpoint.
 
-    Defaulting to r2_direct keeps large evidence uploads off the API server
-    while preserving server mode for local development and incident rollback.
+    The production default is server streaming. If the backend issues a signed
+    profile with an R2/presigned mode, that explicit profile value takes
+    precedence through the collector config.
     """
     config = config or {}
     raw_mode = os.getenv(
         'COLLECTOR_UPLOAD_MODE',
-        config.get('upload_mode') or config.get('collector_upload_mode') or 'r2_direct',
+        config.get('upload_mode') or config.get('collector_upload_mode') or 'server',
     )
     normalized = str(raw_mode or '').strip().lower().replace('-', '_')
     aliases = {
@@ -1759,6 +1784,9 @@ def resolve_collector_upload_mode(config: dict = None) -> str:
         'r2_direct': 'r2_direct',
         'presigned': 'r2_direct',
         'presigned_r2': 'r2_direct',
+        'r2_presigned': 'r2_direct',
+        'presigned_url': 'r2_direct',
+        'presigned_urls': 'r2_direct',
         'raw': 'server',
         'sync': 'server',
         'server': 'server',
@@ -1770,10 +1798,10 @@ def resolve_collector_upload_mode(config: dict = None) -> str:
     if mode:
         return mode
     logger.warning(
-        "[UPLOAD_POLICY] Unknown COLLECTOR_UPLOAD_MODE=%r; using r2_direct",
+        "[UPLOAD_POLICY] Unknown COLLECTOR_UPLOAD_MODE=%r; using server",
         raw_mode,
     )
-    return 'r2_direct'
+    return 'server'
 
 
 def build_collector_uploader(
@@ -1817,6 +1845,30 @@ def build_collector_uploader(
         uploader = _server_uploader()
         uploader.collector_upload_mode = 'server'
         uploader.collector_fallback_enabled = False
+        large_direct_enabled = _coerce_bool(
+            os.getenv(
+                'COLLECTOR_SERVER_LARGE_FILE_DIRECT_FALLBACK',
+                config.get('server_large_file_direct_fallback'),
+            ),
+            default=True,
+        )
+        if large_direct_enabled:
+            uploader.large_file_uploader = R2DirectUploader(
+                server_url=server_url,
+                session_id=session_id,
+                collection_token=collection_token,
+                case_id=case_id,
+                consent_record=consent_record,
+                max_file_size=max_file_size,
+                config=config,
+                request_signer=request_signer,
+                profile_id=profile_id,
+                fallback_uploader=None,
+                retry_count=3,
+            )
+            uploader.collector_large_file_direct_enabled = True
+        else:
+            uploader.collector_large_file_direct_enabled = False
         return uploader
 
     fallback_enabled = _coerce_bool(

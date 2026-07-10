@@ -43,10 +43,19 @@ def save_user_config(server_url: str, ws_url: str) -> bool:
     try:
         server_url, ws_url = normalize_server_urls(server_url, ws_url)
         USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        config = {
+        config = {}
+        if USER_CONFIG_FILE.exists():
+            try:
+                with open(USER_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    config.update(loaded)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"[ServerSetup] Existing config ignored: {e}")
+        config.update({
             "server_url": server_url,
             "ws_url": ws_url,
-        }
+        })
         with open(USER_CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         logger.info(f"[ServerSetup] Config saved to {USER_CONFIG_FILE}")

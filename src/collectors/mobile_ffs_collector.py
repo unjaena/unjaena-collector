@@ -74,6 +74,39 @@ ANDROID_FFS_GENERIC_EXPANSIONS = {
     "mobile_android_location": {"mobile_android_google_maps"},
 }
 
+IOS_FFS_APP_EXCLUDE = {
+    "mobile_ios_accounts",
+    "mobile_ios_app_state",
+    "mobile_ios_biome",
+    "mobile_ios_call",
+    "mobile_ios_calendar",
+    "mobile_ios_contacts",
+    "mobile_ios_data_usage",
+    "mobile_ios_device_backup",
+    "mobile_ios_findmy",
+    "mobile_ios_health",
+    "mobile_ios_interaction_c",
+    "mobile_ios_keychain",
+    "mobile_ios_knowledgec",
+    "mobile_ios_location",
+    "mobile_ios_lockdown_pairings",
+    "mobile_ios_mail_envelope",
+    "mobile_ios_notes",
+    "mobile_ios_notification_history",
+    "mobile_ios_photos",
+    "mobile_ios_routined",
+    "mobile_ios_safari",
+    "mobile_ios_safari_bookmarks",
+    "mobile_ios_safari_cookies",
+    "mobile_ios_sms",
+    "mobile_ios_spotlight_content",
+    "mobile_ios_tcc",
+    "mobile_ios_voicemail",
+    "mobile_ios_voicememos",
+    "mobile_ios_wallet",
+    "mobile_ios_wifi",
+}
+
 
 def canonicalize_mobile_ffs_artifact(artifact_type: str) -> str:
     """Return the FFS canonical artifact id for live-device aliases."""
@@ -99,21 +132,27 @@ def expand_mobile_ffs_selection(
     if canonical in available:
         return [canonical]
 
-    if platform.lower() != "android":
-        return []
+    platform_token = platform.lower()
 
-    if canonical == "mobile_android_app":
+    if platform_token == "android":
+        if canonical == "mobile_android_app":
+            return sorted(
+                t for t in available
+                if (
+                    (t.startswith("mobile_android_") or t.startswith("ai_mobile_"))
+                    and t not in ANDROID_FFS_APP_EXCLUDE
+                )
+            )
+
+        expanded = ANDROID_FFS_GENERIC_EXPANSIONS.get(canonical)
+        if expanded:
+            return sorted(t for t in expanded if t in available)
+
+    if platform_token == "ios" and canonical == "mobile_ios_app":
         return sorted(
             t for t in available
-            if (
-                (t.startswith("mobile_android_") or t.startswith("ai_mobile_"))
-                and t not in ANDROID_FFS_APP_EXCLUDE
-            )
+            if t.startswith("mobile_ios_") and t not in IOS_FFS_APP_EXCLUDE
         )
-
-    expanded = ANDROID_FFS_GENERIC_EXPANSIONS.get(canonical)
-    if expanded:
-        return sorted(t for t in expanded if t in available)
 
     return []
 
@@ -145,7 +184,7 @@ class MobileFFSBundleCollector:
         )
         for ra in adapter.iter_known_artifacts():
             self._artifacts_by_type.setdefault(ra.artifact_type, []).append(ra)
-        self._install_android_aliases()
+        self._install_platform_aliases()
         logger.info(
             "FFS bundle opened: %s platform=%s artifact_types=%d",
             self.zip_path.name, self._platform, len(self._artifacts_by_type),
@@ -158,35 +197,45 @@ class MobileFFSBundleCollector:
             self._artifacts_by_type.clear()
             self._zip_entries = set()
 
-    def _install_android_aliases(self) -> None:
-        if self._platform != "android":
-            return
-
+    def _install_platform_aliases(self) -> None:
         exact_types = set(self._artifacts_by_type)
-        for alias, canonical in ANDROID_FFS_ALIASES.items():
-            if canonical in self._artifacts_by_type:
-                self._artifacts_by_type.setdefault(alias, self._artifacts_by_type[canonical])
 
-        for generic, expansion in ANDROID_FFS_GENERIC_EXPANSIONS.items():
-            ras = [
+        if self._platform == "android":
+            for alias, canonical in ANDROID_FFS_ALIASES.items():
+                if canonical in self._artifacts_by_type:
+                    self._artifacts_by_type.setdefault(alias, self._artifacts_by_type[canonical])
+
+            for generic, expansion in ANDROID_FFS_GENERIC_EXPANSIONS.items():
+                ras = [
+                    ra
+                    for artifact_type in sorted(expansion)
+                    for ra in self._artifacts_by_type.get(artifact_type, [])
+                ]
+                if ras:
+                    self._artifacts_by_type.setdefault(generic, ras)
+
+            app_like = [
                 ra
-                for artifact_type in sorted(expansion)
+                for artifact_type in sorted(exact_types)
+                if (
+                    (artifact_type.startswith("mobile_android_") or artifact_type.startswith("ai_mobile_"))
+                    and artifact_type not in ANDROID_FFS_APP_EXCLUDE
+                )
                 for ra in self._artifacts_by_type.get(artifact_type, [])
             ]
-            if ras:
-                self._artifacts_by_type.setdefault(generic, ras)
+            if app_like:
+                self._artifacts_by_type.setdefault("mobile_android_app", app_like)
 
-        app_like = [
-            ra
-            for artifact_type in sorted(exact_types)
-            if (
-                (artifact_type.startswith("mobile_android_") or artifact_type.startswith("ai_mobile_"))
-                and artifact_type not in ANDROID_FFS_APP_EXCLUDE
-            )
-            for ra in self._artifacts_by_type.get(artifact_type, [])
-        ]
-        if app_like:
-            self._artifacts_by_type.setdefault("mobile_android_app", app_like)
+        if self._platform == "ios":
+            app_like = [
+                ra
+                for artifact_type in sorted(exact_types)
+                if artifact_type.startswith("mobile_ios_")
+                and artifact_type not in IOS_FFS_APP_EXCLUDE
+                for ra in self._artifacts_by_type.get(artifact_type, [])
+            ]
+            if app_like:
+                self._artifacts_by_type.setdefault("mobile_ios_app", app_like)
 
     def _stage_upload_file(self, artifact_type: str, entry) -> Path:
         """Move a nested extracted entry to a short upload-staging path.

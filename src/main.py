@@ -80,6 +80,7 @@ def get_secure_config(cli_server_url: str = None) -> dict:
         'app_name': 'Digital Forensics Collector',
         'dev_mode': dev_mode,
         'is_release': getattr(sys, 'frozen', False),
+        'ui_language': user_config.get('ui_language'),
     }
 
     if not server_url:
@@ -101,6 +102,7 @@ Examples:
   # Headless/CLI mode
   %(prog)s --headless --token SESSION_TOKEN --server https://server.example.com
   %(prog)s --headless --token TOKEN --server URL --artifacts prefetch,eventlog
+  %(prog)s --headless --accept-consent --token TOKEN --server URL
         """
     )
     parser.add_argument(
@@ -128,6 +130,17 @@ Examples:
         '--output-dir',
         type=str,
         help='Output directory for collected artifacts'
+    )
+    parser.add_argument(
+        '--accept-consent',
+        action='store_true',
+        help='Accept the active collection consent template in headless mode'
+    )
+    parser.add_argument(
+        '--consent-language',
+        type=str,
+        default=os.environ.get('COLLECTOR_CONSENT_LANGUAGE', 'en'),
+        help='Consent template language for headless mode (default: en)'
     )
     parser.add_argument(
         '--device',

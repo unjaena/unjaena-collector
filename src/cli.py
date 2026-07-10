@@ -13,7 +13,13 @@ import sys
 import tempfile
 import threading
 import time
+import hashlib
+import hmac
+import socket
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +43,146 @@ def _check_admin_headless():
             logger.warning("For full functionality, run with: sudo ./run.sh --headless ...")
 
 
+def _env_truthy(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _accept_headless_consent(
+    *,
+    server_url: str,
+    session_id: str,
+    case_id: str,
+    consent_signing_key: Optional[str] = None,
+    language: str = "en",
+) -> Optional[dict]:
+    """Submit the active consent template for explicitly approved headless runs."""
+    from core.token_validator import _get_ssl_verify
+    from utils.hardware_id import get_hardware_id
+
+    base_url = server_url.rstrip("/")
+    language = (language or "en").strip() or "en"
+
+    template_response = requests.get(
+        f"{base_url}/api/v1/collector/consent",
+        params={"language": language, "category": "collection"},
+        timeout=15,
+        verify=_get_ssl_verify(),
+    )
+    template_response.raise_for_status()
+    template = template_response.json()
+
+    agreed_items = list(template.get("required_checkboxes") or [])
+    hostname = "unknown"
+    try:
+        hostname = socket.gethostname() or "unknown"
+    except Exception:
+        pass
+
+    operator_role = os.environ.get("COLLECTOR_OPERATOR_ROLE", "authorized_agent")
+    operator_basis = os.environ.get("COLLECTOR_OPERATOR_LEGAL_BASIS", "data_subject_consent")
+    transfer_ack = str(os.environ.get("COLLECTOR_INTERNATIONAL_TRANSFER_ACK", "true")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "n",
+        "off",
+    }
+
+    payload = {
+        "session_id": session_id,
+        "case_id": case_id or "",
+        "template_id": template["id"],
+        "consent_version": template["version"],
+        "consent_language": template["language"],
+        "agreed_items": agreed_items,
+        "collector_name": os.environ.get("COLLECTOR_OPERATOR_NAME") or None,
+        "collector_organization": os.environ.get("COLLECTOR_OPERATOR_ORGANIZATION") or None,
+        "target_system_info": {
+            "hostname": hostname,
+            "operator_role": operator_role,
+            "operator_legal_basis": operator_basis,
+            "international_transfer_ack": transfer_ack,
+            "mode": "headless",
+        },
+        "signature_type": "checkbox",
+        "signature_data": hashlib.sha256(
+            f"{session_id}:{template['id']}:{template['version']}".encode("utf-8")
+        ).hexdigest(),
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "unJaena-Collector-Headless",
+    }
+    try:
+        headers["X-Hardware-ID"] = get_hardware_id()[:64]
+    except Exception:
+        pass
+
+    accept_response = requests.post(
+        f"{base_url}/api/v1/collector/consent/accept",
+        json=payload,
+        headers=headers,
+        timeout=15,
+        verify=_get_ssl_verify(),
+    )
+    accept_response.raise_for_status()
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    template_content = template.get("content") or ""
+    template_hash = hashlib.sha256(template_content.encode("utf-8", errors="replace")).hexdigest()
+    hostname_hash = hashlib.sha256(hostname.encode("utf-8", errors="replace")).hexdigest()[:16]
+    ip_hash = hashlib.sha256(b"headless").hexdigest()[:16]
+    record_components = [
+        f"ts={timestamp}",
+        f"tpl={template['id']}",
+        f"tplhash={template_hash}",
+        f"ver={template['version']}",
+        f"lang={template['language']}",
+        f"session={session_id}",
+        f"case={case_id or ''}",
+        f"host={hostname_hash}",
+        f"ip={ip_hash}",
+        f"items={'|'.join(agreed_items)}",
+    ]
+    consent_hash = hashlib.sha256("|".join(record_components).encode("utf-8")).hexdigest()
+
+    record = {
+        "consent_timestamp": timestamp,
+        "consent_version": template["version"],
+        "consent_language": template["language"],
+        "template_id": template["id"],
+        "template_content_sha256": template_hash,
+        "hostname_hash": hostname_hash,
+        "ip_hash": ip_hash,
+        "session_id": session_id,
+        "case_id": case_id,
+        "agreed_items": agreed_items,
+        "operator_role": operator_role,
+        "operator_legal_basis": operator_basis,
+        "international_transfer_ack": transfer_ack,
+        "consent_hash": consent_hash,
+    }
+
+    if consent_signing_key:
+        verify_payload = "|".join([
+            timestamp,
+            str(template["version"]),
+            consent_hash,
+            session_id or "",
+            case_id or "",
+            str(template["id"]),
+            template_hash,
+        ])
+        record["server_verify_signature"] = hmac.new(
+            consent_signing_key.encode("utf-8"),
+            verify_payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    return record
+
+
 class HeadlessCollector:
     """
     Three-stage collection pipeline without Qt dependencies.
@@ -57,6 +203,7 @@ class HeadlessCollector:
         config: dict = None,
         output_dir: str = None,
         collection_profile_id: str = None,
+        consent_record: dict = None,
     ):
         self.server_url = server_url
         self.session_id = session_id
@@ -67,6 +214,7 @@ class HeadlessCollector:
         self.config = config or {}
         self.output_dir = output_dir or tempfile.mkdtemp(prefix="forensic_collect_")
         self.collection_profile_id = collection_profile_id
+        self.consent_record = consent_record
         self._cancelled = False
 
     def run(self) -> bool:
@@ -102,6 +250,8 @@ class HeadlessCollector:
             logger.info("[Stage 3/3] Uploading to server...")
             success = self._upload(hashed_files)
             if success:
+                if not self._send_completion_signal():
+                    return False
                 logger.info("[Stage 3/3] Upload complete!")
                 logger.info("=" * 60)
                 logger.info("Collection finished successfully.")
@@ -288,6 +438,7 @@ class HeadlessCollector:
                     int(stat_result.st_mtime * 1_000_000_000),
                 )
                 metadata["upload_hash_path"] = os.path.abspath(filepath)
+                metadata.setdefault("collection_time", datetime.now(timezone.utc).isoformat())
                 verified.append((filepath, artifact_type, metadata))
             except Exception as e:
                 logger.warning(f"  Hash failed: {os.path.basename(filepath)}: {e}")
@@ -311,6 +462,7 @@ class HeadlessCollector:
             config=self.config,
             request_signer=self.request_signer,
             profile_id=self.collection_profile_id,
+            consent_record=self.consent_record,
         )
         logger.info(
             "Upload mode: %s (fallback=%s)",
@@ -369,6 +521,42 @@ class HeadlessCollector:
         logger.info(f"  Upload summary: {success_count} succeeded, {fail_count} failed")
         return fail_count == 0
 
+    def _send_completion_signal(self) -> bool:
+        """Notify the server that a successful headless upload batch is complete."""
+        import requests
+        from core.token_validator import _get_ssl_verify
+
+        complete_path = f"/api/v1/collector/collection/end/{self.session_id}"
+        headers = {
+            "X-Collection-Token": self.collection_token,
+            "X-Session-ID": self.session_id,
+            "Content-Type": "application/json",
+        }
+        if self.request_signer:
+            headers.update(self.request_signer.sign_request(
+                "POST", complete_path, None, self.collection_token,
+            ))
+
+        try:
+            response = requests.post(
+                f"{self.server_url}{complete_path}",
+                headers=headers,
+                params={"trigger_analysis": "true"},
+                timeout=30,
+                verify=_get_ssl_verify(),
+            )
+            if response.ok:
+                logger.info("Collection session completion signal sent.")
+                return True
+            logger.error(
+                "Collection session completion signal failed: HTTP %s",
+                response.status_code,
+            )
+            return False
+        except Exception as e:
+            logger.error(f"Collection session completion signal error: {e}")
+            return False
+
 
 def run_headless(args, config: dict) -> int:
     """
@@ -400,6 +588,27 @@ def run_headless(args, config: dict) -> int:
         return 1
 
     logger.info(f"Authenticated. Case: {result.case_id}, Session: {result.session_id}")
+
+    consent_record = None
+    accept_consent = bool(getattr(args, "accept_consent", False)) or _env_truthy("COLLECTOR_HEADLESS_ACCEPT_CONSENT")
+    if accept_consent:
+        try:
+            logger.info("Submitting headless collection consent...")
+            consent_record = _accept_headless_consent(
+                server_url=server_url,
+                session_id=result.session_id,
+                case_id=result.case_id,
+                consent_signing_key=getattr(result, "consent_signing_key", None),
+                language=getattr(args, "consent_language", None) or "en",
+            )
+            logger.info("Headless collection consent accepted.")
+        except Exception as e:
+            logger.error(f"Headless consent submission failed: {e}")
+            return 1
+    else:
+        logger.warning(
+            "Headless consent was not submitted. Servers that require collection consent may reject uploads."
+        )
 
     # Step 2: Initialize request signer
     request_signer = None
@@ -458,6 +667,11 @@ def run_headless(args, config: dict) -> int:
         return 1
 
     # Step 4: Run collection
+    upload_mode = getattr(result, 'upload_mode', None)
+    if upload_mode:
+        config = dict(config or {})
+        config['upload_mode'] = upload_mode
+
     collector = HeadlessCollector(
         server_url=server_url,  # [SECURITY] Always use user-provided URL, never trust server response
         session_id=result.session_id,
@@ -468,6 +682,7 @@ def run_headless(args, config: dict) -> int:
         config=config,
         output_dir=args.output_dir,
         collection_profile_id=getattr(result, 'collection_profile_id', None),
+        consent_record=consent_record,
     )
 
     success = collector.run()
