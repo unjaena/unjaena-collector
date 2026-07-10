@@ -11,6 +11,7 @@ Usage:
 """
 import argparse
 import base64
+import importlib.util
 import json
 import os
 import shutil
@@ -39,6 +40,23 @@ def _write_json_object(path: Path, data: dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
+
+
+def _load_default_ui_messages(collector_dir: Path) -> dict:
+    """Load English UI defaults without importing the gui package."""
+    i18n_path = collector_dir / "src" / "gui" / "i18n.py"
+    spec = importlib.util.spec_from_file_location(
+        "collector_build_i18n_defaults",
+        i18n_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load UI defaults from {i18n_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    messages = getattr(module, "DEFAULT_MESSAGES", None)
+    if not isinstance(messages, dict):
+        raise RuntimeError(f"DEFAULT_MESSAGES missing from {i18n_path}")
+    return {str(k): str(v) for k, v in messages.items()}
 
 
 def _locale_from_env(locale_code: str) -> dict:
@@ -91,21 +109,11 @@ def prepare_ui_locales(collector_dir: Path) -> list:
         included.add(locale_code)
 
     if "en" not in included and not (locale_dir / "en.json").exists():
-        src_path = collector_dir / "src"
-        inserted = False
-        if str(src_path) not in sys.path:
-            sys.path.insert(0, str(src_path))
-            inserted = True
-        try:
-            from gui.i18n import DEFAULT_MESSAGES
-            _write_json_object(locale_dir / "en.json", DEFAULT_MESSAGES)
-            included.add("en")
-        finally:
-            if inserted:
-                try:
-                    sys.path.remove(str(src_path))
-                except ValueError:
-                    pass
+        _write_json_object(
+            locale_dir / "en.json",
+            _load_default_ui_messages(collector_dir),
+        )
+        included.add("en")
 
     if locale_dir.exists():
         for locale_code in SUPPORTED_UI_LOCALES:
