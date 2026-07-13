@@ -1089,6 +1089,20 @@ class DirectUploader:
             default=False,
         )
         self._thread_local = threading.local()
+        # Once direct storage is unreachable, keep the remainder of this
+        # collection on the API path instead of creating a presign retry storm.
+        self._direct_upload_disabled = threading.Event()
+
+    def _upload_via_fallback(
+        self, file_path: str, artifact_type: str, metadata: dict,
+        progress_callback: Callable[[float], None] = None,
+    ) -> UploadResult:
+        try:
+            return self.fallback_uploader.upload_file(
+                file_path, artifact_type, metadata, progress_callback=progress_callback
+            )
+        except TypeError:
+            return self.fallback_uploader.upload_file(file_path, artifact_type, metadata)
 
     def _tuning_int(
         self, key: str, env_name: str, default: int, min_value: int, max_value: int
@@ -1458,6 +1472,12 @@ class DirectUploader:
         3. PUT upload directly to cloud storage (single or multipart)
         4. Confirm upload completion with server
         """
+        if self.fallback_uploader and self._direct_upload_disabled.is_set():
+            logger.info("[DIRECT] Using server upload path after an earlier direct upload failure")
+            return self._upload_via_fallback(
+                file_path, artifact_type, metadata, progress_callback
+            )
+
         # Validate file size
         try:
             file_size = os.path.getsize(file_path)
@@ -1508,6 +1528,10 @@ class DirectUploader:
 
         try:
             # Step 1: Request presigned URL
+            if self.fallback_uploader and self._direct_upload_disabled.is_set():
+                return self._upload_via_fallback(
+                    file_path, artifact_type, metadata, progress_callback
+                )
             presign_start = time.perf_counter()
             presigned_info = self._request_presigned_url(file_path, artifact_type, file_hash)
             timings['presigned_ms'] = int((time.perf_counter() - presign_start) * 1000)
@@ -1667,13 +1691,12 @@ class DirectUploader:
                 )
 
             if self.fallback_uploader:
+                self._direct_upload_disabled.set()
                 logger.warning("[DIRECT] Falling back to server upload path after direct upload failure")
                 try:
-                    return self.fallback_uploader.upload_file(
-                        file_path, artifact_type, metadata, progress_callback=progress_callback
+                    return self._upload_via_fallback(
+                        file_path, artifact_type, metadata, progress_callback
                     )
-                except TypeError:
-                    return self.fallback_uploader.upload_file(file_path, artifact_type, metadata)
                 except Exception as fallback_error:
                     return UploadResult.from_error(
                         f"R2 upload failed and fallback failed: {fallback_error}"
