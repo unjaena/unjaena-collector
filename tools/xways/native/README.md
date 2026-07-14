@@ -48,8 +48,8 @@ Expected output:
 1. Start X-Ways Forensics with a non-customer test case.
 2. Load `UnjaenaXwfCollector.dll` as an X-Tension.
 3. Run it from selected directory-browser items or `Tools > Run X-Tensions`.
-4. In the dialog, enter host, port, SSL mode, `session-id:secret`, optional
-   `max_uploads`, and accept collection consent.
+4. In the dialog, enter host, port, SSL mode, `session-id:secret`, and accept
+   collection consent.
 5. For automated smoke tests, pass the same values with:
 
 ```text

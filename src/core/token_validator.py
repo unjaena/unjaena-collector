@@ -381,6 +381,33 @@ class TokenValidator:
             logger.error(f"[Health] {detail}")
             return False, detail
 
+    def activate_run(
+        self,
+        run_id: str,
+        session_id: str,
+        collection_token: str,
+    ) -> tuple[bool, str | None]:
+        """Activate a trusted-device run immediately before evidence collection."""
+        try:
+            response = requests.post(
+                f"{self.server_url}/api/v1/collector/connections/runs/{run_id}/activate",
+                headers={
+                    "X-Session-ID": session_id,
+                    "X-Collection-Token": collection_token,
+                },
+                timeout=self.timeout,
+                verify=_get_ssl_verify(),
+            )
+            if response.status_code == 200:
+                return True, None
+            try:
+                detail = response.json().get("detail")
+            except Exception:
+                detail = response.text[:200]
+            return False, str(detail or f"Server error ({response.status_code})")
+        except Exception as exc:
+            return False, str(exc)
+
     def validate_session(
         self,
         session_id: str,

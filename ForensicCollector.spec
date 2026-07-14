@@ -136,6 +136,10 @@ common_hidden_imports = [
     'cryptography.hazmat.primitives.kdf.hkdf',      # secure_upload.py
     'cryptography.hazmat.backends',
 
+    # --- OS credential store for trusted collector identity ---
+    'keyring',
+    'keyring.backends',
+
     # --- GUI: PyQt6 (GPL-3.0) ---
     'PyQt6',
     'PyQt6.QtCore',
@@ -390,6 +394,14 @@ if current_os == 'darwin':
         coll,
         name=f'{exe_name}.app',
         bundle_identifier='com.unjaena.collector',
+        info_plist={
+            'CFBundleURLTypes': [
+                {
+                    'CFBundleURLName': 'com.unjaena.collector.connection',
+                    'CFBundleURLSchemes': ['unjaena-collector'],
+                }
+            ],
+        },
     )
 else:
     # Windows & Linux: single-file binary

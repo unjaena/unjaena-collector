@@ -35,6 +35,7 @@ websockets>=12.0
 
 # ── Crypto ───────────────────────────────────────────────────────────────────
 cryptography>=41.0.1          # secure_upload.py (AESGCM, HKDF)
+keyring>=25.6.0              # OS credential store for trusted collector identity
 rsa>=4.0                      # adb-shell auth + pymobiledevice3 dep
 pycryptodome>=3.20.0          # iphone-backup-decrypt dependency (imports as Crypto)
 

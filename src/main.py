@@ -106,6 +106,11 @@ Examples:
         """
     )
     parser.add_argument(
+        'launch_uri',
+        nargs='?',
+        help='Internal unjaena-collector:// connection URI',
+    )
+    parser.add_argument(
         '--headless', '--cli',
         action='store_true',
         dest='headless',
@@ -236,6 +241,12 @@ def main_gui(config: dict):
                 result['ws_url'],
             )
 
+    try:
+        from core.connection_client import register_windows_protocol_handler
+        register_windows_protocol_handler()
+    except Exception as protocol_error:
+        logging.getLogger(__name__).warning("Protocol handler registration failed: %s", protocol_error)
+
     check_admin_privilege()
 
     window = CollectorWindow(config)
@@ -286,7 +297,22 @@ def main():
         config = get_secure_config(cli_server_url=args.server)
         main_headless(args, config)
     else:
-        config = get_secure_config()
+        pairing_code = ""
+        launch_server = None
+        if args.launch_uri:
+            from urllib.parse import parse_qs, urlparse
+
+            parsed = urlparse(args.launch_uri)
+            if parsed.scheme != "unjaena-collector" or parsed.netloc != "connect":
+                sys.exit("Error: invalid collector connection URI")
+            query = parse_qs(parsed.query)
+            pairing_code = str((query.get("code") or [""])[0])
+            launch_server = str((query.get("server") or [""])[0]) or None
+            if not pairing_code:
+                sys.exit("Error: collector connection URI has no pairing code")
+        config = get_secure_config(cli_server_url=launch_server)
+        if pairing_code:
+            config["pairing_code"] = pairing_code
         main_gui(config)
 
 

@@ -6,6 +6,7 @@ Supports unified device management and parallel collection.
 """
 import asyncio
 import logging
+import queue
 import requests
 from pathlib import Path
 from datetime import datetime
@@ -15,13 +16,14 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QProgressBar,
     QLineEdit, QCheckBox, QGroupBox, QMessageBox, QFrame, QTextEdit,
-    QStatusBar, QSplitter, QScrollArea, QTabWidget, QComboBox,
+    QStatusBar, QScrollArea, QTabWidget, QComboBox, QStackedWidget,
     QApplication
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
 from core.token_validator import TokenValidator, _get_ssl_verify
+from core.connection_client import CollectorConnectionClient
 from core.encryptor import FileHashCalculator
 from core.uploader import RealTimeUploader, build_collector_uploader
 from core.request_signer import RequestSigner
@@ -94,6 +96,79 @@ class TokenValidationWorker(QThread):
             self.token = ""
 
 
+class ConnectionSyncWorker(QThread):
+    """Maintain the trusted-device lease and deliver server connection commands."""
+
+    command_ready = pyqtSignal(str, str, str)  # token, command_id, run_id
+    status_changed = pyqtSignal(str)
+    error_ready = pyqtSignal(str)
+
+    def __init__(self, server_url: str, client_version: str, pairing_code: str = ""):
+        super().__init__()
+        self.server_url = server_url
+        self.client_version = client_version
+        self.pairing_code = pairing_code
+        self._running = True
+        self._acks = queue.Queue()
+        self.client = None
+
+    def stop(self):
+        self._running = False
+
+    def acknowledge(self, command_id: str, success: bool, result: Optional[Dict] = None):
+        self._acks.put((command_id, success, result or {}))
+
+    def run(self):
+        try:
+            self.client = CollectorConnectionClient(self.server_url)
+            if self.pairing_code:
+                self.status_changed.emit("pairing")
+                self.client.claim(self.pairing_code, self.client_version)
+                self.pairing_code = ""
+                self.status_changed.emit("connected")
+            elif self.client.identity.device_id:
+                self.status_changed.emit("reconnecting")
+            else:
+                self.status_changed.emit("unpaired")
+                return
+
+            while self._running:
+                while True:
+                    try:
+                        command_id, success, result = self._acks.get_nowait()
+                    except queue.Empty:
+                        break
+                    try:
+                        self.client.acknowledge(command_id, success, result)
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning("Connection command ack failed: %s", exc)
+
+                try:
+                    data = self.client.sync()
+                    self.status_changed.emit("connected")
+                    for command in data.get("commands") or []:
+                        if command.get("type") != "connect_case":
+                            continue
+                        payload = command.get("payload") or {}
+                        token = str(payload.get("session_token") or "")
+                        if token:
+                            self.command_ready.emit(
+                                token,
+                                str(command.get("id") or ""),
+                                str(command.get("run_id") or ""),
+                            )
+                except Exception as exc:
+                    self.status_changed.emit("offline")
+                    logging.getLogger(__name__).warning("Collector connection sync failed: %s", exc)
+                for _ in range(50):
+                    if not self._running:
+                        break
+                    self.msleep(100)
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Collector connection worker failed")
+            self.error_ready.emit(str(exc) or exc.__class__.__name__)
+
+
 class ServerHealthWorker(QThread):
     """Run server health checks away from the UI thread."""
 
@@ -152,6 +227,9 @@ class CollectorWindow(QMainWindow):
         self._token_validation_in_progress = False
         self._collection_in_progress = False
         self._close_after_worker_finish = False
+        self._connection_worker = None
+        self._pending_connection_command_id = None
+        self.connection_run_id = None
 
         # Unified device manager
         self.device_manager = UnifiedDeviceManager()
@@ -165,6 +243,7 @@ class CollectorWindow(QMainWindow):
 
         self.setup_ui()
         self.check_server_connection()
+        QTimer.singleShot(0, self._start_connection_sync)
 
         # Start device monitoring
         self.device_manager.start_monitoring(poll_interval_ms=3000)
@@ -173,41 +252,24 @@ class CollectorWindow(QMainWindow):
         QTimer.singleShot(5000, self._check_for_updates)
 
     def setup_ui(self):
-        """Initialize the user interface"""
+        """Initialize the three-step beginner interface."""
         self.setWindowTitle(f"{self.config['app_name']} v{self.config['version']}")
-        self.setMinimumSize(900, 650)
-        # Apply platform unified theme
+        self.setMinimumSize(960, 700)
+        self.resize(1080, 760)
         self.setStyleSheet(get_platform_stylesheet())
 
-        # Central widget
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(16, 12, 16, 10)
+        main_layout.setSpacing(10)
 
-        # Header (compact)
         header = self._create_header()
-        header.setFixedHeight(40)
+        header.setFixedHeight(44)
         main_layout.addWidget(header)
 
-        # Main content with splitter
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_layout.addWidget(self._create_left_panel(), 1)
 
-        # Left panel - Controls
-        left_panel = self._create_left_panel()
-        splitter.addWidget(left_panel)
-
-        # Right panel - Log
-        right_panel = self._create_right_panel()
-        splitter.addWidget(right_panel)
-
-        splitter.setSizes([550, 350])
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        main_layout.addWidget(splitter, 1)  # stretch factor 1
-
-        # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
@@ -263,91 +325,278 @@ class CollectorWindow(QMainWindow):
         self._update_workflow_status()
 
     def _apply_ui_language(self):
-        """Apply translated labels to widgets owned by the simplified UI."""
+        """Apply translated labels to the three-step collector surface."""
         widgets = {
-            'quick_group': ('setTitle', "simple.title"),
-            'token_group': ('setTitle', "group.connect"),
-            'device_group': ('setTitle', "group.source_details"),
-            'artifacts_group': ('setTitle', "group.expert_scope"),
-            'progress_group': ('setTitle', "group.progress"),
-            'status_group': ('setTitle', "group.status"),
-            'log_group': ('setTitle', "group.technical_log"),
-            'simple_intro': ('setText', "simple.intro"),
-            'source_hint': ('setText', "simple.choose_source"),
-            'simple_pc_btn': ('setText', "simple.btn.local"),
-            'simple_phone_btn': ('setText', "simple.btn.phone"),
-            'simple_image_btn': ('setText', "simple.btn.evidence"),
-            'simple_tool_btn': ('setText', "simple.btn.tool"),
-            'expert_controls_cb': ('setText', "simple.expert_toggle"),
-            'show_log_cb': ('setText', "log.show"),
-            'advanced_scope_cb': ('setText', "scope.advanced"),
-            'select_all_cb': ('setText', "scope.select_all"),
-            'include_deleted_cb': ('setText', "scope.deleted"),
-            'show_token_btn': ('setText', "token.show"),
-            'validate_btn': ('setText', "token.validate"),
-            'collect_btn': ('setText', "button.start"),
-            'cancel_btn': ('setText', "button.cancel"),
+            "token_group": ("setTitle", "wizard.token.group"),
+            "quick_group": ("setTitle", "wizard.source.group"),
+            "device_group": ("setTitle", "group.source_details"),
+            "artifacts_group": ("setTitle", "group.expert_scope"),
+            "progress_group": ("setTitle", "group.progress"),
+            "status_group": ("setTitle", "group.status"),
+            "log_group": ("setTitle", "group.technical_log"),
+            "token_step_kicker": ("setText", "wizard.token.kicker"),
+            "token_step_title": ("setText", "wizard.token.title"),
+            "token_step_description": ("setText", "wizard.token.description"),
+            "token_help_label": ("setText", "wizard.token.help"),
+            "source_step_kicker": ("setText", "wizard.source.kicker"),
+            "source_step_title": ("setText", "wizard.source.title"),
+            "source_step_description": ("setText", "wizard.source.description"),
+            "status_step_kicker": ("setText", "wizard.status.kicker"),
+            "status_step_title": ("setText", "wizard.status.title"),
+            "status_step_description": ("setText", "wizard.status.description"),
+            "source_hint": ("setText", "simple.choose_source"),
+            "simple_pc_btn": ("setText", "simple.btn.local"),
+            "simple_phone_btn": ("setText", "simple.btn.phone"),
+            "simple_image_btn": ("setText", "simple.btn.evidence"),
+            "simple_tool_btn": ("setText", "simple.btn.tool"),
+            "expert_controls_cb": ("setText", "simple.expert_toggle"),
+            "show_log_cb": ("setText", "log.show"),
+            "advanced_scope_cb": ("setText", "scope.advanced"),
+            "select_all_cb": ("setText", "scope.select_all"),
+            "include_deleted_cb": ("setText", "scope.deleted"),
+            "validate_btn": ("setText", "wizard.token.continue"),
+            "source_back_btn": ("setText", "wizard.button.back"),
+            "collect_btn": ("setText", "button.start"),
+            "cancel_btn": ("setText", "button.cancel"),
+            "new_collection_btn": ("setText", "wizard.button.new_collection"),
+            "overall_progress_label": ("setText", "wizard.progress.overall"),
+            "stage1_label": ("setText", "wizard.progress.collect"),
+            "stage2_label": ("setText", "wizard.progress.encrypt"),
+            "stage3_label": ("setText", "wizard.progress.upload"),
         }
         for attr, (method_name, key) in widgets.items():
             widget = getattr(self, attr, None)
             if widget is not None:
                 getattr(widget, method_name)(self._tr(key))
 
-        if hasattr(self, 'token_input'):
+        if hasattr(self, "wizard_step_title_labels"):
+            for label, key in zip(self.wizard_step_title_labels, self.wizard_step_title_keys):
+                label.setText(self._tr(key))
+            self._update_wizard_step_bar()
+
+        if hasattr(self, "token_input"):
             self.token_input.setPlaceholderText(self._tr("token.placeholder"))
-        if hasattr(self, 'simple_pc_btn'):
+        if hasattr(self, "show_token_btn"):
+            token_visibility_key = "token.hide" if self.show_token_btn.isChecked() else "token.show"
+            self.show_token_btn.setText(self._tr(token_visibility_key))
+        if hasattr(self, "simple_pc_btn"):
             self.simple_pc_btn.setToolTip(self._tr("simple.btn.local.tooltip"))
-        if hasattr(self, 'simple_phone_btn'):
+        if hasattr(self, "simple_phone_btn"):
             self.simple_phone_btn.setToolTip(self._tr("simple.btn.phone.tooltip"))
-        if hasattr(self, 'simple_image_btn'):
+        if hasattr(self, "simple_image_btn"):
             self.simple_image_btn.setToolTip(self._tr("simple.btn.evidence.tooltip"))
-        if hasattr(self, 'simple_tool_btn'):
+        if hasattr(self, "simple_tool_btn"):
             self.simple_tool_btn.setToolTip(self._tr("simple.btn.tool.tooltip"))
-        if hasattr(self, 'include_deleted_cb'):
+        if hasattr(self, "include_deleted_cb"):
             self.include_deleted_cb.setToolTip(self._tr("scope.deleted.tooltip"))
-        if hasattr(self, 'language_combo'):
+        if hasattr(self, "language_combo"):
             self.language_combo.setToolTip(self._tr("header.language"))
-        if getattr(self, '_token_validation_in_progress', False) and hasattr(self, 'validate_btn'):
+        if getattr(self, "_token_validation_in_progress", False) and hasattr(self, "validate_btn"):
             self.validate_btn.setText(self._tr("token.validating"))
 
     def _create_left_panel(self) -> QWidget:
-        """Create left panel with controls (scrollable)"""
-        # Create scrollable panel
+        """Create the three-step beginner collection flow."""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(10)
+
+        layout.addWidget(self._create_wizard_step_bar())
+
+        self.wizard_stack = QStackedWidget()
+        self.wizard_stack.addWidget(self._create_token_step_page())
+        self.wizard_stack.addWidget(self._create_source_step_page())
+        self.wizard_stack.addWidget(self._create_status_step_page())
+        layout.addWidget(self.wizard_stack, 1)
+
+        self._collection_completed = False
+        self._collection_result = None
+        self._current_wizard_step = 0
+        self._set_expert_controls_visible(False)
+        self._update_scope_summary()
+        self._update_workflow_status()
+        self._update_simple_source_status()
+        self._show_wizard_step(0)
+        return panel
+
+    def _create_wizard_step_bar(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("wizardStepBar")
+        bar.setStyleSheet(
+            f"QFrame#wizardStepBar {{ background: {COLORS['bg_secondary']}; "
+            f"border: 1px solid {COLORS['border_subtle']}; border-radius: 6px; }}"
+        )
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        self.wizard_step_items = []
+        self.wizard_step_number_labels = []
+        self.wizard_step_title_labels = []
+        self.wizard_step_title_keys = (
+            "wizard.step.token",
+            "wizard.step.source",
+            "wizard.step.status",
+        )
+
+        for index, key in enumerate(self.wizard_step_title_keys):
+            item = QFrame()
+            item.setMinimumHeight(44)
+            item_layout = QHBoxLayout(item)
+            item_layout.setContentsMargins(10, 6, 10, 6)
+            item_layout.setSpacing(8)
+
+            number = QLabel(str(index + 1))
+            number.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            number.setFixedSize(28, 28)
+            title = QLabel(self._tr(key))
+            title.setFont(QFont("Malgun Gothic", 10, QFont.Weight.DemiBold))
+            title.setWordWrap(True)
+
+            item_layout.addWidget(number)
+            item_layout.addWidget(title, 1)
+            layout.addWidget(item, 1)
+
+            self.wizard_step_items.append(item)
+            self.wizard_step_number_labels.append(number)
+            self.wizard_step_title_labels.append(title)
+
+            if index < len(self.wizard_step_title_keys) - 1:
+                connector = QFrame()
+                connector.setFrameShape(QFrame.Shape.HLine)
+                connector.setStyleSheet(
+                    f"color: {COLORS['border_default']}; background: {COLORS['border_default']};"
+                )
+                connector.setFixedWidth(22)
+                layout.addWidget(connector)
+
+        return bar
+
+    def _create_step_heading(self, step_key: str, title_key: str, description_key: str):
+        heading = QWidget()
+        heading_layout = QVBoxLayout(heading)
+        heading_layout.setContentsMargins(0, 0, 0, 4)
+        heading_layout.setSpacing(5)
+
+        kicker = QLabel(self._tr(step_key))
+        kicker.setStyleSheet(
+            f"color: {COLORS['brand_accent']}; font-size: 10px; font-weight: 700;"
+        )
+        title = QLabel(self._tr(title_key))
+        title.setFont(QFont("Malgun Gothic", 18, QFont.Weight.Bold))
+        title.setWordWrap(True)
+        description = QLabel(self._tr(description_key))
+        description.setWordWrap(True)
+        description.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px;"
+        )
+
+        heading_layout.addWidget(kicker)
+        heading_layout.addWidget(title)
+        heading_layout.addWidget(description)
+        return heading, kicker, title, description
+
+    def _create_token_step_page(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(32, 18, 32, 26)
+        page_layout.setSpacing(18)
+
+        heading, self.token_step_kicker, self.token_step_title, self.token_step_description = (
+            self._create_step_heading(
+                "wizard.token.kicker",
+                "wizard.token.title",
+                "wizard.token.description",
+            )
+        )
+        heading.setMinimumWidth(640)
+        heading.setMaximumWidth(720)
+        page_layout.addWidget(heading, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.token_group = QGroupBox(self._tr("wizard.token.group"))
+        self.token_group.setMinimumWidth(640)
+        self.token_group.setMaximumWidth(720)
+        token_layout = QVBoxLayout(self.token_group)
+        token_layout.setContentsMargins(18, 22, 18, 18)
+        token_layout.setSpacing(10)
+
+        self.token_help_label = QLabel(self._tr("wizard.token.help"))
+        self.token_help_label.setWordWrap(True)
+        self.token_help_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px;"
+        )
+        token_layout.addWidget(self.token_help_label)
+
+        self.token_input = QLineEdit()
+        self.token_input.setPlaceholderText(self._tr("token.placeholder"))
+        self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token_input.setMinimumHeight(42)
+        self.token_input.returnPressed.connect(self._validate_token)
+        token_layout.addWidget(self.token_input)
+
+        token_btn_layout = QHBoxLayout()
+        token_btn_layout.setSpacing(8)
+        self.show_token_btn = QPushButton(self._tr("token.show"))
+        self.show_token_btn.setCheckable(True)
+        self.show_token_btn.setFixedWidth(90)
+        self.show_token_btn.setMinimumHeight(40)
+        self.show_token_btn.clicked.connect(self._toggle_token_visibility)
+
+        self.validate_btn = QPushButton(self._tr("wizard.token.continue"))
+        self.validate_btn.setObjectName("primaryButton")
+        self.validate_btn.setMinimumHeight(40)
+        self.validate_btn.clicked.connect(self._validate_token)
+        token_btn_layout.addWidget(self.show_token_btn)
+        token_btn_layout.addWidget(self.validate_btn, 1)
+        token_layout.addLayout(token_btn_layout)
+
+        self.token_status = QLabel("")
+        self.token_status.setWordWrap(True)
+        self.token_status.setMinimumHeight(24)
+        token_layout.addWidget(self.token_status)
+
+        self.token_progress = QProgressBar()
+        self.token_progress.setRange(0, 0)
+        self.token_progress.setTextVisible(False)
+        self.token_progress.setFixedHeight(6)
+        self.token_progress.setVisible(False)
+        token_layout.addWidget(self.token_progress)
+
+        page_layout.addWidget(self.token_group, 0, Qt.AlignmentFlag.AlignHCenter)
+        page_layout.addStretch()
+        return page
+
+    def _create_source_step_page(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(24, 12, 24, 16)
+        page_layout.setSpacing(10)
+
+        heading, self.source_step_kicker, self.source_step_title, self.source_step_description = (
+            self._create_step_heading(
+                "wizard.source.kicker",
+                "wizard.source.title",
+                "wizard.source.description",
+            )
+        )
+        page_layout.addWidget(heading)
+
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
-        panel = QWidget()
-        panel.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(6)
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 4, 0, 4)
+        content_layout.setSpacing(8)
 
-        # Simple workflow surface. This is the default user-facing flow; the
-        # detailed controls below remain available as the backup/expert UI.
-        self.quick_group = QGroupBox(self._tr("simple.title"))
+        self.quick_group = QGroupBox(self._tr("wizard.source.group"))
         quick_layout = QVBoxLayout(self.quick_group)
-        quick_layout.setContentsMargins(8, 16, 8, 8)
-        quick_layout.setSpacing(8)
-
-        self.simple_intro = QLabel(self._tr("simple.intro"))
-        self.simple_intro.setWordWrap(True)
-        self.simple_intro.setStyleSheet(
-            f"color: {COLORS['text_secondary']}; font-size: 10px;"
-        )
-        quick_layout.addWidget(self.simple_intro)
-
-        self.workflow_status = QLabel("")
-        self.workflow_status.setWordWrap(True)
-        self.workflow_status.setTextFormat(Qt.TextFormat.RichText)
-        self.workflow_status.setStyleSheet(
-            f"background: {COLORS['bg_tertiary']}; "
-            f"border: 1px solid {COLORS['border_subtle']}; "
-            "border-radius: 4px; padding: 8px;"
-        )
-        quick_layout.addWidget(self.workflow_status)
+        quick_layout.setContentsMargins(14, 20, 14, 14)
+        quick_layout.setSpacing(10)
 
         self.source_hint = QLabel(self._tr("simple.choose_source"))
         self.source_hint.setStyleSheet(
@@ -356,7 +605,7 @@ class CollectorWindow(QMainWindow):
         quick_layout.addWidget(self.source_hint)
 
         source_btn_layout = QGridLayout()
-        source_btn_layout.setSpacing(6)
+        source_btn_layout.setSpacing(8)
 
         self.simple_pc_btn = QPushButton(self._tr("simple.btn.local"))
         self.simple_pc_btn.setToolTip(self._tr("simple.btn.local.tooltip"))
@@ -378,11 +627,27 @@ class CollectorWindow(QMainWindow):
         self.simple_tool_btn.clicked.connect(self._open_simple_tool_result)
         source_btn_layout.addWidget(self.simple_tool_btn, 1, 1)
 
+        for button in (
+            self.simple_pc_btn,
+            self.simple_phone_btn,
+            self.simple_image_btn,
+            self.simple_tool_btn,
+        ):
+            button.setMinimumHeight(54)
+            button.setStyleSheet(
+                f"text-align: left; padding: 10px 14px; "
+                f"background: {COLORS['bg_tertiary']}; font-weight: 600;"
+            )
+
         quick_layout.addLayout(source_btn_layout)
 
         self.simple_source_status = QLabel(self._tr("simple.source.none"))
         self.simple_source_status.setWordWrap(True)
+        self.simple_source_status.setMinimumHeight(42)
         self.simple_source_status.setStyleSheet(
+            f"background: {COLORS['bg_tertiary']}; "
+            f"border: 1px solid {COLORS['border_subtle']}; "
+            "border-radius: 4px; padding: 10px; "
             f"color: {COLORS['text_secondary']}; font-size: 10px;"
         )
         quick_layout.addWidget(self.simple_source_status)
@@ -392,86 +657,54 @@ class CollectorWindow(QMainWindow):
         self.expert_controls_cb.stateChanged.connect(self._toggle_expert_controls)
         quick_layout.addWidget(self.expert_controls_cb)
 
-        layout.addWidget(self.quick_group)
+        content_layout.addWidget(self.quick_group)
+        content_layout.addWidget(self._create_device_group())
+        content_layout.addWidget(self._create_artifacts_group())
+        content_layout.addStretch()
+        scroll_area.setWidget(content)
+        page_layout.addWidget(scroll_area, 1)
 
-        # Step 1: Token
-        self.token_group = QGroupBox(self._tr("group.connect"))
-        token_layout = QVBoxLayout(self.token_group)
-        token_layout.setContentsMargins(6, 14, 6, 6)
-        token_layout.setSpacing(4)
+        footer = QFrame()
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 8, 0, 0)
+        footer_layout.setSpacing(8)
 
-        self.token_input = QLineEdit()
-        self.token_input.setPlaceholderText(self._tr("token.placeholder"))
-        self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
-        token_layout.addWidget(self.token_input)
+        self.source_back_btn = QPushButton(self._tr("wizard.button.back"))
+        self.source_back_btn.setMinimumHeight(38)
+        self.source_back_btn.clicked.connect(lambda: self._show_wizard_step(0))
 
-        token_btn_layout = QHBoxLayout()
-        token_btn_layout.setSpacing(4)
-        self.show_token_btn = QPushButton(self._tr("token.show"))
-        self.show_token_btn.setCheckable(True)
-        self.show_token_btn.clicked.connect(self._toggle_token_visibility)
-        self.validate_btn = QPushButton(self._tr("token.validate"))
-        self.validate_btn.setObjectName("validateTokenButton")
-        self.validate_btn.setStyleSheet(f"""
-            QPushButton#validateTokenButton {{
-                background-color: {COLORS['bg_elevated']};
-                border: 1px solid {COLORS['brand_primary']};
-                border-radius: 4px;
-                color: {COLORS['brand_accent']};
-                font-weight: 700;
-                padding: 4px 12px;
-            }}
-            QPushButton#validateTokenButton:hover:!disabled {{
-                background-color: rgba(212, 165, 116, 0.16);
-                border-color: {COLORS['brand_accent']};
-                color: {COLORS['text_primary']};
-            }}
-            QPushButton#validateTokenButton:pressed {{
-                background-color: rgba(212, 165, 116, 0.24);
-                border-color: {COLORS['brand_secondary']};
-            }}
-            QPushButton#validateTokenButton:disabled {{
-                background-color: {COLORS['bg_tertiary']};
-                border: 1px solid {COLORS['border_muted']};
-                color: {COLORS['text_tertiary']};
-            }}
-        """)
-        self.validate_btn.clicked.connect(self._validate_token)
-        token_btn_layout.addWidget(self.show_token_btn)
-        token_btn_layout.addWidget(self.validate_btn)
-        token_layout.addLayout(token_btn_layout)
+        self.collect_btn = QPushButton(self._tr("button.start"))
+        self.collect_btn.setObjectName("primaryButton")
+        self.collect_btn.setEnabled(False)
+        self.collect_btn.setMinimumHeight(38)
+        self.collect_btn.setMinimumWidth(180)
+        self.collect_btn.clicked.connect(self._start_collection)
 
-        self.token_status = QLabel("")
-        token_layout.addWidget(self.token_status)
+        footer_layout.addWidget(self.source_back_btn)
+        footer_layout.addStretch()
+        footer_layout.addWidget(self.collect_btn)
+        page_layout.addWidget(footer)
+        return page
 
-        self.token_progress = QProgressBar()
-        self.token_progress.setRange(0, 0)
-        self.token_progress.setTextVisible(False)
-        self.token_progress.setFixedHeight(6)
-        self.token_progress.setVisible(False)
-        token_layout.addWidget(self.token_progress)
-
-        layout.addWidget(self.token_group)
-
-        # Step 2: Evidence source
+    def _create_device_group(self) -> QWidget:
         self.device_group = QGroupBox(self._tr("group.source_details"))
         device_layout = QVBoxLayout(self.device_group)
-        device_layout.setContentsMargins(6, 14, 6, 6)
-        device_layout.setSpacing(4)
+        device_layout.setContentsMargins(10, 18, 10, 10)
+        device_layout.setSpacing(6)
 
         self.device_panel = DeviceListPanel(self.device_manager)
         self.device_panel.selection_changed.connect(self._on_device_selection_changed)
         self.device_panel.image_file_requested.connect(self._on_image_file_added)
         self.device_panel.set_file_action_buttons_visible(False)
+        self.device_panel.setMinimumHeight(250)
         device_layout.addWidget(self.device_panel)
+        return self.device_group
 
-        layout.addWidget(self.device_group)
-
-        # Step 3: Artifacts (tab-based)
+    def _create_artifacts_group(self) -> QWidget:
         self.artifacts_group = QGroupBox(self._tr("group.expert_scope"))
         artifacts_outer_layout = QVBoxLayout(self.artifacts_group)
-        artifacts_outer_layout.setContentsMargins(6, 14, 6, 6)
-        artifacts_outer_layout.setSpacing(4)
+        artifacts_outer_layout.setContentsMargins(10, 18, 10, 10)
+        artifacts_outer_layout.setSpacing(6)
 
         self.beginner_scope_label = QLabel(
             "Recommended artifacts are selected after authentication."
@@ -487,7 +720,6 @@ class CollectorWindow(QMainWindow):
         self.advanced_scope_cb.stateChanged.connect(self._toggle_advanced_scope)
         artifacts_outer_layout.addWidget(self.advanced_scope_cb)
 
-        # Create tab widget
         self.artifacts_tab = QTabWidget()
         self.artifacts_tab.setStyleSheet(f"""
             QTabWidget::pane {{
@@ -513,189 +745,58 @@ class CollectorWindow(QMainWindow):
             }}
         """)
 
-        # Artifact checkboxes storage
         self.artifact_checks: Dict[str, QCheckBox] = {}
-
         self._build_artifact_tabs()
         self.artifacts_tab.setVisible(False)
-
         artifacts_outer_layout.addWidget(self.artifacts_tab)
 
-        # Select All + Include Deleted option
         select_all_layout = QHBoxLayout()
         self.select_all_cb = QCheckBox(self._tr("scope.select_all"))
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
         self.select_all_cb.setVisible(False)
         select_all_layout.addWidget(self.select_all_cb)
         select_all_layout.addStretch()
+
         self.include_deleted_cb = QCheckBox(self._tr("scope.deleted"))
         self.include_deleted_cb.setChecked(True)
         self.include_deleted_cb.setToolTip(self._tr("scope.deleted.tooltip"))
         self.include_deleted_cb.stateChanged.connect(self._on_artifact_selection_changed)
         select_all_layout.addWidget(self.include_deleted_cb)
         artifacts_outer_layout.addLayout(select_all_layout)
+        return self.artifacts_group
 
-        layout.addWidget(self.artifacts_group)
+    def _create_status_step_page(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(24, 12, 24, 16)
+        page_layout.setSpacing(10)
 
-        # Step 4: Progress (stage-based progress display)
-        self.progress_group = QGroupBox(self._tr("group.progress"))
-        progress_outer_layout = QVBoxLayout(self.progress_group)
-        progress_outer_layout.setContentsMargins(6, 14, 6, 6)
-        progress_outer_layout.setSpacing(4)
+        heading, self.status_step_kicker, self.status_step_title, self.status_step_description = (
+            self._create_step_heading(
+                "wizard.status.kicker",
+                "wizard.status.title",
+                "wizard.status.description",
+            )
+        )
+        page_layout.addWidget(heading)
 
-        progress_content = QWidget()
-        progress_content.setStyleSheet("background: transparent;")
-        progress_layout = QVBoxLayout(progress_content)
-        progress_layout.setContentsMargins(0, 0, 0, 0)
-        progress_layout.setSpacing(8)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
-        # Overall progress
-        overall_layout = QHBoxLayout()
-        overall_label = QLabel("Overall Progress:")
-        overall_label.setMinimumWidth(80)
-        self.overall_progress = QProgressBar()
-        self.overall_progress.setTextVisible(True)
-        self.overall_progress.setValue(0)
-        overall_layout.addWidget(overall_label)
-        overall_layout.addWidget(self.overall_progress)
-        progress_layout.addLayout(overall_layout)
-
-        # Stage-based progress
-        stages_frame = QFrame()
-        stages_frame.setObjectName("stagesFrame")
-        stages_layout = QGridLayout(stages_frame)
-        stages_layout.setContentsMargins(5, 5, 5, 5)
-        stages_layout.setSpacing(8)
-
-        # 1. Collection stage
-        self.stage1_indicator = QLabel("○")
-        self.stage1_indicator.setObjectName("stageIndicator")
-        self.stage1_label = QLabel("1. Collect")
-        self.stage1_progress = QProgressBar()
-        self.stage1_progress.setMaximumHeight(12)
-        self.stage1_progress.setTextVisible(False)
-        stages_layout.addWidget(self.stage1_indicator, 0, 0)
-        stages_layout.addWidget(self.stage1_label, 0, 1)
-        stages_layout.addWidget(self.stage1_progress, 0, 2)
-
-        # 2. Encryption stage
-        self.stage2_indicator = QLabel("○")
-        self.stage2_indicator.setObjectName("stageIndicator")
-        self.stage2_label = QLabel("2. Encrypt")
-        self.stage2_progress = QProgressBar()
-        self.stage2_progress.setMaximumHeight(12)
-        self.stage2_progress.setTextVisible(False)
-        stages_layout.addWidget(self.stage2_indicator, 1, 0)
-        stages_layout.addWidget(self.stage2_label, 1, 1)
-        stages_layout.addWidget(self.stage2_progress, 1, 2)
-
-        # 3. Upload stage
-        self.stage3_indicator = QLabel("○")
-        self.stage3_indicator.setObjectName("stageIndicator")
-        self.stage3_label = QLabel("3. Upload")
-        self.stage3_progress = QProgressBar()
-        self.stage3_progress.setMaximumHeight(12)
-        self.stage3_progress.setTextVisible(False)
-        stages_layout.addWidget(self.stage3_indicator, 2, 0)
-        stages_layout.addWidget(self.stage3_label, 2, 1)
-        stages_layout.addWidget(self.stage3_progress, 2, 2)
-
-        stages_layout.setColumnStretch(2, 1)
-        progress_layout.addWidget(stages_frame)
-
-        # Current task and estimated time
-        status_layout = QHBoxLayout()
-        self.current_file_label = QLabel("Ready")
-        self.current_file_label.setWordWrap(True)
-        status_layout.addWidget(self.current_file_label, 1)
-
-        # Elapsed time + heartbeat (proves the app is alive)
-        self.elapsed_label = QLabel("")
-        self.elapsed_label.setObjectName("elapsedLabel")
-        self.elapsed_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.elapsed_label.setStyleSheet("color: #888; font-size: 9px;")
-        status_layout.addWidget(self.elapsed_label)
-
-        self.time_estimate_label = QLabel("")
-        self.time_estimate_label.setObjectName("timeEstimate")
-        self.time_estimate_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        status_layout.addWidget(self.time_estimate_label)
-        progress_layout.addLayout(status_layout)
-
-        # Heartbeat timer: updates elapsed time every second while collection is running
-        self._heartbeat_timer = QTimer(self)
-        self._heartbeat_timer.setInterval(1000)
-        self._heartbeat_timer.timeout.connect(self._update_heartbeat)
-        self._collection_start_time = None
-        self._heartbeat_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-        self._heartbeat_idx = 0
-
-        progress_outer_layout.addWidget(progress_content)
-
-        layout.addWidget(self.progress_group)
-
-        # Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(8)
-
-        self.collect_btn = QPushButton(self._tr("button.start"))
-        self.collect_btn.setEnabled(False)
-        self.collect_btn.setFixedHeight(32)
-        self.collect_btn.setMinimumWidth(120)
-        self.collect_btn.clicked.connect(self._start_collection)
-        self.collect_btn.setObjectName("primaryButton")
-        # Explicit style settings (visible in both disabled/enabled states)
-        self.collect_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['brand_primary']};
-                border: none;
-                border-radius: 4px;
-                color: {COLORS['bg_primary']};
-                font-weight: 600;
-                font-size: 11px;
-            }}
-            QPushButton:disabled {{
-                background-color: {COLORS['brand_tertiary']};
-                color: {COLORS['text_tertiary']};
-            }}
-            QPushButton:hover:!disabled {{
-                background-color: {COLORS['brand_accent']};
-            }}
-        """)
-
-        self.cancel_btn = QPushButton(self._tr("button.cancel"))
-        self.cancel_btn.setEnabled(False)
-        self.cancel_btn.setFixedHeight(32)
-        self.cancel_btn.clicked.connect(self._cancel_collection)
-
-        btn_layout.addWidget(self.collect_btn, 1)  # stretch factor 1
-        btn_layout.addWidget(self.cancel_btn, 1)  # stretch factor 1
-        layout.addLayout(btn_layout)
-
-        # Fill remaining space with stretch
-        layout.addStretch()
-
-        self._set_expert_controls_visible(False)
-        self._update_scope_summary()
-        self._update_workflow_status()
-        self._update_simple_source_status()
-
-        # Set panel to scroll area
-        scroll_area.setWidget(panel)
-        return scroll_area
-
-    def _create_right_panel(self) -> QWidget:
-        """Create right panel with beginner status and optional technical log."""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 4, 0, 4)
+        content_layout.setSpacing(8)
 
         self.status_group = QGroupBox(self._tr("group.status"))
         status_layout = QVBoxLayout(self.status_group)
-
-        self.simple_activity_label = QLabel(
-            self._tr("simple.status.ready")
-        )
+        status_layout.setContentsMargins(12, 18, 12, 12)
+        self.simple_activity_label = QLabel(self._tr("simple.status.ready"))
         self.simple_activity_label.setWordWrap(True)
+        self.simple_activity_label.setMinimumHeight(48)
         self.simple_activity_label.setStyleSheet(
             f"background: {COLORS['bg_tertiary']}; "
             f"border: 1px solid {COLORS['border_subtle']}; "
@@ -703,6 +804,9 @@ class CollectorWindow(QMainWindow):
             f"color: {COLORS['text_primary']};"
         )
         status_layout.addWidget(self.simple_activity_label)
+        content_layout.addWidget(self.status_group)
+
+        content_layout.addWidget(self._create_progress_group())
 
         self.show_log_cb = QCheckBox(self._tr("log.show"))
         self.show_log_cb.setChecked(False)
@@ -711,22 +815,210 @@ class CollectorWindow(QMainWindow):
                 state == Qt.CheckState.Checked.value
             )
         )
-        status_layout.addWidget(self.show_log_cb)
-
-        layout.addWidget(self.status_group)
+        content_layout.addWidget(self.show_log_cb)
 
         self.log_group = QGroupBox(self._tr("group.technical_log"))
         log_layout = QVBoxLayout(self.log_group)
-
+        log_layout.setContentsMargins(10, 18, 10, 10)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Consolas", 9))
+        self.log_text.setMinimumHeight(220)
         log_layout.addWidget(self.log_text)
+        content_layout.addWidget(self.log_group)
+        content_layout.addStretch()
 
-        layout.addWidget(self.log_group)
+        scroll_area.setWidget(content)
+        page_layout.addWidget(scroll_area, 1)
+
+        footer = QFrame()
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 8, 0, 0)
+        footer_layout.setSpacing(8)
+
+        self.cancel_btn = QPushButton(self._tr("button.cancel"))
+        self.cancel_btn.setObjectName("dangerButton")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setMinimumHeight(38)
+        self.cancel_btn.clicked.connect(self._cancel_collection)
+
+        self.new_collection_btn = QPushButton(self._tr("wizard.button.new_collection"))
+        self.new_collection_btn.setObjectName("primaryButton")
+        self.new_collection_btn.setMinimumHeight(38)
+        self.new_collection_btn.setVisible(False)
+        self.new_collection_btn.clicked.connect(self._restart_wizard)
+
+        footer_layout.addWidget(self.cancel_btn)
+        footer_layout.addStretch()
+        footer_layout.addWidget(self.new_collection_btn)
+        page_layout.addWidget(footer)
+
         self._set_technical_log_visible(False)
+        return page
 
-        return panel
+    def _create_progress_group(self) -> QWidget:
+        self.progress_group = QGroupBox(self._tr("group.progress"))
+        progress_outer_layout = QVBoxLayout(self.progress_group)
+        progress_outer_layout.setContentsMargins(12, 18, 12, 12)
+        progress_outer_layout.setSpacing(8)
+
+        overall_layout = QHBoxLayout()
+        self.overall_progress_label = QLabel(self._tr("wizard.progress.overall"))
+        self.overall_progress_label.setMinimumWidth(92)
+        self.overall_progress = QProgressBar()
+        self.overall_progress.setTextVisible(True)
+        self.overall_progress.setValue(0)
+        overall_layout.addWidget(self.overall_progress_label)
+        overall_layout.addWidget(self.overall_progress)
+        progress_outer_layout.addLayout(overall_layout)
+
+        stages_frame = QFrame()
+        stages_frame.setObjectName("stagesFrame")
+        stages_layout = QGridLayout(stages_frame)
+        stages_layout.setContentsMargins(6, 6, 6, 6)
+        stages_layout.setSpacing(9)
+
+        self.stage1_indicator = QLabel("\u25cb")
+        self.stage1_indicator.setObjectName("stageIndicator")
+        self.stage1_label = QLabel(self._tr("wizard.progress.collect"))
+        self.stage1_progress = QProgressBar()
+        self.stage1_progress.setMaximumHeight(12)
+        self.stage1_progress.setTextVisible(False)
+        stages_layout.addWidget(self.stage1_indicator, 0, 0)
+        stages_layout.addWidget(self.stage1_label, 0, 1)
+        stages_layout.addWidget(self.stage1_progress, 0, 2)
+
+        self.stage2_indicator = QLabel("\u25cb")
+        self.stage2_indicator.setObjectName("stageIndicator")
+        self.stage2_label = QLabel(self._tr("wizard.progress.encrypt"))
+        self.stage2_progress = QProgressBar()
+        self.stage2_progress.setMaximumHeight(12)
+        self.stage2_progress.setTextVisible(False)
+        stages_layout.addWidget(self.stage2_indicator, 1, 0)
+        stages_layout.addWidget(self.stage2_label, 1, 1)
+        stages_layout.addWidget(self.stage2_progress, 1, 2)
+
+        self.stage3_indicator = QLabel("\u25cb")
+        self.stage3_indicator.setObjectName("stageIndicator")
+        self.stage3_label = QLabel(self._tr("wizard.progress.upload"))
+        self.stage3_progress = QProgressBar()
+        self.stage3_progress.setMaximumHeight(12)
+        self.stage3_progress.setTextVisible(False)
+        stages_layout.addWidget(self.stage3_indicator, 2, 0)
+        stages_layout.addWidget(self.stage3_label, 2, 1)
+        stages_layout.addWidget(self.stage3_progress, 2, 2)
+
+        stages_layout.setColumnStretch(2, 1)
+        progress_outer_layout.addWidget(stages_frame)
+
+        status_layout = QHBoxLayout()
+        self.current_file_label = QLabel(self._tr("wizard.progress.ready"))
+        self.current_file_label.setWordWrap(True)
+        status_layout.addWidget(self.current_file_label, 1)
+
+        self.elapsed_label = QLabel("")
+        self.elapsed_label.setObjectName("elapsedLabel")
+        self.elapsed_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.elapsed_label.setStyleSheet(
+            f"color: {COLORS['text_tertiary']}; font-size: 9px;"
+        )
+        status_layout.addWidget(self.elapsed_label)
+
+        self.time_estimate_label = QLabel("")
+        self.time_estimate_label.setObjectName("timeEstimate")
+        self.time_estimate_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        status_layout.addWidget(self.time_estimate_label)
+        progress_outer_layout.addLayout(status_layout)
+
+        self._heartbeat_timer = QTimer(self)
+        self._heartbeat_timer.setInterval(1000)
+        self._heartbeat_timer.timeout.connect(self._update_heartbeat)
+        self._collection_start_time = None
+        self._heartbeat_frames = ["|", "/", "-", "."]
+        self._heartbeat_idx = 0
+        return self.progress_group
+
+    def _show_wizard_step(self, index: int):
+        """Move to a valid wizard page without allowing steps to be skipped."""
+        index = max(0, min(int(index), 2))
+        if index == 1 and not self.collection_token:
+            index = 0
+        self._current_wizard_step = index
+        self.wizard_stack.setCurrentIndex(index)
+        self._update_wizard_step_bar()
+
+        if index == 0 and self.token_input.isEnabled():
+            QTimer.singleShot(0, self.token_input.setFocus)
+
+    def _update_wizard_step_bar(self):
+        if not hasattr(self, "wizard_step_items"):
+            return
+
+        current = getattr(self, "_current_wizard_step", 0)
+        for index, (item, number, title) in enumerate(zip(
+            self.wizard_step_items,
+            self.wizard_step_number_labels,
+            self.wizard_step_title_labels,
+        )):
+            completed = index < current
+            active = index == current
+            if completed:
+                border = COLORS["success"]
+                background = COLORS["success_bg"]
+                number_background = COLORS["success"]
+                number_color = COLORS["bg_primary"]
+                title_color = COLORS["text_primary"]
+                number_text = "OK"
+            elif active:
+                border = COLORS["brand_primary"]
+                background = COLORS["bg_tertiary"]
+                number_background = COLORS["brand_primary"]
+                number_color = COLORS["bg_primary"]
+                title_color = COLORS["text_primary"]
+                number_text = str(index + 1)
+            else:
+                border = COLORS["border_subtle"]
+                background = COLORS["bg_secondary"]
+                number_background = COLORS["bg_elevated"]
+                number_color = COLORS["text_tertiary"]
+                title_color = COLORS["text_tertiary"]
+                number_text = str(index + 1)
+
+            item.setStyleSheet(
+                f"background: {background}; border: 1px solid {border}; border-radius: 5px;"
+            )
+            number.setText(number_text)
+            number.setStyleSheet(
+                f"background: {number_background}; color: {number_color}; "
+                "border: none; border-radius: 14px; font-size: 9px; font-weight: 700;"
+            )
+            title.setStyleSheet(f"color: {title_color}; border: none; background: transparent;")
+
+    def _restart_wizard(self):
+        """Reset the visible workflow after a completed collection."""
+        if getattr(self, "_collection_in_progress", False):
+            return
+        self._collection_completed = False
+        self._collection_result = None
+        self.token_input.clear()
+        self.token_status.clear()
+        self.overall_progress.setValue(0)
+        for indicator, progress in (
+            (self.stage1_indicator, self.stage1_progress),
+            (self.stage2_indicator, self.stage2_progress),
+            (self.stage3_indicator, self.stage3_progress),
+        ):
+            indicator.setText("\u25cb")
+            indicator.setStyleSheet("")
+            progress.setValue(0)
+            progress.setStyleSheet("")
+        self.current_file_label.setText(self._tr("wizard.progress.ready"))
+        self.elapsed_label.clear()
+        self.time_estimate_label.clear()
+        self.log_text.clear()
+        self.show_log_cb.setChecked(False)
+        self.new_collection_btn.setVisible(False)
+        self._show_wizard_step(0)
 
     def _set_technical_log_visible(self, visible: bool):
         """Toggle the raw log without changing logging behavior."""
@@ -779,16 +1071,11 @@ class CollectorWindow(QMainWindow):
         self._set_expert_controls_visible(visible)
 
     def _set_expert_controls_visible(self, visible: bool):
-        """Keep the original detailed controls available without making them primary."""
-        if hasattr(self, 'device_group'):
+        """Show detailed source and scope controls only on the source page."""
+        if hasattr(self, "device_group"):
             self.device_group.setVisible(visible)
-        if hasattr(self, 'artifacts_group'):
+        if hasattr(self, "artifacts_group"):
             self.artifacts_group.setVisible(visible)
-        if hasattr(self, 'show_log_cb') and self.show_log_cb.isChecked() != visible:
-            self.show_log_cb.blockSignals(True)
-            self.show_log_cb.setChecked(visible)
-            self.show_log_cb.blockSignals(False)
-            self._set_technical_log_visible(visible)
         self._update_simple_source_status()
 
     def _select_simple_local_source(self):
@@ -969,8 +1256,7 @@ class CollectorWindow(QMainWindow):
 
     def _update_workflow_status(self):
         """Show the current beginner workflow state."""
-        if not hasattr(self, 'workflow_status'):
-            return
+        has_workflow_status = hasattr(self, "workflow_status")
 
         token_done = bool(self.collection_token)
         selected_devices = self.device_manager.get_selected_devices()
@@ -1024,11 +1310,24 @@ class CollectorWindow(QMainWindow):
             self._format_workflow_step(3, self._tr("step.scope.title"), scope_done, scope_detail),
             self._format_workflow_step(4, self._tr("step.start.title"), ready_done, ready_detail),
         ])
-        self.workflow_status.setText(html)
+        if has_workflow_status:
+            self.workflow_status.setText(html)
         self._update_simple_source_status()
+        self._update_wizard_step_bar()
 
         if hasattr(self, 'simple_activity_label'):
-            if getattr(self, '_collection_in_progress', False):
+            collection_result = getattr(self, "_collection_result", None)
+            if (
+                getattr(self, "_current_wizard_step", 0) == 2
+                and collection_result is not None
+            ):
+                text = self._tr(
+                    "wizard.status.complete"
+                    if collection_result
+                    else "wizard.status.failed"
+                )
+                color = COLORS["success"] if collection_result else COLORS["error"]
+            elif getattr(self, '_collection_in_progress', False):
                 text = self._tr("simple.status.collecting")
                 color = COLORS['warning']
             elif getattr(self, '_token_validation_in_progress', False):
@@ -1995,6 +2294,8 @@ class CollectorWindow(QMainWindow):
         self.advanced_scope_cb.setEnabled(not locked)
         if hasattr(self, 'expert_controls_cb'):
             self.expert_controls_cb.setEnabled(not locked)
+        if hasattr(self, "source_back_btn"):
+            self.source_back_btn.setEnabled(not locked)
         self._set_simple_source_controls_enabled(not locked)
         self.artifacts_tab.setEnabled(not locked)
         if hasattr(self, 'linux_mount_path'):
@@ -2168,10 +2469,10 @@ class CollectorWindow(QMainWindow):
         """Toggle token visibility"""
         if self.show_token_btn.isChecked():
             self.token_input.setEchoMode(QLineEdit.EchoMode.Normal)
-            self.show_token_btn.setText("Hide")
+            self.show_token_btn.setText(self._tr("token.hide"))
         else:
             self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
-            self.show_token_btn.setText("Show")
+            self.show_token_btn.setText(self._tr("token.show"))
 
     def _toggle_select_all(self, state):
         """Toggle artifact checkboxes for current tab only"""
@@ -2208,13 +2509,71 @@ class CollectorWindow(QMainWindow):
         self._update_scope_summary()
         self._update_collect_button_state()
 
+    def _start_connection_sync(self):
+        """Start pairing or resume a trusted collector connection."""
+        server_url = str(self.config.get("server_url") or "").strip()
+        if not server_url or self._connection_worker is not None:
+            return
+        worker = ConnectionSyncWorker(
+            server_url=server_url,
+            client_version=str(self.config.get("version") or "0.0.0"),
+            pairing_code=str(self.config.pop("pairing_code", "") or ""),
+        )
+        self._connection_worker = worker
+        worker.command_ready.connect(self._on_connection_command)
+        worker.status_changed.connect(self._on_connection_status)
+        worker.error_ready.connect(self._on_connection_error)
+        worker.finished.connect(self._on_connection_worker_finished)
+        worker.start()
+
+    def _on_connection_worker_finished(self):
+        worker = self.sender()
+        if self._connection_worker is worker:
+            self._connection_worker = None
+
+    def _on_connection_status(self, status: str):
+        labels = {
+            "pairing": "Connecting collector...",
+            "reconnecting": "Restoring collector connection...",
+            "connected": "Collector connected",
+            "offline": "Connection interrupted - retrying",
+            "unpaired": "Ready for collector connection",
+        }
+        self.status_bar.showMessage(labels.get(status, status))
+        if status == "connected" and not self.session_id:
+            self.token_status.setText("Collector connected - waiting for an analysis")
+            self.token_status.setStyleSheet(f"color: {COLORS['success']};")
+
+    def _on_connection_error(self, error: str):
+        self._log(f"Collector connection failed: {error}", error=True)
+        self.token_status.setText("Collector connection failed")
+        self.token_status.setStyleSheet(f"color: {COLORS['error']};")
+
+    def _on_connection_command(self, token: str, command_id: str, run_id: str):
+        if self._collection_in_progress or self._token_validation_in_progress:
+            if self._connection_worker:
+                self._connection_worker.acknowledge(
+                    command_id,
+                    False,
+                    {"reason": "collector_busy"},
+                )
+            return
+        self._pending_connection_command_id = command_id
+        self.connection_run_id = run_id or None
+        self._log("Analysis connection received from the web platform")
+        self._validate_token_value(token)
+
     def _validate_token(self):
-        """Validate the session token"""
+        """Validate the manually entered session token."""
+        self._validate_token_value(self.token_input.text())
+
+    def _validate_token_value(self, token: str):
+        """Validate a manual or trusted-connection bootstrap token."""
         if getattr(self, '_collection_in_progress', False):
             self.status_bar.showMessage("Collection is already running...")
             return
 
-        token = self.token_input.text().strip()
+        token = (token or "").strip()
         if not token:
             QMessageBox.warning(self, "Error", "Please enter a session token")
             return
@@ -2257,7 +2616,7 @@ class CollectorWindow(QMainWindow):
             self._update_workflow_status()
             return
 
-        self.validate_btn.setText(self._tr("token.validate"))
+        self.validate_btn.setText(self._tr("wizard.token.continue"))
         self.token_progress.setVisible(False)
         self.token_progress.setRange(0, 100)
         self.token_input.setEnabled(not getattr(self, '_collection_in_progress', False))
@@ -2276,6 +2635,13 @@ class CollectorWindow(QMainWindow):
 
     def _on_token_validation_error(self, error: str):
         """Handle unexpected validation worker failures."""
+        if self._pending_connection_command_id and self._connection_worker:
+            self._connection_worker.acknowledge(
+                self._pending_connection_command_id,
+                False,
+                {"reason": error[:200]},
+            )
+            self._pending_connection_command_id = None
         self._set_token_validation_busy(False)
         self.token_status.setText("Invalid: validation failed")
         self.token_status.setStyleSheet("color: #f72585;")
@@ -2296,6 +2662,14 @@ class CollectorWindow(QMainWindow):
 
     def _handle_token_validation_result(self, result):
         """Apply successful or failed token validation results."""
+
+        if self._pending_connection_command_id and self._connection_worker:
+            self._connection_worker.acknowledge(
+                self._pending_connection_command_id,
+                bool(result.valid),
+                {"case_id": getattr(result, "case_id", None), "error": getattr(result, "error", None)},
+            )
+            self._pending_connection_command_id = None
 
         if result.valid:
             # [Security] Original session token not stored (unnecessary after validation)
@@ -2484,6 +2858,7 @@ class CollectorWindow(QMainWindow):
 
             # Update collect button state including device selection status
             self._update_collect_button_state()
+            self._show_wizard_step(1)
         else:
             self.token_status.setText(f"Invalid: {result.error}")
             self.token_status.setStyleSheet("color: #f72585;")
@@ -3212,6 +3587,24 @@ class CollectorWindow(QMainWindow):
         if tool_result_total:
             self._log(f"Starting verified tool result upload for {tool_result_total} source(s)")
 
+        # A trusted-device run stays deferred through source selection and
+        # legal consent. Activate it only after every pre-collection prompt has
+        # succeeded and immediately before the worker starts.
+        if self.connection_run_id:
+            activated, activation_error = validator.activate_run(
+                self.connection_run_id,
+                self.session_id,
+                self.collection_token,
+            )
+            if not activated:
+                self._log(f"Collection activation failed: {activation_error}", error=True)
+                QMessageBox.warning(
+                    self,
+                    "Collection Could Not Start",
+                    activation_error or "The connected collection run could not be activated.",
+                )
+                return
+
         # Freeze every source/scope/auth input for the full collection and
         # upload lifetime. Individual UI events can otherwise re-enable the
         # start button or mutate selected sources while the worker is running.
@@ -3270,6 +3663,11 @@ class CollectorWindow(QMainWindow):
         # Reserved extension signal: device unlock dialog
         self.worker.unlock_requested.connect(self._on_unlock_requested)
         self.worker.start()
+        self._collection_completed = False
+        self._collection_result = None
+        self.new_collection_btn.setVisible(False)
+        self._show_wizard_step(2)
+        self._update_workflow_status()
 
         # Start heartbeat timer (elapsed time indicator)
         self._collection_start_time = datetime.now()
@@ -3628,6 +4026,21 @@ class CollectorWindow(QMainWindow):
         self.status_bar.showMessage("Ready - New token required")
         self.token_status.setText("New token required")
         self.token_status.setStyleSheet("color: #ffc107;")
+        self._collection_result = bool(success)
+        self.new_collection_btn.setVisible(not close_after_finish)
+        if success:
+            self.simple_activity_label.setText(self._tr("wizard.status.complete"))
+            result_color = COLORS["success"]
+        else:
+            self.simple_activity_label.setText(self._tr("wizard.status.failed"))
+            result_color = COLORS["error"]
+        self.simple_activity_label.setStyleSheet(
+            f"background: {COLORS['bg_tertiary']}; "
+            f"border: 1px solid {result_color}; "
+            "border-radius: 4px; padding: 10px; "
+            f"color: {COLORS['text_primary']};"
+        )
+        self._update_wizard_step_bar()
 
         if close_after_finish:
             self._shutdown_ws_worker('collection_finished')
@@ -3707,6 +4120,7 @@ class CollectorWindow(QMainWindow):
         self.server_url = None
         self.ws_url = None
         self.collection_profile_id = None
+        self.connection_run_id = None
         self.collection_profile_targets = []
         self.profile_artifact_types = set()
         self.allowed_artifacts = []
@@ -3809,6 +4223,9 @@ class CollectorWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Cleanup on window close."""
+        if self._connection_worker and self._connection_worker.isRunning():
+            self._connection_worker.stop()
+            self._connection_worker.wait(1500)
         if hasattr(self, 'worker') and self.worker.isRunning():
             try:
                 if self.worker.can_close_without_abort():

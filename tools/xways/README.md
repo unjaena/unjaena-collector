@@ -57,8 +57,8 @@ The X-Tension also accepts non-interactive parameters in this form:
 XTParam:UNJAENA:host=app.unjaena.com;port=443;ssl=true;token=<session-id:secret>;consent=true;max_uploads=100
 ```
 
-`max_uploads` is optional and exists for controlled smoke tests. In normal
-production runs it should be omitted or set to `0`.
+`max_uploads` is accepted only as a non-interactive smoke-test parameter. It is
+not shown in the production dialog and should be omitted in normal runs.
 
 ## Security model
 
@@ -102,8 +102,7 @@ Expected output:
 
 - Load the DLL in X-Ways with a non-customer test image.
 - Use a freshly generated unJaena collection session token.
-- Confirm the dialog accepts host, port, SSL, token, max upload count, and
-  consent.
+- Confirm the dialog accepts host, port, SSL, token, and consent.
 - Confirm authentication, profile loading, consent verification, and heartbeat
   messages appear in X-Ways output. If X-Ways does not show a message, inspect
   `%TEMP%\UnjaenaXwfCollector.log`; the DLL writes initialization, auth,

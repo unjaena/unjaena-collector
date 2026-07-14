@@ -33,6 +33,46 @@ USER_CONFIG_FILE = USER_CONFIG_DIR / "config.json"
 
 
 DEFAULT_MESSAGES: Dict[str, str] = {
+    "wizard.step.token": "Enter key",
+    "wizard.step.source": "Choose target",
+    "wizard.step.status": "Check status",
+    "wizard.token.kicker": "STEP 1 OF 3",
+    "wizard.token.title": "Enter the collection key",
+    "wizard.token.description": (
+        "Use the key issued from the case page to connect this tool to the "
+        "correct analysis space."
+    ),
+    "wizard.token.group": "Collection key",
+    "wizard.token.help": (
+        "Paste the key exactly as shown on the web case page. Keep it private."
+    ),
+    "wizard.token.continue": "Connect and continue",
+    "wizard.source.kicker": "STEP 2 OF 3",
+    "wizard.source.title": "Choose what to analyze",
+    "wizard.source.description": (
+        "Choose the computer, phone, evidence file, or tool result that contains "
+        "the data you want to send."
+    ),
+    "wizard.source.group": "Analysis target",
+    "wizard.status.kicker": "STEP 3 OF 3",
+    "wizard.status.title": "Collection and upload status",
+    "wizard.status.description": (
+        "Keep this program open until every stage is complete. Technical details "
+        "are available only when you need them."
+    ),
+    "wizard.status.complete": (
+        "Collection and upload are complete. Return to the case page to continue analysis."
+    ),
+    "wizard.status.failed": (
+        "Collection did not complete. Open the technical log to review the cause."
+    ),
+    "wizard.button.back": "Back",
+    "wizard.button.new_collection": "Start another collection",
+    "wizard.progress.overall": "Overall",
+    "wizard.progress.collect": "1. Collect data",
+    "wizard.progress.encrypt": "2. Protect data",
+    "wizard.progress.upload": "3. Send data",
+    "wizard.progress.ready": "Waiting to start",
     "simple.title": "Simple Collection",
     "simple.intro": (
         "Collect evidence in three steps: connect the case, choose the "
@@ -129,6 +169,7 @@ DEFAULT_MESSAGES: Dict[str, str] = {
     "group.technical_log": "Technical Activity Log",
     "token.placeholder": "Paste the collection key from the web case",
     "token.show": "Show",
+    "token.hide": "Hide",
     "token.validate": "Validate Token",
     "token.validating": "Validating...",
     "token.status.validating": "Validating token...",
@@ -166,6 +207,8 @@ DEFAULT_MESSAGES: Dict[str, str] = {
     "button.cancel": "Cancel",
     "header.language": "Language",
 }
+
+BUILTIN_LOCALE_MESSAGES: Dict[str, Dict[str, str]] = {}
 
 
 def normalize_locale(value: Optional[str]) -> str:
@@ -268,7 +311,11 @@ class I18n:
         self._messages = _load_locale_file(self._locale)
 
     def tr(self, key: str, **kwargs) -> str:
-        template = self._messages.get(key, DEFAULT_MESSAGES.get(key, key))
+        builtin_messages = BUILTIN_LOCALE_MESSAGES.get(self._locale, {})
+        template = self._messages.get(
+            key,
+            builtin_messages.get(key, DEFAULT_MESSAGES.get(key, key)),
+        )
         if not kwargs:
             return template
         try:

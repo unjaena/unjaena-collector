@@ -126,6 +126,27 @@ namespace UnjaenaXwfPackageUploader
                 }
             }
 
+            string finalizeResponse = client.FinalizeCollection(
+                options.Host,
+                options.Port,
+                options.UseSsl,
+                caseId,
+                sessionId,
+                collectionToken,
+                manifest.Artifacts.Count,
+                uploaded,
+                skipped,
+                0);
+            if (!client.WasLastSucceeded())
+            {
+                Console.Error.WriteLine("Collection finalize failed: " + client.GetLastError());
+                return 1;
+            }
+            if (options.Verbose)
+            {
+                Console.WriteLine("Finalized collection: " + finalizeResponse);
+            }
+
             Console.WriteLine("X-Ways package upload complete. uploaded=" + uploaded + " skipped=" + skipped);
             return 0;
         }
