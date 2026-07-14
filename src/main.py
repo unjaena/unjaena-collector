@@ -155,7 +155,40 @@ Examples:
     return parser.parse_args()
 
 
-def check_admin_privilege():
+def _claim_connection_before_elevation(config: dict) -> bool:
+    """Claim a browser pairing before a Windows UAC relaunch.
+
+    PyInstaller one-file startup can be slow. Claiming before the optional
+    second launch prevents a short-lived, one-use pairing grant from expiring
+    while the executable is unpacked again. This only establishes the trusted
+    device connection; collection still starts after scope selection and legal
+    consent in the elevated process.
+    """
+    pairing_code = str(config.get("pairing_code") or "").strip()
+    server_url = str(config.get("server_url") or "").strip()
+    if not pairing_code or not server_url:
+        return False
+
+    try:
+        from core.connection_client import CollectorConnectionClient
+
+        client = CollectorConnectionClient(server_url)
+        client.claim(pairing_code, str(config.get("version") or "0.0.0"))
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Collector connection pre-claim failed; elevated process will retry: %s",
+            exc,
+        )
+        return False
+
+    config.pop("pairing_code", None)
+    logging.getLogger(__name__).info(
+        "Collector connection claimed before elevation"
+    )
+    return True
+
+
+def check_admin_privilege(relaunch_args=None):
     """Check if running as administrator/root.
 
     Windows: prompts UAC elevation dialog, exits if declined.
@@ -188,7 +221,7 @@ def check_admin_privilege():
         reply = msg_box.exec()
 
         if reply == QMessageBox.StandardButton.Yes:
-            if run_as_admin():
+            if run_as_admin(relaunch_args):
                 sys.exit(0)
             else:
                 QMessageBox.critical(
@@ -213,7 +246,7 @@ def check_admin_privilege():
         msg_box.exec()
 
 
-def main_gui(config: dict):
+def main_gui(config: dict, claimed_before_elevation: bool = False):
     """Launch GUI mode."""
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtCore import Qt
@@ -247,7 +280,13 @@ def main_gui(config: dict):
     except Exception as protocol_error:
         logging.getLogger(__name__).warning("Protocol handler registration failed: %s", protocol_error)
 
-    check_admin_privilege()
+    relaunch_args = None
+    if claimed_before_elevation:
+        # The one-use pairing code has already been consumed. Pass only the
+        # validated server URL; the elevated process resumes with the device
+        # identity stored in the operating-system credential store.
+        relaunch_args = ["--server", str(config["server_url"])]
+    check_admin_privilege(relaunch_args)
 
     window = CollectorWindow(config)
     window.show()
@@ -310,10 +349,11 @@ def main():
             launch_server = str((query.get("server") or [""])[0]) or None
             if not pairing_code:
                 sys.exit("Error: collector connection URI has no pairing code")
-        config = get_secure_config(cli_server_url=launch_server)
+        config = get_secure_config(cli_server_url=launch_server or args.server)
         if pairing_code:
             config["pairing_code"] = pairing_code
-        main_gui(config)
+        claimed_before_elevation = _claim_connection_before_elevation(config)
+        main_gui(config, claimed_before_elevation)
 
 
 if __name__ == '__main__':

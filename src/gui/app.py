@@ -345,11 +345,6 @@ class CollectorWindow(QMainWindow):
             "status_step_title": ("setText", "wizard.status.title"),
             "status_step_description": ("setText", "wizard.status.description"),
             "source_hint": ("setText", "simple.choose_source"),
-            "simple_pc_btn": ("setText", "simple.btn.local"),
-            "simple_phone_btn": ("setText", "simple.btn.phone"),
-            "simple_image_btn": ("setText", "simple.btn.evidence"),
-            "simple_tool_btn": ("setText", "simple.btn.tool"),
-            "expert_controls_cb": ("setText", "simple.expert_toggle"),
             "show_log_cb": ("setText", "log.show"),
             "advanced_scope_cb": ("setText", "scope.advanced"),
             "select_all_cb": ("setText", "scope.select_all"),
@@ -387,12 +382,14 @@ class CollectorWindow(QMainWindow):
             self.simple_image_btn.setToolTip(self._tr("simple.btn.evidence.tooltip"))
         if hasattr(self, "simple_tool_btn"):
             self.simple_tool_btn.setToolTip(self._tr("simple.btn.tool.tooltip"))
+        self._set_simple_source_button_texts()
         if hasattr(self, "include_deleted_cb"):
             self.include_deleted_cb.setToolTip(self._tr("scope.deleted.tooltip"))
         if hasattr(self, "language_combo"):
             self.language_combo.setToolTip(self._tr("header.language"))
         if getattr(self, "_token_validation_in_progress", False) and hasattr(self, "validate_btn"):
             self.validate_btn.setText(self._tr("token.validating"))
+        self._update_simple_source_inventory()
 
     def _create_left_panel(self) -> QWidget:
         """Create the three-step beginner collection flow."""
@@ -581,22 +578,11 @@ class CollectorWindow(QMainWindow):
         )
         page_layout.addWidget(heading)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-
-        content = QWidget()
-        content.setStyleSheet("background: transparent;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 4, 0, 4)
-        content_layout.setSpacing(8)
-
         self.quick_group = QGroupBox(self._tr("wizard.source.group"))
+        self.quick_group.setMaximumWidth(760)
         quick_layout = QVBoxLayout(self.quick_group)
-        quick_layout.setContentsMargins(14, 20, 14, 14)
-        quick_layout.setSpacing(10)
+        quick_layout.setContentsMargins(14, 18, 14, 12)
+        quick_layout.setSpacing(8)
 
         self.source_hint = QLabel(self._tr("simple.choose_source"))
         self.source_hint.setStyleSheet(
@@ -607,62 +593,92 @@ class CollectorWindow(QMainWindow):
         source_btn_layout = QGridLayout()
         source_btn_layout.setSpacing(8)
 
-        self.simple_pc_btn = QPushButton(self._tr("simple.btn.local"))
-        self.simple_pc_btn.setToolTip(self._tr("simple.btn.local.tooltip"))
-        self.simple_pc_btn.clicked.connect(self._select_simple_local_source)
-        source_btn_layout.addWidget(self.simple_pc_btn, 0, 0)
-
-        self.simple_phone_btn = QPushButton(self._tr("simple.btn.phone"))
-        self.simple_phone_btn.setToolTip(self._tr("simple.btn.phone.tooltip"))
-        self.simple_phone_btn.clicked.connect(self._select_simple_phone_source)
-        source_btn_layout.addWidget(self.simple_phone_btn, 0, 1)
-
-        self.simple_image_btn = QPushButton(self._tr("simple.btn.evidence"))
-        self.simple_image_btn.setToolTip(self._tr("simple.btn.evidence.tooltip"))
-        self.simple_image_btn.clicked.connect(self._open_simple_evidence_file)
-        source_btn_layout.addWidget(self.simple_image_btn, 1, 0)
-
-        self.simple_tool_btn = QPushButton(self._tr("simple.btn.tool"))
-        self.simple_tool_btn.setToolTip(self._tr("simple.btn.tool.tooltip"))
-        self.simple_tool_btn.clicked.connect(self._open_simple_tool_result)
-        source_btn_layout.addWidget(self.simple_tool_btn, 1, 1)
-
-        for button in (
-            self.simple_pc_btn,
-            self.simple_phone_btn,
-            self.simple_image_btn,
-            self.simple_tool_btn,
-        ):
-            button.setMinimumHeight(54)
-            button.setStyleSheet(
-                f"text-align: left; padding: 10px 14px; "
-                f"background: {COLORS['bg_tertiary']}; font-weight: 600;"
-            )
+        source_btn_layout.addWidget(
+            self._create_simple_source_choice(
+                "simple_pc_btn",
+                "simple.btn.local",
+                "simple.caption.local",
+                self._select_simple_local_source,
+                self._tr("simple.btn.local.tooltip"),
+            ),
+            0,
+            0,
+        )
+        source_btn_layout.addWidget(
+            self._create_simple_source_choice(
+                "simple_phone_btn",
+                "simple.btn.phone",
+                "simple.caption.phone",
+                self._select_simple_phone_source,
+                self._tr("simple.btn.phone.tooltip"),
+            ),
+            0,
+            1,
+        )
+        source_btn_layout.addWidget(
+            self._create_simple_source_choice(
+                "simple_image_btn",
+                "simple.btn.evidence",
+                "simple.caption.evidence",
+                self._open_simple_evidence_file,
+                self._tr("simple.btn.evidence.tooltip"),
+            ),
+            1,
+            0,
+        )
+        source_btn_layout.addWidget(
+            self._create_simple_source_choice(
+                "simple_tool_btn",
+                "simple.btn.tool",
+                "simple.caption.tool",
+                self._open_simple_tool_result,
+                self._tr("simple.btn.tool.tooltip"),
+            ),
+            1,
+            1,
+        )
+        source_btn_layout.setColumnStretch(0, 1)
+        source_btn_layout.setColumnStretch(1, 1)
 
         quick_layout.addLayout(source_btn_layout)
 
+        self.simple_detected_status = QLabel()
+        self.simple_detected_status.setWordWrap(True)
+        self.simple_detected_status.setMinimumHeight(28)
+        self.simple_detected_status.setStyleSheet(
+            f"background: {COLORS['bg_primary']}; "
+            f"border: 1px solid {COLORS['border_subtle']}; "
+            "border-radius: 4px; padding: 6px 8px; "
+            f"color: {COLORS['text_secondary']}; font-size: 10px;"
+        )
+        quick_layout.addWidget(self.simple_detected_status)
+
         self.simple_source_status = QLabel(self._tr("simple.source.none"))
         self.simple_source_status.setWordWrap(True)
-        self.simple_source_status.setMinimumHeight(42)
+        self.simple_source_status.setMinimumHeight(34)
         self.simple_source_status.setStyleSheet(
             f"background: {COLORS['bg_tertiary']}; "
             f"border: 1px solid {COLORS['border_subtle']}; "
-            "border-radius: 4px; padding: 10px; "
+            "border-radius: 4px; padding: 8px; "
             f"color: {COLORS['text_secondary']}; font-size: 10px;"
         )
         quick_layout.addWidget(self.simple_source_status)
 
-        self.expert_controls_cb = QCheckBox(self._tr("simple.expert_toggle"))
-        self.expert_controls_cb.setChecked(False)
-        self.expert_controls_cb.stateChanged.connect(self._toggle_expert_controls)
-        quick_layout.addWidget(self.expert_controls_cb)
+        page_layout.addWidget(self.quick_group, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        content_layout.addWidget(self.quick_group)
-        content_layout.addWidget(self._create_device_group())
-        content_layout.addWidget(self._create_artifacts_group())
-        content_layout.addStretch()
-        scroll_area.setWidget(content)
-        page_layout.addWidget(scroll_area, 1)
+        self._simple_source_detail_mode = None
+        page_layout.addWidget(self._create_source_detail_panel(), 0, Qt.AlignmentFlag.AlignHCenter)
+
+        # Keep the legacy panels alive for existing collection-scope and file registration
+        # logic, but do not expose their dense UI in the beginner workflow.
+        self._create_device_group().setParent(page)
+        self.device_group.setVisible(False)
+        self._create_artifacts_group().setParent(page)
+        self.artifacts_group.setVisible(False)
+
+        self.source_simple_spacer = QWidget()
+        self.source_simple_spacer.setMinimumHeight(8)
+        page_layout.addWidget(self.source_simple_spacer, 1)
 
         footer = QFrame()
         footer_layout = QHBoxLayout(footer)
@@ -685,6 +701,272 @@ class CollectorWindow(QMainWindow):
         footer_layout.addWidget(self.collect_btn)
         page_layout.addWidget(footer)
         return page
+
+    def _create_simple_source_choice(
+        self,
+        button_attr: str,
+        button_key: str,
+        caption_key: str,
+        handler,
+        tooltip: str,
+    ) -> QPushButton:
+        button = QPushButton()
+        button.setToolTip(tooltip)
+        button.clicked.connect(handler)
+        button.setMinimumHeight(58)
+        button.setStyleSheet(
+            f"text-align: left; padding: 8px 12px; "
+            f"background: {COLORS['bg_tertiary']}; "
+            f"border: 1px solid {COLORS['border_subtle']}; "
+            "border-radius: 5px; font-weight: 600;"
+        )
+
+        setattr(self, button_attr, button)
+        button.setProperty("title_key", button_key)
+        button.setProperty("caption_key", caption_key)
+        self._set_simple_source_button_text(button, button_key, caption_key)
+        return button
+
+    def _set_simple_source_button_texts(self):
+        """Refresh compact source choice labels after a language change."""
+        for attr in ("simple_pc_btn", "simple_phone_btn", "simple_image_btn", "simple_tool_btn"):
+            button = getattr(self, attr, None)
+            if button is None:
+                continue
+            title_key = button.property("title_key")
+            caption_key = button.property("caption_key")
+            if title_key and caption_key:
+                self._set_simple_source_button_text(button, title_key, caption_key)
+
+    def _set_simple_source_button_text(self, button: QPushButton, title_key: str, caption_key: str):
+        """Use a compact command-link label without a separate explanation panel."""
+        title = self._tr(title_key)
+        caption = self._tr(caption_key)
+        button.setText(f"{title}\n{caption}")
+
+    def _create_source_detail_panel(self) -> QWidget:
+        """Create the compact beginner source picker shown after a source type is chosen."""
+        self.source_detail_group = QGroupBox(self._tr("simple.detail.title"))
+        self.source_detail_group.setMaximumWidth(760)
+        self.source_detail_group.setVisible(False)
+
+        detail_layout = QVBoxLayout(self.source_detail_group)
+        detail_layout.setContentsMargins(12, 18, 12, 10)
+        detail_layout.setSpacing(6)
+
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+
+        self.source_detail_caption = QLabel(self._tr("simple.detail.caption"))
+        self.source_detail_caption.setWordWrap(True)
+        self.source_detail_caption.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px;"
+        )
+        header_layout.addWidget(self.source_detail_caption, 1)
+
+        self.source_detail_refresh_btn = QPushButton(self._tr("simple.detail.refresh"))
+        self.source_detail_refresh_btn.setFixedHeight(26)
+        self.source_detail_refresh_btn.clicked.connect(self._refresh_source_detail_devices)
+        header_layout.addWidget(self.source_detail_refresh_btn, 0, Qt.AlignmentFlag.AlignTop)
+        detail_layout.addLayout(header_layout)
+
+        self.source_detail_rows = QWidget()
+        self.source_detail_rows_layout = QVBoxLayout(self.source_detail_rows)
+        self.source_detail_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.source_detail_rows_layout.setSpacing(4)
+        detail_layout.addWidget(self.source_detail_rows)
+
+        return self.source_detail_group
+
+    def _show_source_detail(self, mode: str):
+        """Open the compact source detail panel for the selected beginner category."""
+        self._simple_source_detail_mode = mode
+        self.source_detail_group.setVisible(True)
+        if hasattr(self, "source_simple_spacer"):
+            self.source_simple_spacer.setVisible(False)
+        self._refresh_source_detail_panel()
+
+    def _refresh_source_detail_devices(self):
+        """Refresh devices from the compact detail panel."""
+        if getattr(self, '_collection_in_progress', False):
+            return
+        try:
+            self.device_manager.refresh()
+        except Exception:
+            pass
+        self._refresh_source_detail_panel()
+
+    def _refresh_source_detail_panel(self):
+        """Render compact selectable rows for the active source detail mode."""
+        if not hasattr(self, "source_detail_group"):
+            return
+        mode = getattr(self, "_simple_source_detail_mode", None)
+        if not mode:
+            self.source_detail_group.setVisible(False)
+            if hasattr(self, "source_simple_spacer"):
+                self.source_simple_spacer.setVisible(True)
+            return
+
+        self.source_detail_group.setTitle(self._tr("simple.detail.title"))
+        self.source_detail_caption.setText(self._source_detail_caption(mode))
+        self.source_detail_refresh_btn.setText(self._tr("simple.detail.refresh"))
+
+        self._clear_source_detail_rows()
+        devices = self._source_detail_devices(mode)
+        if not devices:
+            self.source_detail_rows_layout.addWidget(
+                self._create_source_detail_empty_row(self._source_detail_empty_text(mode))
+            )
+            return
+
+        for device in devices:
+            self.source_detail_rows_layout.addWidget(
+                self._create_source_detail_row(device)
+            )
+
+    def _clear_source_detail_rows(self):
+        while self.source_detail_rows_layout.count():
+            item = self.source_detail_rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _source_detail_devices(self, mode: str) -> List:
+        source_types = self._source_types_for_detail_mode(mode)
+        return [
+            device for device in self.device_manager.get_all_devices()
+            if device.device_type in source_types and getattr(device, "is_selectable", True)
+        ]
+
+    def _source_types_for_detail_mode(self, mode: str) -> tuple:
+        if mode == "local":
+            return (
+                DeviceType.WINDOWS_PHYSICAL_DISK,
+                DeviceType.MACOS_LOCAL_SYSTEM,
+                DeviceType.LINUX_LOCAL_SYSTEM,
+            )
+        if mode == "phone":
+            return (
+                DeviceType.ANDROID_DEVICE,
+                DeviceType.IOS_DEVICE,
+                DeviceType.IOS_BACKUP,
+                DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
+                DeviceType.MOBILE_FFS_BUNDLE_IOS,
+            )
+        if mode == "image":
+            return (
+                DeviceType.E01_IMAGE,
+                DeviceType.RAW_IMAGE,
+                DeviceType.VMDK_IMAGE,
+                DeviceType.VHD_IMAGE,
+                DeviceType.VHDX_IMAGE,
+                DeviceType.QCOW2_IMAGE,
+                DeviceType.VDI_IMAGE,
+                DeviceType.DMG_IMAGE,
+                DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
+                DeviceType.MOBILE_FFS_BUNDLE_IOS,
+            )
+        if mode == "tool":
+            return (
+                DeviceType.AXIOM_CASE_DB,
+                DeviceType.THIRD_PARTY_FORENSIC_EXPORT,
+            )
+        return tuple()
+
+    def _source_detail_caption(self, mode: str) -> str:
+        key_by_mode = {
+            "local": "simple.detail.caption.local",
+            "phone": "simple.detail.caption.phone",
+            "image": "simple.detail.caption.image",
+            "tool": "simple.detail.caption.tool",
+        }
+        return self._tr(key_by_mode.get(mode, "simple.detail.caption"))
+
+    def _source_detail_empty_text(self, mode: str) -> str:
+        key_by_mode = {
+            "local": "simple.detail.empty.local",
+            "phone": "simple.detail.empty.phone",
+            "image": "simple.detail.empty.image",
+            "tool": "simple.detail.empty.tool",
+        }
+        return self._tr(key_by_mode.get(mode, "simple.detail.empty"))
+
+    def _create_source_detail_empty_row(self, text: str) -> QWidget:
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setMinimumHeight(58)
+        label.setStyleSheet(
+            f"background: {COLORS['bg_primary']}; "
+            f"border: 1px dashed {COLORS['border_subtle']}; "
+            "border-radius: 4px; padding: 8px 10px; "
+            f"color: {COLORS['text_secondary']}; font-size: 10px;"
+        )
+        return label
+
+    def _create_source_detail_row(self, device) -> QPushButton:
+        button = QPushButton(self._source_detail_row_text(device))
+        button.setCheckable(True)
+        button.setChecked(bool(getattr(device, "is_selected", False)))
+        button.setEnabled(not getattr(self, '_collection_in_progress', False))
+        button.clicked.connect(lambda _checked=False, device_id=device.device_id: self._select_source_detail_device(device_id))
+        button.setMinimumHeight(36)
+        button.setStyleSheet(
+            f"QPushButton {{ text-align: left; padding: 7px 10px; "
+            f"background: {COLORS['bg_tertiary']}; "
+            f"border: 1px solid {COLORS['border_subtle']}; border-radius: 4px; "
+            f"color: {COLORS['text_primary']}; }} "
+            f"QPushButton:checked {{ border-color: {COLORS['brand_primary']}; "
+            f"background: rgba(212, 165, 116, 0.16); }} "
+            f"QPushButton:hover {{ border-color: {COLORS['brand_accent']}; }}"
+        )
+        return button
+
+    def _source_detail_row_text(self, device) -> str:
+        selected_prefix = "[selected] " if getattr(device, "is_selected", False) else ""
+        source_type = self._friendly_device_type(device)
+        size = getattr(device, "size_display", "") or ""
+        suffix = f" | {size}" if size else ""
+        return f"{selected_prefix}{device.display_name}  -  {source_type}{suffix}"
+
+    def _friendly_device_type(self, device) -> str:
+        mapping = {
+            DeviceType.WINDOWS_PHYSICAL_DISK: "PC drive",
+            DeviceType.MACOS_LOCAL_SYSTEM: "Mac local system",
+            DeviceType.LINUX_LOCAL_SYSTEM: "Linux local system",
+            DeviceType.ANDROID_DEVICE: "Android USB",
+            DeviceType.IOS_DEVICE: "iOS USB",
+            DeviceType.IOS_BACKUP: "iOS backup",
+            DeviceType.MOBILE_FFS_BUNDLE_ANDROID: "Android FFS",
+            DeviceType.MOBILE_FFS_BUNDLE_IOS: "iOS FFS",
+            DeviceType.E01_IMAGE: "E01 image",
+            DeviceType.RAW_IMAGE: "Raw image",
+            DeviceType.VMDK_IMAGE: "VMDK",
+            DeviceType.VHD_IMAGE: "VHD",
+            DeviceType.VHDX_IMAGE: "VHDX",
+            DeviceType.QCOW2_IMAGE: "QCOW2",
+            DeviceType.VDI_IMAGE: "VDI",
+            DeviceType.DMG_IMAGE: "DMG",
+            DeviceType.AXIOM_CASE_DB: "AXIOM DB",
+            DeviceType.THIRD_PARTY_FORENSIC_EXPORT: "Tool result",
+        }
+        return mapping.get(device.device_type, device.device_type.name)
+
+    def _select_source_detail_device(self, device_id: str):
+        if getattr(self, '_collection_in_progress', False):
+            return
+        device = self.device_manager.get_device(device_id)
+        if not device:
+            return
+        self.device_manager.deselect_all()
+        self.device_manager.select_device(device_id, True)
+        self._sync_device_panel_selection()
+        self.simple_source_status.setText(
+            self._tr("simple.source.selected", source=device.display_name)
+        )
+        self.status_bar.showMessage("Evidence source selected")
+        self._refresh_source_detail_panel()
+        self._update_collect_button_state()
 
     def _create_device_group(self) -> QWidget:
         self.device_group = QGroupBox(self._tr("group.source_details"))
@@ -1065,21 +1347,79 @@ class CollectorWindow(QMainWindow):
         self._update_scope_summary()
         self._update_workflow_status()
 
-    def _toggle_expert_controls(self, state):
-        """Show or hide the detailed backup UI."""
-        visible = state == Qt.CheckState.Checked.value
-        self._set_expert_controls_visible(visible)
-
     def _set_expert_controls_visible(self, visible: bool):
-        """Show detailed source and scope controls only on the source page."""
+        """Keep dense backup controls hidden in the beginner source page."""
         if hasattr(self, "device_group"):
-            self.device_group.setVisible(visible)
+            self.device_group.setVisible(False)
         if hasattr(self, "artifacts_group"):
-            self.artifacts_group.setVisible(visible)
+            self.artifacts_group.setVisible(False)
+        if hasattr(self, "source_simple_spacer"):
+            self.source_simple_spacer.setVisible(
+                not bool(getattr(self, "_simple_source_detail_mode", None))
+            )
         self._update_simple_source_status()
+        self._update_simple_source_inventory()
+        self._refresh_source_detail_panel()
+
+    def _update_simple_source_inventory(self):
+        """Refresh the beginner source summary without exposing collection internals."""
+        if not hasattr(self, "simple_detected_status"):
+            return
+        devices = [
+            device
+            for device in self.device_manager.get_all_devices()
+            if getattr(device, "is_selectable", True)
+        ]
+        local_types = {
+            DeviceType.WINDOWS_PHYSICAL_DISK,
+            DeviceType.MACOS_LOCAL_SYSTEM,
+            DeviceType.LINUX_LOCAL_SYSTEM,
+        }
+        mobile_types = {
+            DeviceType.ANDROID_DEVICE,
+            DeviceType.IOS_DEVICE,
+            DeviceType.IOS_BACKUP,
+            DeviceType.MOBILE_FFS_BUNDLE_ANDROID,
+            DeviceType.MOBILE_FFS_BUNDLE_IOS,
+        }
+        image_types = {
+            DeviceType.E01_IMAGE,
+            DeviceType.RAW_IMAGE,
+            DeviceType.VMDK_IMAGE,
+            DeviceType.VHD_IMAGE,
+            DeviceType.VHDX_IMAGE,
+            DeviceType.QCOW2_IMAGE,
+            DeviceType.VDI_IMAGE,
+            DeviceType.DMG_IMAGE,
+        }
+        tool_types = {
+            DeviceType.AXIOM_CASE_DB,
+            DeviceType.THIRD_PARTY_FORENSIC_EXPORT,
+        }
+        local_count = sum(1 for device in devices if device.device_type in local_types)
+        mobile_count = sum(1 for device in devices if device.device_type in mobile_types)
+        image_count = sum(1 for device in devices if device.device_type in image_types)
+        tool_count = sum(1 for device in devices if device.device_type in tool_types)
+        total = local_count + mobile_count + image_count + tool_count
+        title = self._tr("simple.detected.title")
+        if total <= 0:
+            self.simple_detected_status.setText(
+                f"{title}: {self._tr('simple.detected.empty')}"
+            )
+            return
+        summary = self._tr(
+            "simple.detected.summary",
+            total=total,
+            local=local_count,
+            phone=mobile_count,
+            image=image_count,
+            tool=tool_count,
+        )
+        self.simple_detected_status.setText(f"{title}: {summary}")
 
     def _select_simple_local_source(self):
         """Select a local computer/disk source from the simplified UI."""
+        self._show_source_detail("local")
         self._select_simple_source(
             source_types=(
                 DeviceType.WINDOWS_PHYSICAL_DISK,
@@ -1092,6 +1432,7 @@ class CollectorWindow(QMainWindow):
 
     def _select_simple_phone_source(self):
         """Select a connected mobile source from the simplified UI."""
+        self._show_source_detail("phone")
         self._select_simple_source(
             source_types=(
                 DeviceType.ANDROID_DEVICE,
@@ -1126,7 +1467,7 @@ class CollectorWindow(QMainWindow):
         if len(candidates) > 1:
             self.simple_source_status.setText(multiple_message)
             self.status_bar.showMessage("Choose the exact evidence source")
-            self.expert_controls_cb.setChecked(True)
+            self._refresh_source_detail_panel()
             return
 
         self.device_manager.deselect_all()
@@ -1136,6 +1477,7 @@ class CollectorWindow(QMainWindow):
             self._tr("simple.source.selected", source=candidates[0].display_name)
         )
         self.status_bar.showMessage("Evidence source selected")
+        self._refresh_source_detail_panel()
         self._update_collect_button_state()
 
     def _sync_device_panel_selection(self):
@@ -1159,6 +1501,7 @@ class CollectorWindow(QMainWindow):
         """Open the existing disk image / mobile FFS picker from simple mode."""
         if getattr(self, '_collection_in_progress', False):
             return
+        self._show_source_detail("image")
         if hasattr(self, 'device_panel'):
             self.device_panel.request_add_evidence_file()
 
@@ -1166,6 +1509,7 @@ class CollectorWindow(QMainWindow):
         """Open the existing verified tool-result picker from simple mode."""
         if getattr(self, '_collection_in_progress', False):
             return
+        self._show_source_detail("tool")
         if hasattr(self, 'device_panel'):
             self.device_panel.request_add_tool_result()
 
@@ -1956,11 +2300,15 @@ class CollectorWindow(QMainWindow):
     def _on_device_added(self, device):
         """Device added (DeviceListPanel handles automatically)"""
         self._log(f"Device detected: {device.display_name}")
+        self._update_simple_source_inventory()
+        self._refresh_source_detail_panel()
         self._update_workflow_status()
 
     def _on_device_removed(self, device_id: str):
         """Device removed (DeviceListPanel handles automatically)"""
         self._log(f"Device removed: {device_id}")
+        self._update_simple_source_inventory()
+        self._refresh_source_detail_panel()
         self._update_collect_button_state()
 
     def _on_device_selection_changed(self):
@@ -1973,6 +2321,8 @@ class CollectorWindow(QMainWindow):
         self._update_platform_tab_states()
 
         # Update collect button state when device is selected
+        self._update_simple_source_inventory()
+        self._refresh_source_detail_panel()
         self._update_collect_button_state()
 
     def _on_image_file_added(self):
@@ -1982,6 +2332,17 @@ class CollectorWindow(QMainWindow):
         # [New] Auto-enable/disable platform tabs
         self._update_platform_tab_states()
 
+        self._update_simple_source_inventory()
+        selected = self.device_manager.get_selected_devices()
+        if selected:
+            device_type = selected[-1].device_type
+            if device_type in self._source_types_for_detail_mode("tool"):
+                self._simple_source_detail_mode = "tool"
+            else:
+                self._simple_source_detail_mode = "image"
+            self.source_detail_group.setVisible(True)
+            self.source_simple_spacer.setVisible(False)
+        self._refresh_source_detail_panel()
         self._update_collect_button_state()
 
     def _update_platform_tab_states(self):
@@ -2292,10 +2653,10 @@ class CollectorWindow(QMainWindow):
         self.select_all_cb.setEnabled(not locked)
         self.include_deleted_cb.setEnabled(not locked)
         self.advanced_scope_cb.setEnabled(not locked)
-        if hasattr(self, 'expert_controls_cb'):
-            self.expert_controls_cb.setEnabled(not locked)
         if hasattr(self, "source_back_btn"):
             self.source_back_btn.setEnabled(not locked)
+        if hasattr(self, "source_detail_refresh_btn"):
+            self.source_detail_refresh_btn.setEnabled(not locked)
         self._set_simple_source_controls_enabled(not locked)
         self.artifacts_tab.setEnabled(not locked)
         if hasattr(self, 'linux_mount_path'):
@@ -2311,6 +2672,7 @@ class CollectorWindow(QMainWindow):
             self._update_collect_button_state()
         self._update_scope_summary()
         self._update_workflow_status()
+        self._refresh_source_detail_panel()
 
     def _log_mobile_preflight(self, selected_devices: list, selected_artifacts: list):
         """Log mobile collection readiness without changing collection behavior."""
@@ -2602,9 +2964,6 @@ class CollectorWindow(QMainWindow):
         self.show_token_btn.setEnabled(controls_enabled)
         self.token_input.setEnabled(controls_enabled)
         self._set_simple_source_controls_enabled(controls_enabled)
-        if hasattr(self, 'expert_controls_cb'):
-            self.expert_controls_cb.setEnabled(controls_enabled)
-
         if busy:
             self.validate_btn.setText(self._tr("token.validating"))
             self.token_status.setText(self._tr("token.status.validating"))
@@ -2622,8 +2981,6 @@ class CollectorWindow(QMainWindow):
         self.token_input.setEnabled(not getattr(self, '_collection_in_progress', False))
         self.show_token_btn.setEnabled(not getattr(self, '_collection_in_progress', False))
         self._set_simple_source_controls_enabled(not getattr(self, '_collection_in_progress', False))
-        if hasattr(self, 'expert_controls_cb'):
-            self.expert_controls_cb.setEnabled(not getattr(self, '_collection_in_progress', False))
         self.status_bar.showMessage("Ready")
         self._update_collect_button_state()
 

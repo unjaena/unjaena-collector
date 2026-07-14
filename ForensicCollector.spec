@@ -424,4 +424,9 @@ else:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
+        # Request UAC before the one-file payload is unpacked. Without this,
+        # Windows starts and unpacks once as a standard user, then the app
+        # relaunches and unpacks a second time as administrator. That delay can
+        # consume the browser pairing grant before the collector can claim it.
+        uac_admin=(current_os == 'windows'),
     )

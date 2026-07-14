@@ -23,7 +23,7 @@ def is_admin() -> bool:
         return os.geteuid() == 0
 
 
-def run_as_admin() -> bool:
+def run_as_admin(args_override=None) -> bool:
     """
     Restart the application with administrator privileges.
     Only supported on Windows (UAC elevation).
@@ -38,7 +38,15 @@ def run_as_admin() -> bool:
         import ctypes
 
         # Handle PyInstaller frozen executable
-        if getattr(sys, 'frozen', False):
+        if args_override is not None:
+            executable = sys.executable
+            if getattr(sys, 'frozen', False):
+                args = list(args_override)
+            else:
+                # The Python interpreter needs the script path before the
+                # replacement arguments when running from source.
+                args = [sys.argv[0], *args_override]
+        elif getattr(sys, 'frozen', False):
             # Running as compiled EXE
             executable = sys.executable
             # For frozen apps, sys.argv[0] is the exe path

@@ -85,24 +85,22 @@ DEFAULT_MESSAGES: Dict[str, str] = {
     ),
     "simple.source.selected": "Selected source: {source}",
     "simple.source.multiple": (
-        "{count} evidence sources selected. Use expert controls to confirm "
-        "the scope before starting."
+        "{count} evidence sources selected. Choose the exact source from the "
+        "details below before starting."
     ),
     "simple.source.local.empty": (
-        "No ready local disk was detected. Click Refresh in expert controls "
+        "No ready local disk was detected. Click Refresh below "
         "or restart the collector with administrator privileges."
     ),
     "simple.source.local.multiple": (
-        "Multiple local sources are available. Expert controls were opened "
-        "so you can choose the exact disk."
+        "Multiple local sources are available. Choose the exact disk below."
     ),
     "simple.source.phone.empty": (
         "No ready phone source was detected. Connect the device, approve the "
         "device prompt, then refresh."
     ),
     "simple.source.phone.multiple": (
-        "Multiple phone sources are available. Expert controls were opened "
-        "so you can choose the exact device or backup."
+        "Multiple phone sources are available. Choose the exact device or backup below."
     ),
     "simple.btn.local": "This PC / Drive",
     "simple.btn.local.tooltip": "Select a local disk or local system source.",
@@ -116,7 +114,42 @@ DEFAULT_MESSAGES: Dict[str, str] = {
     "simple.btn.tool.tooltip": (
         "Add a verified AXIOM, Cellebrite, or Autopsy result."
     ),
-    "simple.expert_toggle": "Show expert / backup controls",
+    "simple.caption.local": "Use this computer or an attached local drive.",
+    "simple.caption.phone": "Use an authorized iOS or Android source.",
+    "simple.caption.evidence": "Open a disk image, virtual disk, or mobile FFS bundle.",
+    "simple.caption.tool": "Upload a verified result from a supported forensic tool.",
+    "simple.detected.title": "Detected now",
+    "simple.detected.empty": "No ready source has been detected yet.",
+    "simple.detected.summary": (
+        "{total} ready source(s): {local} PC/drive, {phone} phone/mobile, "
+        "{image} evidence file, {tool} tool result."
+    ),
+    "simple.next.title": "Next step",
+    "simple.next.body": (
+        "Choose one source. The recommended collection scope is applied "
+        "automatically after authentication."
+    ),
+    "simple.detail.title": "Evidence source details",
+    "simple.detail.caption": "Choose one detected source.",
+    "simple.detail.caption.local": "Choose the local computer or drive to collect.",
+    "simple.detail.caption.phone": "Choose the connected phone, backup, or mobile FFS bundle.",
+    "simple.detail.caption.image": "Choose the registered disk image or mobile FFS bundle.",
+    "simple.detail.caption.tool": "Choose the registered forensic tool result.",
+    "simple.detail.refresh": "Refresh",
+    "simple.detail.empty": "No matching source is available yet.",
+    "simple.detail.empty.local": (
+        "No local drive is ready. Run as administrator and click Refresh."
+    ),
+    "simple.detail.empty.phone": (
+        "No phone source is ready. Connect the device, approve the device prompt, "
+        "then click Refresh."
+    ),
+    "simple.detail.empty.image": (
+        "No evidence file has been registered yet. Use Add Evidence File above."
+    ),
+    "simple.detail.empty.tool": (
+        "No tool result has been registered yet. Use Add Tool Result above."
+    ),
     "simple.status.ready": (
         "Ready. Connect a case and choose an evidence source to begin."
     ),
@@ -136,7 +169,7 @@ DEFAULT_MESSAGES: Dict[str, str] = {
         "Step 2 needed: choose this PC, a phone, an evidence file, or a tool result."
     ),
     "simple.status.need_scope": (
-        "Step 3 needed: collection scope is not ready. Open expert controls if needed."
+        "Step 3 needed: collection scope is not ready. Check authentication and source selection."
     ),
     "step.connect.title": "Connect case",
     "step.evidence.title": "Choose evidence",
