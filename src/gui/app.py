@@ -16,11 +16,11 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QProgressBar,
     QLineEdit, QCheckBox, QGroupBox, QMessageBox, QFrame, QTextEdit,
-    QStatusBar, QScrollArea, QTabWidget, QComboBox, QStackedWidget,
-    QApplication
+    QStatusBar, QScrollArea, QComboBox, QStackedWidget,
+    QApplication, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 
 from core.token_validator import TokenValidator, _get_ssl_verify
 from core.connection_client import CollectorConnectionClient
@@ -28,6 +28,7 @@ from core.encryptor import FileHashCalculator
 from core.uploader import RealTimeUploader, build_collector_uploader
 from core.request_signer import RequestSigner
 from core.collection_profile import apply_collection_profile_to_mobile_ffs, apply_collection_profile_to_registry
+from core.artifact_selection import ArtifactSelection, ArtifactSelectionModel
 from collectors.artifact_collector import (
     ArtifactCollector, ARTIFACT_TYPES,
     ANDROID_ARTIFACT_TYPES, IOS_ARTIFACT_TYPES,
@@ -50,7 +51,7 @@ from gui.styles import get_platform_stylesheet, COLORS
 from gui.i18n import I18n, SUPPORTED_LOCALES, save_user_locale
 from core.device_manager import UnifiedDeviceManager, DeviceType
 from core.device_enumerators import create_default_enumerators
-from gui.device_panel import DeviceListPanel
+from gui.evidence_source_registrar import EvidenceSourceRegistrar
 from utils.error_messages import translate_error
 
 # BitLocker support
@@ -201,6 +202,60 @@ class UpdateCheckWorker(QThread):
             self.update_ready.emit(None)
 
 
+class ClickableSourceRow(QFrame):
+    """Selectable source row with a full-row click target."""
+
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class SourceCheckBox(QCheckBox):
+    """Compact evidence checkbox with a visible, platform-independent check mark."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(18, 18)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet("background: transparent; border: none; padding: 0;")
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        checked = self.checkState() == Qt.CheckState.Checked
+        if not self.isEnabled():
+            fill = QColor(COLORS["bg_tertiary"])
+            border = QColor(COLORS["border_muted"])
+        elif checked:
+            fill = QColor(COLORS["brand_primary"])
+            border = QColor(COLORS["brand_primary"])
+        else:
+            fill = QColor(COLORS["bg_secondary"])
+            border = QColor(
+                COLORS["brand_primary"] if self.underMouse() else COLORS["border_default"]
+            )
+
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(rect, 3, 3)
+
+        if checked:
+            check_pen = QPen(QColor(COLORS["bg_primary"]))
+            check_pen.setWidthF(2.0)
+            check_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            check_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(check_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawLine(4, 9, 7, 12)
+            painter.drawLine(7, 12, 14, 5)
+
+
 class CollectorWindow(QMainWindow):
     """Main application window with unified device management"""
 
@@ -230,6 +285,7 @@ class CollectorWindow(QMainWindow):
         self._connection_worker = None
         self._pending_connection_command_id = None
         self.connection_run_id = None
+        self.artifact_selection = ArtifactSelectionModel(ARTIFACT_TYPES)
 
         # Unified device manager
         self.device_manager = UnifiedDeviceManager()
@@ -242,6 +298,13 @@ class CollectorWindow(QMainWindow):
             self.device_manager.register_enumerator(name, enumerator)
 
         self.setup_ui()
+        self.evidence_source_registrar = EvidenceSourceRegistrar(
+            self.device_manager,
+            self,
+        )
+        self.evidence_source_registrar.source_registered.connect(
+            self._on_image_file_added
+        )
         self.check_server_connection()
         QTimer.singleShot(0, self._start_connection_sync)
 
@@ -321,7 +384,6 @@ class CollectorWindow(QMainWindow):
         save_user_locale(locale_code)
         self.config['ui_language'] = self.i18n.locale
         self._apply_ui_language()
-        self._update_scope_summary()
         self._update_workflow_status()
 
     def _apply_ui_language(self):
@@ -329,8 +391,6 @@ class CollectorWindow(QMainWindow):
         widgets = {
             "token_group": ("setTitle", "wizard.token.group"),
             "quick_group": ("setTitle", "wizard.source.group"),
-            "device_group": ("setTitle", "group.source_details"),
-            "artifacts_group": ("setTitle", "group.expert_scope"),
             "progress_group": ("setTitle", "group.progress"),
             "status_group": ("setTitle", "group.status"),
             "log_group": ("setTitle", "group.technical_log"),
@@ -346,9 +406,6 @@ class CollectorWindow(QMainWindow):
             "status_step_description": ("setText", "wizard.status.description"),
             "source_hint": ("setText", "simple.choose_source"),
             "show_log_cb": ("setText", "log.show"),
-            "advanced_scope_cb": ("setText", "scope.advanced"),
-            "select_all_cb": ("setText", "scope.select_all"),
-            "include_deleted_cb": ("setText", "scope.deleted"),
             "validate_btn": ("setText", "wizard.token.continue"),
             "source_back_btn": ("setText", "wizard.button.back"),
             "collect_btn": ("setText", "button.start"),
@@ -383,13 +440,13 @@ class CollectorWindow(QMainWindow):
         if hasattr(self, "simple_tool_btn"):
             self.simple_tool_btn.setToolTip(self._tr("simple.btn.tool.tooltip"))
         self._set_simple_source_button_texts()
-        if hasattr(self, "include_deleted_cb"):
-            self.include_deleted_cb.setToolTip(self._tr("scope.deleted.tooltip"))
         if hasattr(self, "language_combo"):
             self.language_combo.setToolTip(self._tr("header.language"))
         if getattr(self, "_token_validation_in_progress", False) and hasattr(self, "validate_btn"):
             self.validate_btn.setText(self._tr("token.validating"))
         self._update_simple_source_inventory()
+        self._refresh_source_detail_panel()
+        self._refresh_selected_sources_panel()
 
     def _create_left_panel(self) -> QWidget:
         """Create the three-step beginner collection flow."""
@@ -409,8 +466,6 @@ class CollectorWindow(QMainWindow):
         self._collection_completed = False
         self._collection_result = None
         self._current_wizard_step = 0
-        self._set_expert_controls_visible(False)
-        self._update_scope_summary()
         self._update_workflow_status()
         self._update_simple_source_status()
         self._show_wizard_step(0)
@@ -566,8 +621,24 @@ class CollectorWindow(QMainWindow):
     def _create_source_step_page(self) -> QWidget:
         page = QWidget()
         page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(24, 12, 24, 16)
-        page_layout.setSpacing(10)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+
+        self.source_step_scroll = QScrollArea()
+        self.source_step_scroll.setWidgetResizable(True)
+        self.source_step_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.source_step_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.source_step_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+
+        content = QWidget()
+        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(24, 12, 24, 12)
+        content_layout.setSpacing(8)
 
         heading, self.source_step_kicker, self.source_step_title, self.source_step_description = (
             self._create_step_heading(
@@ -576,22 +647,32 @@ class CollectorWindow(QMainWindow):
                 "wizard.source.description",
             )
         )
-        page_layout.addWidget(heading)
+        heading.setMinimumWidth(720)
+        heading.setMaximumWidth(900)
+        heading.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        content_layout.addWidget(heading, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self._simple_source_detail_mode = None
+        content_layout.addWidget(
+            self._create_selected_sources_panel(),
+            0,
+            Qt.AlignmentFlag.AlignHCenter,
+        )
 
         self.quick_group = QGroupBox(self._tr("wizard.source.group"))
-        self.quick_group.setMaximumWidth(760)
+        self.quick_group.setMinimumWidth(720)
+        self.quick_group.setMaximumWidth(900)
+        self.quick_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         quick_layout = QVBoxLayout(self.quick_group)
-        quick_layout.setContentsMargins(14, 18, 14, 12)
-        quick_layout.setSpacing(8)
+        quick_layout.setContentsMargins(14, 18, 14, 10)
+        quick_layout.setSpacing(6)
 
         self.source_hint = QLabel(self._tr("simple.choose_source"))
-        self.source_hint.setStyleSheet(
-            f"color: {COLORS['text_secondary']}; font-size: 10px; font-weight: 600;"
-        )
-        quick_layout.addWidget(self.source_hint)
+        self.source_hint.setVisible(False)
 
         source_btn_layout = QGridLayout()
-        source_btn_layout.setSpacing(8)
+        source_btn_layout.setHorizontalSpacing(6)
+        source_btn_layout.setVerticalSpacing(0)
 
         source_btn_layout.addWidget(
             self._create_simple_source_choice(
@@ -623,8 +704,8 @@ class CollectorWindow(QMainWindow):
                 self._open_simple_evidence_file,
                 self._tr("simple.btn.evidence.tooltip"),
             ),
-            1,
             0,
+            2,
         )
         source_btn_layout.addWidget(
             self._create_simple_source_choice(
@@ -634,55 +715,41 @@ class CollectorWindow(QMainWindow):
                 self._open_simple_tool_result,
                 self._tr("simple.btn.tool.tooltip"),
             ),
-            1,
-            1,
+            0,
+            3,
         )
         source_btn_layout.setColumnStretch(0, 1)
         source_btn_layout.setColumnStretch(1, 1)
+        source_btn_layout.setColumnStretch(2, 1)
+        source_btn_layout.setColumnStretch(3, 1)
 
         quick_layout.addLayout(source_btn_layout)
 
         self.simple_detected_status = QLabel()
-        self.simple_detected_status.setWordWrap(True)
-        self.simple_detected_status.setMinimumHeight(28)
-        self.simple_detected_status.setStyleSheet(
-            f"background: {COLORS['bg_primary']}; "
-            f"border: 1px solid {COLORS['border_subtle']}; "
-            "border-radius: 4px; padding: 6px 8px; "
-            f"color: {COLORS['text_secondary']}; font-size: 10px;"
-        )
-        quick_layout.addWidget(self.simple_detected_status)
+        self.simple_detected_status.setVisible(False)
 
+        # Kept for status/workflow compatibility. The selected-source panel below
+        # is the single visible confirmation surface in the beginner workflow.
         self.simple_source_status = QLabel(self._tr("simple.source.none"))
-        self.simple_source_status.setWordWrap(True)
-        self.simple_source_status.setMinimumHeight(34)
-        self.simple_source_status.setStyleSheet(
-            f"background: {COLORS['bg_tertiary']}; "
-            f"border: 1px solid {COLORS['border_subtle']}; "
-            "border-radius: 4px; padding: 8px; "
-            f"color: {COLORS['text_secondary']}; font-size: 10px;"
+        self.simple_source_status.setVisible(False)
+
+        content_layout.addWidget(self.quick_group, 0, Qt.AlignmentFlag.AlignHCenter)
+        content_layout.addWidget(
+            self._create_source_detail_panel(),
+            0,
+            Qt.AlignmentFlag.AlignHCenter,
         )
-        quick_layout.addWidget(self.simple_source_status)
-
-        page_layout.addWidget(self.quick_group, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self._simple_source_detail_mode = None
-        page_layout.addWidget(self._create_source_detail_panel(), 0, Qt.AlignmentFlag.AlignHCenter)
-
-        # Keep the legacy panels alive for existing collection-scope and file registration
-        # logic, but do not expose their dense UI in the beginner workflow.
-        self._create_device_group().setParent(page)
-        self.device_group.setVisible(False)
-        self._create_artifacts_group().setParent(page)
-        self.artifacts_group.setVisible(False)
 
         self.source_simple_spacer = QWidget()
-        self.source_simple_spacer.setMinimumHeight(8)
-        page_layout.addWidget(self.source_simple_spacer, 1)
+        self.source_simple_spacer.setMinimumHeight(4)
+        content_layout.addWidget(self.source_simple_spacer, 1)
+
+        self.source_step_scroll.setWidget(content)
+        page_layout.addWidget(self.source_step_scroll, 1)
 
         footer = QFrame()
         footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(0, 8, 0, 0)
+        footer_layout.setContentsMargins(24, 6, 24, 10)
         footer_layout.setSpacing(8)
 
         self.source_back_btn = QPushButton(self._tr("wizard.button.back"))
@@ -713,19 +780,36 @@ class CollectorWindow(QMainWindow):
         button = QPushButton()
         button.setToolTip(tooltip)
         button.clicked.connect(handler)
-        button.setMinimumHeight(58)
-        button.setStyleSheet(
-            f"text-align: left; padding: 8px 12px; "
-            f"background: {COLORS['bg_tertiary']}; "
-            f"border: 1px solid {COLORS['border_subtle']}; "
-            "border-radius: 5px; font-weight: 600;"
-        )
+        button.setMinimumHeight(38)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._style_simple_source_choice(button, active=False)
 
         setattr(self, button_attr, button)
         button.setProperty("title_key", button_key)
         button.setProperty("caption_key", caption_key)
         self._set_simple_source_button_text(button, button_key, caption_key)
         return button
+
+    def _style_simple_source_choice(self, button: QPushButton, active: bool):
+        background = "rgba(212, 165, 116, 0.14)" if active else COLORS["bg_tertiary"]
+        border = COLORS["brand_primary"] if active else COLORS["border_subtle"]
+        button.setStyleSheet(
+            f"text-align: center; padding: 6px 8px; background: {background}; "
+            f"border: 1px solid {border}; border-radius: 5px; font-weight: 600;"
+        )
+
+    def _refresh_simple_source_choice_styles(self):
+        active_by_mode = {
+            "local": "simple_pc_btn",
+            "phone": "simple_phone_btn",
+            "image": "simple_image_btn",
+            "tool": "simple_tool_btn",
+        }
+        active_attr = active_by_mode.get(getattr(self, "_simple_source_detail_mode", None))
+        for attr in active_by_mode.values():
+            button = getattr(self, attr, None)
+            if button is not None:
+                self._style_simple_source_choice(button, active=attr == active_attr)
 
     def _set_simple_source_button_texts(self):
         """Refresh compact source choice labels after a language change."""
@@ -739,20 +823,23 @@ class CollectorWindow(QMainWindow):
                 self._set_simple_source_button_text(button, title_key, caption_key)
 
     def _set_simple_source_button_text(self, button: QPushButton, title_key: str, caption_key: str):
-        """Use a compact command-link label without a separate explanation panel."""
-        title = self._tr(title_key)
-        caption = self._tr(caption_key)
-        button.setText(f"{title}\n{caption}")
+        """Use a single-line category label; details remain available as a tooltip."""
+        button.setText(self._tr(title_key))
 
     def _create_source_detail_panel(self) -> QWidget:
         """Create the compact beginner source picker shown after a source type is chosen."""
         self.source_detail_group = QGroupBox(self._tr("simple.detail.title"))
-        self.source_detail_group.setMaximumWidth(760)
+        self.source_detail_group.setMinimumWidth(720)
+        self.source_detail_group.setMaximumWidth(900)
+        self.source_detail_group.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
         self.source_detail_group.setVisible(False)
 
         detail_layout = QVBoxLayout(self.source_detail_group)
-        detail_layout.setContentsMargins(12, 18, 12, 10)
-        detail_layout.setSpacing(6)
+        detail_layout.setContentsMargins(10, 17, 10, 8)
+        detail_layout.setSpacing(4)
 
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
@@ -765,8 +852,14 @@ class CollectorWindow(QMainWindow):
         )
         header_layout.addWidget(self.source_detail_caption, 1)
 
+        self.source_detail_open_btn = QPushButton(self._tr("simple.detail.open"))
+        self.source_detail_open_btn.setFixedHeight(24)
+        self.source_detail_open_btn.setVisible(False)
+        self.source_detail_open_btn.clicked.connect(self._open_evidence_file_dialog)
+        header_layout.addWidget(self.source_detail_open_btn, 0, Qt.AlignmentFlag.AlignTop)
+
         self.source_detail_refresh_btn = QPushButton(self._tr("simple.detail.refresh"))
-        self.source_detail_refresh_btn.setFixedHeight(26)
+        self.source_detail_refresh_btn.setFixedHeight(24)
         self.source_detail_refresh_btn.clicked.connect(self._refresh_source_detail_devices)
         header_layout.addWidget(self.source_detail_refresh_btn, 0, Qt.AlignmentFlag.AlignTop)
         detail_layout.addLayout(header_layout)
@@ -774,15 +867,40 @@ class CollectorWindow(QMainWindow):
         self.source_detail_rows = QWidget()
         self.source_detail_rows_layout = QVBoxLayout(self.source_detail_rows)
         self.source_detail_rows_layout.setContentsMargins(0, 0, 0, 0)
-        self.source_detail_rows_layout.setSpacing(4)
+        self.source_detail_rows_layout.setSpacing(2)
         detail_layout.addWidget(self.source_detail_rows)
+        detail_layout.addStretch()
 
         return self.source_detail_group
+
+    def _create_selected_sources_panel(self) -> QWidget:
+        """Create a compact list of currently selected evidence sources."""
+        self.selected_sources_group = QGroupBox(self._tr("simple.selected.title"))
+        self.selected_sources_group.setMinimumWidth(720)
+        self.selected_sources_group.setMaximumWidth(900)
+        self.selected_sources_group.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
+        self.selected_sources_group.setVisible(False)
+
+        selected_layout = QVBoxLayout(self.selected_sources_group)
+        selected_layout.setContentsMargins(10, 17, 10, 7)
+        selected_layout.setSpacing(2)
+
+        self.selected_sources_rows = QWidget()
+        self.selected_sources_rows_layout = QVBoxLayout(self.selected_sources_rows)
+        self.selected_sources_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.selected_sources_rows_layout.setSpacing(1)
+        selected_layout.addWidget(self.selected_sources_rows)
+        selected_layout.addStretch()
+        return self.selected_sources_group
 
     def _show_source_detail(self, mode: str):
         """Open the compact source detail panel for the selected beginner category."""
         self._simple_source_detail_mode = mode
         self.source_detail_group.setVisible(True)
+        self._refresh_simple_source_choice_styles()
         if hasattr(self, "source_simple_spacer"):
             self.source_simple_spacer.setVisible(False)
         self._refresh_source_detail_panel()
@@ -804,12 +922,18 @@ class CollectorWindow(QMainWindow):
         mode = getattr(self, "_simple_source_detail_mode", None)
         if not mode:
             self.source_detail_group.setVisible(False)
+            self._refresh_simple_source_choice_styles()
             if hasattr(self, "source_simple_spacer"):
-                self.source_simple_spacer.setVisible(True)
+                self.source_simple_spacer.setVisible(not bool(self.device_manager.get_selected_devices()))
             return
 
         self.source_detail_group.setTitle(self._tr("simple.detail.title"))
         self.source_detail_caption.setText(self._source_detail_caption(mode))
+        self.source_detail_open_btn.setText(self._tr("simple.detail.open"))
+        self.source_detail_open_btn.setVisible(mode == "image")
+        self.source_detail_open_btn.setEnabled(
+            not getattr(self, '_collection_in_progress', False)
+        )
         self.source_detail_refresh_btn.setText(self._tr("simple.detail.refresh"))
 
         self._clear_source_detail_rows()
@@ -818,16 +942,27 @@ class CollectorWindow(QMainWindow):
             self.source_detail_rows_layout.addWidget(
                 self._create_source_detail_empty_row(self._source_detail_empty_text(mode))
             )
+            self._refresh_selected_sources_panel()
             return
 
         for device in devices:
             self.source_detail_rows_layout.addWidget(
                 self._create_source_detail_row(device)
             )
+        self._refresh_selected_sources_panel()
 
     def _clear_source_detail_rows(self):
         while self.source_detail_rows_layout.count():
             item = self.source_detail_rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _clear_selected_sources_rows(self):
+        if not hasattr(self, "selected_sources_rows_layout"):
+            return
+        while self.selected_sources_rows_layout.count():
+            item = self.selected_sources_rows_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -895,39 +1030,134 @@ class CollectorWindow(QMainWindow):
     def _create_source_detail_empty_row(self, text: str) -> QWidget:
         label = QLabel(text)
         label.setWordWrap(True)
-        label.setMinimumHeight(58)
+        label.setMinimumHeight(40)
         label.setStyleSheet(
             f"background: {COLORS['bg_primary']}; "
             f"border: 1px dashed {COLORS['border_subtle']}; "
-            "border-radius: 4px; padding: 8px 10px; "
+            "border-radius: 3px; padding: 6px 8px; "
             f"color: {COLORS['text_secondary']}; font-size: 10px;"
         )
         return label
 
-    def _create_source_detail_row(self, device) -> QPushButton:
-        button = QPushButton(self._source_detail_row_text(device))
-        button.setCheckable(True)
-        button.setChecked(bool(getattr(device, "is_selected", False)))
-        button.setEnabled(not getattr(self, '_collection_in_progress', False))
-        button.clicked.connect(lambda _checked=False, device_id=device.device_id: self._select_source_detail_device(device_id))
-        button.setMinimumHeight(36)
-        button.setStyleSheet(
-            f"QPushButton {{ text-align: left; padding: 7px 10px; "
-            f"background: {COLORS['bg_tertiary']}; "
-            f"border: 1px solid {COLORS['border_subtle']}; border-radius: 4px; "
-            f"color: {COLORS['text_primary']}; }} "
-            f"QPushButton:checked {{ border-color: {COLORS['brand_primary']}; "
-            f"background: rgba(212, 165, 116, 0.16); }} "
-            f"QPushButton:hover {{ border-color: {COLORS['brand_accent']}; }}"
+    def _create_source_detail_row(self, device) -> QWidget:
+        row = ClickableSourceRow()
+        row.setObjectName("sourceDetailRow")
+        row.setMinimumHeight(40)
+        locked = bool(getattr(self, '_collection_in_progress', False))
+        row.setEnabled(not locked)
+        row.setCursor(
+            Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor
         )
-        return button
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        selected = bool(getattr(device, "is_selected", False))
+        row_background = "rgba(212, 165, 116, 0.16)" if selected else COLORS["bg_primary"]
+        row_border = COLORS["brand_primary"] if selected else COLORS["border_subtle"]
+        row.setStyleSheet(
+            f"QFrame#sourceDetailRow {{ background: {row_background}; "
+            f"border: 1px solid {row_border}; border-radius: 3px; }} "
+            "QLabel { border: none; background: transparent; }"
+        )
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(7, 3, 8, 3)
+        layout.setSpacing(7)
 
-    def _source_detail_row_text(self, device) -> str:
-        selected_prefix = "[selected] " if getattr(device, "is_selected", False) else ""
+        checkbox = SourceCheckBox()
+        checkbox.setChecked(selected)
+        checkbox.setEnabled(not locked)
+        checkbox.setAccessibleName(self._source_primary_text(device, max_chars=86))
+        checkbox.stateChanged.connect(
+            lambda state, device_id=device.device_id: self._set_source_detail_device_selected(
+                device_id,
+                state == Qt.CheckState.Checked.value,
+            )
+        )
+        layout.addWidget(checkbox, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.clicked.connect(checkbox.toggle)
+
+        text_box = QWidget()
+        text_box.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        text_box.setStyleSheet("background: transparent; border: none;")
+        text_layout = QVBoxLayout(text_box)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(0)
+
+        title = QLabel(self._source_primary_text(device, max_chars=86))
+        title.setWordWrap(False)
+        title.setToolTip(self._full_source_name(device))
+        title.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 10px; font-weight: 600;"
+        )
+        text_layout.addWidget(title)
+
+        meta = QLabel(
+            self._source_detail_meta_text(
+                device,
+                include_parent=True,
+                max_chars=112,
+            )
+        )
+        meta.setWordWrap(False)
+        meta.setToolTip(self._full_source_name(device))
+        meta.setStyleSheet(
+            f"color: {COLORS['text_tertiary']}; font-size: 9px;"
+        )
+        text_layout.addWidget(meta)
+
+        layout.addWidget(text_box, 1)
+        return row
+
+    def _source_detail_meta_text(
+        self,
+        device,
+        include_parent: bool = False,
+        max_chars: int = 70,
+    ) -> str:
         source_type = self._friendly_device_type(device)
         size = getattr(device, "size_display", "") or ""
-        suffix = f" | {size}" if size else ""
-        return f"{selected_prefix}{device.display_name}  -  {source_type}{suffix}"
+        parts = [source_type]
+        if size:
+            parts.append(size)
+        if include_parent:
+            parent = self._source_parent_text(device)
+            if parent:
+                parts.append(parent)
+        return self._elide_middle("  |  ".join(parts), max_chars)
+
+    def _full_source_name(self, device) -> str:
+        meta = getattr(device, "metadata", {}) or {}
+        return str(
+            meta.get("original_path")
+            or meta.get("file_path")
+            or meta.get("bundle_path")
+            or getattr(device, "display_name", "")
+        )
+
+    def _source_primary_text(self, device, max_chars: int = 54) -> str:
+        full_name = self._full_source_name(device)
+        normalized = full_name.replace("\\", "/").rstrip("/")
+        if "/" in normalized:
+            return self._elide_middle(normalized.rsplit("/", 1)[-1], max_chars)
+        return self._elide_middle(
+            getattr(device, "display_name", "") or full_name,
+            max_chars,
+        )
+
+    def _source_parent_text(self, device) -> str:
+        full_name = self._full_source_name(device)
+        normalized = full_name.replace("\\", "/").rstrip("/")
+        if "/" not in normalized:
+            return ""
+        parent = normalized.rsplit("/", 1)[0].replace("/", "\\")
+        return self._elide_middle(parent, 46)
+
+    @staticmethod
+    def _elide_middle(value: str, max_chars: int) -> str:
+        value = str(value or "")
+        if len(value) <= max_chars:
+            return value
+        head = max_chars // 2 - 2
+        tail = max_chars - head - 5
+        return f"{value[:head]} ... {value[-tail:]}"
 
     def _friendly_device_type(self, device) -> str:
         mapping = {
@@ -952,100 +1182,98 @@ class CollectorWindow(QMainWindow):
         }
         return mapping.get(device.device_type, device.device_type.name)
 
-    def _select_source_detail_device(self, device_id: str):
+    def _set_source_detail_device_selected(self, device_id: str, selected: bool):
         if getattr(self, '_collection_in_progress', False):
             return
         device = self.device_manager.get_device(device_id)
         if not device:
             return
-        self.device_manager.deselect_all()
-        self.device_manager.select_device(device_id, True)
-        self._sync_device_panel_selection()
-        self.simple_source_status.setText(
-            self._tr("simple.source.selected", source=device.display_name)
+        self.device_manager.select_device(device_id, selected)
+        self._on_device_selection_changed()
+        if selected:
+            self.status_bar.showMessage("Evidence source selected")
+        else:
+            self.status_bar.showMessage("Evidence source removed")
+
+    def _remove_selected_source(self, device_id: str):
+        self._set_source_detail_device_selected(device_id, False)
+
+    def _refresh_selected_sources_panel(self):
+        """Refresh the selected evidence source list."""
+        if not hasattr(self, "selected_sources_group"):
+            return
+        selected_devices = sorted(
+            self.device_manager.get_selected_devices(),
+            key=lambda device: self._full_source_name(device).lower(),
         )
-        self.status_bar.showMessage("Evidence source selected")
-        self._refresh_source_detail_panel()
-        self._update_collect_button_state()
+        self._clear_selected_sources_rows()
 
-    def _create_device_group(self) -> QWidget:
-        self.device_group = QGroupBox(self._tr("group.source_details"))
-        device_layout = QVBoxLayout(self.device_group)
-        device_layout.setContentsMargins(10, 18, 10, 10)
-        device_layout.setSpacing(6)
+        if not selected_devices:
+            self.selected_sources_group.setVisible(False)
+            if hasattr(self, "source_simple_spacer") and not getattr(self, "_simple_source_detail_mode", None):
+                self.source_simple_spacer.setVisible(True)
+            return
 
-        self.device_panel = DeviceListPanel(self.device_manager)
-        self.device_panel.selection_changed.connect(self._on_device_selection_changed)
-        self.device_panel.image_file_requested.connect(self._on_image_file_added)
-        self.device_panel.set_file_action_buttons_visible(False)
-        self.device_panel.setMinimumHeight(250)
-        device_layout.addWidget(self.device_panel)
-        return self.device_group
-
-    def _create_artifacts_group(self) -> QWidget:
-        self.artifacts_group = QGroupBox(self._tr("group.expert_scope"))
-        artifacts_outer_layout = QVBoxLayout(self.artifacts_group)
-        artifacts_outer_layout.setContentsMargins(10, 18, 10, 10)
-        artifacts_outer_layout.setSpacing(6)
-
-        self.beginner_scope_label = QLabel(
-            "Recommended artifacts are selected after authentication."
+        self.selected_sources_group.setTitle(
+            f"{self._tr('simple.selected.title')} ({len(selected_devices)})"
         )
-        self.beginner_scope_label.setWordWrap(True)
-        self.beginner_scope_label.setStyleSheet(
-            f"color: {COLORS['text_secondary']}; font-size: 10px;"
+        self.selected_sources_group.setVisible(True)
+        if hasattr(self, "source_simple_spacer"):
+            self.source_simple_spacer.setVisible(False)
+        for device in selected_devices:
+            self.selected_sources_rows_layout.addWidget(
+                self._create_selected_source_row(device)
+            )
+
+    def _create_selected_source_row(self, device) -> QWidget:
+        row = QFrame()
+        row.setObjectName("selectedSourceRow")
+        row.setMinimumHeight(30)
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        row.setStyleSheet(
+            f"QFrame#selectedSourceRow {{ background: {COLORS['bg_primary']}; "
+            "border: none; border-radius: 2px; } "
+            "QLabel { border: none; background: transparent; }"
         )
-        artifacts_outer_layout.addWidget(self.beginner_scope_label)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 3, 5, 3)
+        layout.setSpacing(8)
 
-        self.advanced_scope_cb = QCheckBox(self._tr("scope.advanced"))
-        self.advanced_scope_cb.setChecked(False)
-        self.advanced_scope_cb.stateChanged.connect(self._toggle_advanced_scope)
-        artifacts_outer_layout.addWidget(self.advanced_scope_cb)
+        title = QLabel(self._source_primary_text(device, max_chars=58))
+        title.setWordWrap(False)
+        title.setToolTip(self._full_source_name(device))
+        title.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 10px; font-weight: 600;"
+        )
+        layout.addWidget(title, 2)
 
-        self.artifacts_tab = QTabWidget()
-        self.artifacts_tab.setStyleSheet(f"""
-            QTabWidget::pane {{
-                border: 1px solid {COLORS['border_subtle']};
-                border-radius: 4px;
-                background-color: {COLORS['bg_tertiary']};
-            }}
-            QTabBar::tab {{
-                background-color: {COLORS['bg_secondary']};
-                border: 1px solid {COLORS['border_subtle']};
-                padding: 4px 10px;
-                margin-right: 2px;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                font-size: 11px;
-            }}
-            QTabBar::tab:selected {{
-                background-color: {COLORS['bg_tertiary']};
-                border-bottom-color: {COLORS['bg_tertiary']};
-            }}
-            QTabBar::tab:hover:!selected {{
-                background-color: {COLORS['bg_hover']};
-            }}
-        """)
+        meta = QLabel(
+            self._source_detail_meta_text(
+                device,
+                include_parent=True,
+                max_chars=76,
+            )
+        )
+        meta.setWordWrap(False)
+        meta.setToolTip(self._full_source_name(device))
+        meta.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
+        layout.addWidget(meta, 3)
 
-        self.artifact_checks: Dict[str, QCheckBox] = {}
-        self._build_artifact_tabs()
-        self.artifacts_tab.setVisible(False)
-        artifacts_outer_layout.addWidget(self.artifacts_tab)
-
-        select_all_layout = QHBoxLayout()
-        self.select_all_cb = QCheckBox(self._tr("scope.select_all"))
-        self.select_all_cb.stateChanged.connect(self._toggle_select_all)
-        self.select_all_cb.setVisible(False)
-        select_all_layout.addWidget(self.select_all_cb)
-        select_all_layout.addStretch()
-
-        self.include_deleted_cb = QCheckBox(self._tr("scope.deleted"))
-        self.include_deleted_cb.setChecked(True)
-        self.include_deleted_cb.setToolTip(self._tr("scope.deleted.tooltip"))
-        self.include_deleted_cb.stateChanged.connect(self._on_artifact_selection_changed)
-        select_all_layout.addWidget(self.include_deleted_cb)
-        artifacts_outer_layout.addLayout(select_all_layout)
-        return self.artifacts_group
+        remove_btn = QPushButton("x")
+        remove_btn.setObjectName("selectedSourceRemoveButton")
+        remove_btn.setToolTip(self._tr("simple.selected.remove"))
+        remove_btn.setAccessibleName(self._tr("simple.selected.remove"))
+        remove_btn.setFixedSize(22, 22)
+        remove_btn.setStyleSheet(
+            f"QPushButton#selectedSourceRemoveButton {{ background: transparent; "
+            f"border: none; color: {COLORS['text_secondary']}; padding: 0; }} "
+            f"QPushButton#selectedSourceRemoveButton:hover {{ background: {COLORS['bg_hover']}; "
+            f"color: {COLORS['text_primary']}; }}"
+        )
+        remove_btn.setEnabled(not getattr(self, '_collection_in_progress', False))
+        remove_btn.clicked.connect(lambda _checked=False, device_id=device.device_id: self._remove_selected_source(device_id))
+        layout.addWidget(remove_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
 
     def _create_status_step_page(self) -> QWidget:
         page = QWidget()
@@ -1307,60 +1535,6 @@ class CollectorWindow(QMainWindow):
         if hasattr(self, 'log_group'):
             self.log_group.setVisible(visible)
 
-    # =========================================================================
-    # Tab Creation Methods (Phase 2.1)
-    # =========================================================================
-
-    def _build_artifact_tabs(self, preserve_index: bool = False):
-        current_index = 0
-        if preserve_index and hasattr(self, 'artifacts_tab'):
-            current_index = max(0, self.artifacts_tab.currentIndex())
-
-        self.artifact_checks.clear()
-        while self.artifacts_tab.count():
-            widget = self.artifacts_tab.widget(0)
-            self.artifacts_tab.removeTab(0)
-            if widget is not None:
-                widget.deleteLater()
-
-        for label, factory in (
-            ("Windows", self._create_windows_tab),
-            ("Android", self._create_android_tab),
-            ("iOS", self._create_ios_tab),
-            ("Linux", self._create_linux_tab),
-            ("macOS", self._create_macos_tab),
-            ("AI Activity", self._create_ai_activity_tab),
-        ):
-            self.artifacts_tab.addTab(factory(), label)
-
-        if self.artifacts_tab.count():
-            self.artifacts_tab.setCurrentIndex(min(current_index, self.artifacts_tab.count() - 1))
-
-        for cb in self.artifact_checks.values():
-            cb.stateChanged.connect(self._on_artifact_selection_changed)
-
-    def _toggle_advanced_scope(self, state):
-        """Show or hide detailed artifact controls."""
-        visible = state == Qt.CheckState.Checked.value
-        self.artifacts_tab.setVisible(visible)
-        self.select_all_cb.setVisible(visible)
-        self._update_scope_summary()
-        self._update_workflow_status()
-
-    def _set_expert_controls_visible(self, visible: bool):
-        """Keep dense backup controls hidden in the beginner source page."""
-        if hasattr(self, "device_group"):
-            self.device_group.setVisible(False)
-        if hasattr(self, "artifacts_group"):
-            self.artifacts_group.setVisible(False)
-        if hasattr(self, "source_simple_spacer"):
-            self.source_simple_spacer.setVisible(
-                not bool(getattr(self, "_simple_source_detail_mode", None))
-            )
-        self._update_simple_source_status()
-        self._update_simple_source_inventory()
-        self._refresh_source_detail_panel()
-
     def _update_simple_source_inventory(self):
         """Refresh the beginner source summary without exposing collection internals."""
         if not hasattr(self, "simple_detected_status"):
@@ -1470,48 +1644,28 @@ class CollectorWindow(QMainWindow):
             self._refresh_source_detail_panel()
             return
 
-        self.device_manager.deselect_all()
         self.device_manager.select_device(candidates[0].device_id, True)
-        self._sync_device_panel_selection()
-        self.simple_source_status.setText(
-            self._tr("simple.source.selected", source=candidates[0].display_name)
-        )
+        self._on_device_selection_changed()
         self.status_bar.showMessage("Evidence source selected")
-        self._refresh_source_detail_panel()
-        self._update_collect_button_state()
-
-    def _sync_device_panel_selection(self):
-        """Mirror UnifiedDeviceManager selection into the backup device list."""
-        panel = getattr(self, 'device_panel', None)
-        if panel is None:
-            return
-        for device_id, cb in getattr(panel, 'device_checkboxes', {}).items():
-            device = self.device_manager.get_device(device_id)
-            if device is None:
-                continue
-            cb.blockSignals(True)
-            cb.setChecked(bool(device.is_selected))
-            cb.blockSignals(False)
-        try:
-            panel._update_summary()
-        except Exception:
-            pass
 
     def _open_simple_evidence_file(self):
-        """Open the existing disk image / mobile FFS picker from simple mode."""
+        """Show registered evidence files without opening a modal immediately."""
         if getattr(self, '_collection_in_progress', False):
             return
         self._show_source_detail("image")
-        if hasattr(self, 'device_panel'):
-            self.device_panel.request_add_evidence_file()
+
+    def _open_evidence_file_dialog(self):
+        """Open the disk image / mobile FFS picker from the evidence-file list."""
+        if getattr(self, '_collection_in_progress', False):
+            return
+        self.evidence_source_registrar.request_add_evidence_file()
 
     def _open_simple_tool_result(self):
         """Open the existing verified tool-result picker from simple mode."""
         if getattr(self, '_collection_in_progress', False):
             return
         self._show_source_detail("tool")
-        if hasattr(self, 'device_panel'):
-            self.device_panel.request_add_tool_result()
+        self.evidence_source_registrar.request_add_tool_result()
 
     def _update_simple_source_status(self):
         """Update the simplified source summary."""
@@ -1534,11 +1688,6 @@ class CollectorWindow(QMainWindow):
             self._tr("simple.source.multiple", count=len(selected_devices))
         )
 
-    def _on_artifact_selection_changed(self, *_args):
-        """Keep beginner summaries and start button in sync."""
-        self._update_scope_summary()
-        self._update_collect_button_state()
-
     def _selected_axiom_sources(self, selected_devices=None) -> List:
         devices = selected_devices
         if devices is None:
@@ -1550,45 +1699,6 @@ class CollectorWindow(QMainWindow):
         if devices is None:
             devices = self.device_manager.get_selected_devices()
         return [d for d in devices if d.device_type == DeviceType.THIRD_PARTY_FORENSIC_EXPORT]
-
-    def _update_scope_summary(self):
-        """Update the compact collection scope summary."""
-        if not hasattr(self, 'beginner_scope_label'):
-            return
-
-        checked = sum(1 for cb in self.artifact_checks.values() if cb.isChecked())
-        enabled = sum(1 for cb in self.artifact_checks.values() if cb.isEnabled())
-        axiom_count = len(self._selected_axiom_sources())
-        export_count = len(self._selected_third_party_export_sources())
-        tool_result_count = axiom_count + export_count
-        deleted_text = (
-            self._tr("scope.summary.deleted_on")
-            if getattr(self, 'include_deleted_cb', None) and self.include_deleted_cb.isChecked()
-            else self._tr("scope.summary.deleted_off")
-        )
-
-        if not self.collection_token:
-            text = self._tr("scope.summary.auth_first")
-        elif checked and tool_result_count:
-            text = self._tr(
-                "scope.summary.mixed",
-                checked=checked,
-                enabled=enabled,
-                tool_count=tool_result_count,
-                deleted=deleted_text,
-            )
-        elif checked:
-            text = self._tr(
-                "scope.summary.artifacts",
-                checked=checked,
-                enabled=enabled,
-                deleted=deleted_text,
-            )
-        elif tool_result_count:
-            text = self._tr("scope.summary.tool", tool_count=tool_result_count)
-        else:
-            text = self._tr("scope.summary.empty", enabled=enabled)
-        self.beginner_scope_label.setText(text)
 
     def _format_workflow_step(self, number: int, title: str, done: bool, detail: str) -> str:
         color = COLORS['success'] if done else COLORS['text_tertiary']
@@ -1605,7 +1715,7 @@ class CollectorWindow(QMainWindow):
         token_done = bool(self.collection_token)
         selected_devices = self.device_manager.get_selected_devices()
         source_done = bool(selected_devices)
-        artifact_count = sum(1 for cb in self.artifact_checks.values() if cb.isChecked())
+        artifact_count = self.artifact_selection.checked_count()
         axiom_count = len(self._selected_axiom_sources(selected_devices))
         export_count = len(self._selected_third_party_export_sources(selected_devices))
         tool_result_count = axiom_count + export_count
@@ -1697,227 +1807,19 @@ class CollectorWindow(QMainWindow):
                 f"color: {COLORS['text_primary']};"
             )
 
-    def _create_windows_tab(self) -> QWidget:
-        """Create Windows artifacts tab"""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(5, 5, 5, 5)
-
-        # Wrap with QScrollArea
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
-        content = QWidget()
-        content.setStyleSheet("background: transparent;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(2)
-
-        # Group Windows artifacts by subcategory
-        subcategory_items: dict = {}
-        for artifact_type, info in ARTIFACT_TYPES.items():
-            category = info.get('category', 'windows')
-            if category != 'windows' and 'category' in info:
-                continue
-            if artifact_type.startswith('mobile_'):
-                continue
-            subcat = info.get('subcategory', 'system')
-            subcategory_items.setdefault(subcat, []).append((artifact_type, info))
-
-        # Render each subcategory group in defined order
-        for subcat_key, subcat_label in self.WINDOWS_SUBCATEGORIES:
-            items = subcategory_items.get(subcat_key, [])
-            if not items:
-                continue
-
-            # Section header
-            header = QLabel(f"  {subcat_label}")
-            header.setStyleSheet(
-                f"color: {COLORS['brand_primary']}; font-size: 9px; font-weight: bold; "
-                f"margin-top: 6px; margin-bottom: 2px;"
-            )
-            content_layout.addWidget(header)
-
-            # Artifact checkboxes
-            for artifact_type, info in items:
-                cb = QCheckBox(f"{info['name']}")
-                cb.setEnabled(False)  # Enable after token validation
-                cb.setProperty("artifact_type", artifact_type)
-
-                tooltip_parts = [info.get('description', '')]
-                if info.get('requires_admin'):
-                    tooltip_parts.append("Requires administrator privileges")
-                if info.get('requires_mft'):
-                    tooltip_parts.append("Requires MFT collection (pytsk3)")
-                cb.setToolTip(" | ".join(tooltip_parts))
-
-                self.artifact_checks[artifact_type] = cb
-                content_layout.addWidget(cb)
-
-        content_layout.addStretch()
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
-
-        return tab
-
-    # Windows subcategory display order and labels
-    WINDOWS_SUBCATEGORIES = [
-        ('system',          'System Artifacts'),
-        ('filesystem',      'File System (MFT)'),
-        ('developer',       'Developer / Source Code'),
-        ('pc_messenger',    'PC Messenger'),
-        ('pc_apps',         'PC Applications'),
-    ]
-
-    # iOS subcategory display order and labels
-    IOS_SUBCATEGORIES = [
-        ('core',            'Core'),
-        ('system',          'System'),
-        ('app_analysis',    'App Analysis'),
-        ('messenger',       'Messenger'),
-        ('sns',             'SNS'),
-        ('email_browser',   'Email / Browser'),
-        ('korean',          'Korean Apps'),
-        ('productivity',    'Productivity / Media'),
-    ]
-
-    # Android subcategory display order and labels
-    ANDROID_SUBCATEGORIES = [
-        ('basic',               'Basic Collection (Non-Root)'),
-        ('app_system',          'System DB [Root]'),
-        ('app_analysis',        'App Analysis'),
-        ('app_messenger',       'Messenger'),
-        ('app_sns',             'SNS [Root Only]'),
-        ('app_korean',          'Korean Apps'),
-        ('app_email_browser',   'Email / Browser'),
-    ]
-
-    # Android Tier headers (inserted as dividers before certain subcategories)
-    ANDROID_TIER_HEADERS = {
-        'basic':        'Tier 1 — Basic Collection (Non-Root)',
-        'app_system':   'Tier 2 — App Data (Root→DB / Non-Root→SDCard)',
-    }
-
-    def _create_android_tab(self) -> QWidget:
-        """Create Android Forensics tab with auto-detect root and auto-select"""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        # Root status banner
-        self.android_root_banner = QLabel("Android device not connected")
-        self.android_root_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.android_root_banner.setFixedHeight(22)
-        self.android_root_banner.setStyleSheet(
-            f"background: {COLORS['bg_tertiary']}; color: {COLORS['text_tertiary']}; "
-            f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
-        )
-        layout.addWidget(self.android_root_banner)
-
-        # Limitation info label (shown for non-root devices)
-        self.android_limitation_label = QLabel("")
-        self.android_limitation_label.setWordWrap(True)
-        self.android_limitation_label.setVisible(False)
-        self.android_limitation_label.setStyleSheet(
-            f"background: {COLORS['bg_secondary']}; color: {COLORS['text_secondary']}; "
-            f"font-size: 8px; border-radius: 4px; padding: 4px 8px; margin: 2px 0px;"
-        )
-        layout.addWidget(self.android_limitation_label)
-
-        # Scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
-        content = QWidget()
-        content.setStyleSheet("background: transparent;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(2)
-
-        # Group artifacts by subcategory
-        subcategory_items: dict = {}
-        for artifact_type, info in ARTIFACT_TYPES.items():
-            if info.get('category') != 'android':
-                continue
-            subcat = info.get('subcategory', 'system')
-            if subcat not in subcategory_items:
-                subcategory_items[subcat] = []
-            subcategory_items[subcat].append((artifact_type, info))
-
-        # Render each subcategory group in defined order
-        for subcat_key, subcat_label in self.ANDROID_SUBCATEGORIES:
-            items = subcategory_items.get(subcat_key, [])
-            if not items:
-                continue
-
-            # Tier divider (horizontal line + tier header before certain subcategories)
-            if subcat_key in self.ANDROID_TIER_HEADERS:
-                # Horizontal separator line
-                line = QFrame()
-                line.setFrameShape(QFrame.Shape.HLine)
-                line.setStyleSheet(f"color: {COLORS['border_subtle']};")
-                line.setFixedHeight(1)
-                content_layout.addWidget(line)
-                # Tier header
-                tier_label = QLabel(f"  {self.ANDROID_TIER_HEADERS[subcat_key]}")
-                tier_label.setStyleSheet(
-                    f"color: {COLORS['info']}; font-size: 10px; font-weight: bold; "
-                    f"margin-top: 4px; margin-bottom: 2px;"
-                )
-                content_layout.addWidget(tier_label)
-
-            # Subcategory header
-            header = QLabel(f"  {subcat_label}")
-            header.setStyleSheet(
-                f"color: {COLORS['brand_primary']}; font-size: 9px; font-weight: bold; "
-                f"margin-top: 6px; margin-bottom: 2px;"
-            )
-            content_layout.addWidget(header)
-
-            # Artifact checkboxes
-            for artifact_type, info in items:
-                # Show root requirement in name for clarity
-                name = info['name']
-                if info.get('requires_root') and '(Root)' not in name:
-                    name = f"{name} [Root]"
-                cb = QCheckBox(name)
-                cb.setEnabled(False)  # Enable after device detection
-                cb.setProperty("artifact_type", artifact_type)
-
-                tooltip_parts = [info.get('description', '')]
-                if info.get('requires_root'):
-                    tooltip_parts.append("Requires rooted device")
-                cb.setToolTip(" | ".join(tooltip_parts))
-
-                self.artifact_checks[artifact_type] = cb
-                content_layout.addWidget(cb)
-
-        content_layout.addStretch()
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
-
-        return tab
-
     def _is_artifact_allowed(self, artifact_type: str) -> bool:
         return self._allow_all_artifacts or artifact_type in self._mapped_allowed_artifacts
 
     def _disable_disallowed_artifact(
         self,
         artifact_type: str,
-        cb: QCheckBox,
-        base_tooltip: str = ""
+        selection: ArtifactSelection,
     ) -> bool:
         if self._is_artifact_allowed(artifact_type):
             return False
-        cb.setEnabled(False)
-        cb.setChecked(False)
-        tooltip = base_tooltip or ARTIFACT_TYPES.get(artifact_type, {}).get('description', '')
-        cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
+        selection.enabled = False
+        selection.checked = False
+        selection.availability_reason = "Not allowed by collection token"
         return True
 
     def _mobile_supported_artifacts(self, platform: str, source: str) -> set:
@@ -1975,7 +1877,7 @@ class CollectorWindow(QMainWindow):
     def _disable_unsupported_mobile_artifact(
         self,
         artifact_type: str,
-        cb: QCheckBox,
+        selection: ArtifactSelection,
         supported: set,
         source_label: str,
     ) -> bool:
@@ -1983,12 +1885,11 @@ class CollectorWindow(QMainWindow):
         if artifact_type in supported:
             return False
 
-        cb.setEnabled(False)
-        cb.setChecked(False)
-        info = ARTIFACT_TYPES.get(artifact_type, {})
-        tooltip = info.get('description', '')
-        suffix = f"Not supported by current {source_label} collection path"
-        cb.setToolTip((tooltip + " | " if tooltip else "") + suffix)
+        selection.enabled = False
+        selection.checked = False
+        selection.availability_reason = (
+            f"Not supported by current {source_label} collection path"
+        )
         return True
 
     def _bundle_supported_artifacts(self, bundle_device, platform: str) -> set:
@@ -2002,48 +1903,15 @@ class CollectorWindow(QMainWindow):
         return self._mobile_supported_artifacts(platform, "ffs")
 
     def _update_android_root_status(self, is_rooted: bool, connected: bool):
-        """Update Android tab: root status banner, auto-select artifacts, show limitations"""
-        if not hasattr(self, 'android_root_banner'):
-            return
-
+        """Apply Android artifact availability for the selected USB device."""
         if not connected:
-            self.android_root_banner.setText("Android device not connected")
-            self.android_root_banner.setStyleSheet(
-                f"background: {COLORS['bg_tertiary']}; color: {COLORS['text_tertiary']}; "
-                f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
-            )
-            self.android_limitation_label.setVisible(False)
-            # Disable all android checkboxes
-            for artifact_type, cb in self.artifact_checks.items():
+            for artifact_type, selection in self.artifact_selection.items.items():
                 info = ARTIFACT_TYPES.get(artifact_type, {})
                 if info.get('category') == 'android':
-                    cb.setEnabled(False)
-                    cb.setChecked(False)
+                    selection.enabled = False
+                    selection.checked = False
+                    selection.availability_reason = "Select an Android source first"
             return
-
-        if is_rooted:
-            self.android_root_banner.setText(
-                "Root Detected \u2014 Full DB extraction enabled"
-            )
-            self.android_root_banner.setStyleSheet(
-                f"background: {COLORS['success_bg']}; color: {COLORS['success']}; "
-                f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
-            )
-            self.android_limitation_label.setVisible(False)
-        else:
-            self.android_root_banner.setText(
-                "Non-Root \u2014 External storage collection"
-            )
-            self.android_root_banner.setStyleSheet(
-                f"background: {COLORS['warning_bg']}; color: {COLORS['warning']}; "
-                f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
-            )
-            self.android_limitation_label.setText(
-                "Non-Root: Messenger apps auto-adapt to collect external storage data. "
-                "System info and media collection are available. "
-                "Root-only items (marked [Root]) are disabled."
-            )
-            self.android_limitation_label.setVisible(True)
 
         # Auto-select all applicable artifacts
         # Import ANDROID_ARTIFACT_TYPES to detect dual-mode apps
@@ -2053,14 +1921,14 @@ class CollectorWindow(QMainWindow):
             _AAT = {}
         supported = set(_AAT.keys())
 
-        for artifact_type, cb in self.artifact_checks.items():
+        for artifact_type, selection in self.artifact_selection.items.items():
             info = ARTIFACT_TYPES.get(artifact_type, {})
             if info.get('category') != 'android':
                 continue
-            if self._disable_disallowed_artifact(artifact_type, cb):
+            if self._disable_disallowed_artifact(artifact_type, selection):
                 continue
             if self._disable_unsupported_mobile_artifact(
-                artifact_type, cb, supported, "Android USB"
+                artifact_type, selection, supported, "Android USB"
             ):
                 continue
 
@@ -2070,245 +1938,42 @@ class CollectorWindow(QMainWindow):
             is_dual_mode = 'root' in android_info and 'nonroot' in android_info
 
             if requires_root and not is_rooted and not is_dual_mode:
-                # Root-only, device not rooted → disable + uncheck
-                cb.setEnabled(False)
-                cb.setChecked(False)
-                cb.setToolTip(
-                    info.get('description', '') +
-                    " | Root required \u2014 root device for full access"
-                )
+                selection.enabled = False
+                selection.checked = False
+                selection.availability_reason = "Root access required"
             else:
-                # Available → enable + auto-check
-                cb.setEnabled(True)
-                cb.setChecked(True)
-                tooltip_parts = [info.get('description', '')]
+                selection.enabled = True
+                selection.checked = True
                 if is_dual_mode:
-                    if is_rooted:
-                        tooltip_parts.append("Root: DB extraction")
-                    else:
-                        tooltip_parts.append("Non-Root: external storage + run-as")
+                    selection.availability_reason = (
+                        "Root DB extraction"
+                        if is_rooted
+                        else "Non-root external storage and run-as collection"
+                    )
                 elif requires_root:
-                    tooltip_parts.append("Root access used")
-                cb.setToolTip(" | ".join(tooltip_parts))
-
-    def _create_ios_tab(self) -> QWidget:
-        """Create iOS Forensics tab"""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        # Status label (simplified - backup selection handled by DeviceListPanel)
-        self.ios_info_label = QLabel("Select iOS backup from list")
-        self.ios_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
-        layout.addWidget(self.ios_info_label)
-
-        # Scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
-        content = QWidget()
-        content.setStyleSheet("background: transparent;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(2)
-
-        # Group iOS artifacts by subcategory
-        subcategory_items: dict = {}
-        for artifact_type, info in ARTIFACT_TYPES.items():
-            if info.get('category') != 'ios':
-                continue
-            subcat = info.get('subcategory', 'core')
-            subcategory_items.setdefault(subcat, []).append((artifact_type, info))
-
-        # Render each subcategory group in defined order
-        for subcat_key, subcat_label in self.IOS_SUBCATEGORIES:
-            items = subcategory_items.get(subcat_key, [])
-            if not items:
-                continue
-
-            # Section header
-            header = QLabel(f"  {subcat_label}")
-            header.setStyleSheet(
-                f"color: {COLORS['brand_primary']}; font-size: 9px; font-weight: bold; "
-                f"margin-top: 6px; margin-bottom: 2px;"
-            )
-            content_layout.addWidget(header)
-
-            # Artifact checkboxes
-            for artifact_type, info in items:
-                cb = QCheckBox(f"{info['name']}")
-                cb.setEnabled(False)  # Enable after token validation
-                cb.setProperty("artifact_type", artifact_type)
-                cb.setToolTip(info.get('description', ''))
-
-                self.artifact_checks[artifact_type] = cb
-                content_layout.addWidget(cb)
-
-        content_layout.addStretch()
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
-
-        return tab
-
-    def _create_linux_tab(self) -> QWidget:
-        """Create Linux Forensics tab - E01 direct collection support"""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        # Status label (simplified)
-        self.linux_info_label = QLabel("Select Linux disk image")
-        self.linux_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
-        layout.addWidget(self.linux_info_label)
-
-        # Scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
-        content = QWidget()
-        content.setStyleSheet("background: transparent;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(2)
-
-        # Linux category artifacts
-        for artifact_type, info in ARTIFACT_TYPES.items():
-            if info.get('category') != 'linux':
-                continue
-
-            cb = QCheckBox(f"{info['name']}")
-            cb.setEnabled(False)  # Enable after token validation
-            cb.setProperty("artifact_type", artifact_type)
-            cb.setToolTip(info.get('description', ''))
-
-            self.artifact_checks[artifact_type] = cb
-            content_layout.addWidget(cb)
-
-        content_layout.addStretch()
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
-
-        return tab
-
-    def _create_ai_activity_tab(self) -> QWidget:
-        """Create server-authorized activity tab (cross-platform).
-
-        Lists server-authorized activity targets. The service controls exact target paths at runtime.
-        """
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        info_label = QLabel(
-            "Server-authorized activity targets are available after session authentication."
-            ""
-        )
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet(
-            f"color: {COLORS['text_tertiary']}; font-size: 9px;"
-        )
-        layout.addWidget(info_label)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        scroll.setStyleSheet(
-            "QScrollArea { border: none; background: transparent; }"
-        )
-
-        content = QWidget()
-        content.setStyleSheet("background: transparent;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(2)
-
-        for artifact_type, info in ARTIFACT_TYPES.items():
-            if info.get('category') != 'ai_activity':
-                continue
-            cb = QCheckBox(f"{info['name']}")
-            cb.setEnabled(False)  # Enable after token validation
-            cb.setProperty("artifact_type", artifact_type)
-            cb.setToolTip(info.get('description', ''))
-            self.artifact_checks[artifact_type] = cb
-            content_layout.addWidget(cb)
-
-        content_layout.addStretch()
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
-
-        return tab
-
-    def _create_macos_tab(self) -> QWidget:
-        """Create macOS Forensics tab - E01 direct collection support"""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        # Status label (simplified)
-        self.macos_info_label = QLabel("Select macOS disk image")
-        self.macos_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
-        layout.addWidget(self.macos_info_label)
-
-        # Scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
-        content = QWidget()
-        content.setStyleSheet("background: transparent;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(2)
-
-        # macOS category artifacts
-        for artifact_type, info in ARTIFACT_TYPES.items():
-            if info.get('category') != 'macos':
-                continue
-
-            cb = QCheckBox(f"{info['name']}")
-            cb.setEnabled(False)  # Enable after token validation
-            cb.setProperty("artifact_type", artifact_type)
-            cb.setToolTip(info.get('description', ''))
-
-            self.artifact_checks[artifact_type] = cb
-            content_layout.addWidget(cb)
-
-        content_layout.addStretch()
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
-
-        return tab
-
-    # [Removed] _refresh_android_devices, _refresh_ios_backups, _on_ios_backup_selected
-    # Device/backup selection is managed centrally by DeviceListPanel
+                    selection.availability_reason = "Root access available"
+                else:
+                    selection.availability_reason = ""
 
     # =========================================================================
     # Device Management Event Handlers
     # =========================================================================
 
     def _on_device_added(self, device):
-        """Device added (DeviceListPanel handles automatically)"""
+        """Refresh the source picker after device discovery."""
         self._log(f"Device detected: {device.display_name}")
         self._update_simple_source_inventory()
         self._refresh_source_detail_panel()
+        self._refresh_selected_sources_panel()
         self._update_workflow_status()
 
     def _on_device_removed(self, device_id: str):
-        """Device removed (DeviceListPanel handles automatically)"""
+        """Refresh collection state after a source disappears."""
         self._log(f"Device removed: {device_id}")
+        self._update_platform_artifact_states()
         self._update_simple_source_inventory()
         self._refresh_source_detail_panel()
+        self._refresh_selected_sources_panel()
         self._update_collect_button_state()
 
     def _on_device_selection_changed(self):
@@ -2317,20 +1982,19 @@ class CollectorWindow(QMainWindow):
         count = len(selected)
         self._log(f"Selected {count} device(s)")
 
-        # [New] Auto-enable/disable platform tabs
-        self._update_platform_tab_states()
+        self._update_platform_artifact_states()
 
         # Update collect button state when device is selected
         self._update_simple_source_inventory()
         self._refresh_source_detail_panel()
+        self._refresh_selected_sources_panel()
         self._update_collect_button_state()
 
-    def _on_image_file_added(self):
-        """Forensic image file added (handled by DeviceListPanel)"""
+    def _on_image_file_added(self, _device=None):
+        """Refresh source and scope state after file registration."""
         self._log("Forensic image added")
 
-        # [New] Auto-enable/disable platform tabs
-        self._update_platform_tab_states()
+        self._update_platform_artifact_states()
 
         self._update_simple_source_inventory()
         selected = self.device_manager.get_selected_devices()
@@ -2343,70 +2007,15 @@ class CollectorWindow(QMainWindow):
             self.source_detail_group.setVisible(True)
             self.source_simple_spacer.setVisible(False)
         self._refresh_source_detail_panel()
+        self._refresh_selected_sources_panel()
         self._update_collect_button_state()
 
-    def _update_platform_tab_states(self):
-        """
-        Auto-navigate to relevant platform tab based on selected device
-
-        - All tabs remain accessible (not disabled)
-        - Auto-focus to appropriate tab based on detected OS
-        """
+    def _update_platform_artifact_states(self):
+        """Apply source-specific Android and iOS artifact availability."""
         if getattr(self, '_collection_in_progress', False):
             return
 
         selected_devices = self.device_manager.get_selected_devices()
-
-        # Determine tab for auto-focus (priority: first selected device)
-        tab_map = {'windows': 0, 'android': 1, 'ios': 2, 'linux': 3, 'macos': 4}
-        target_tab = None
-
-        for device in selected_devices:
-            if device.device_type == DeviceType.WINDOWS_PHYSICAL_DISK:
-                target_tab = tab_map['windows']
-                break
-
-            elif device.device_type == DeviceType.MACOS_LOCAL_SYSTEM:
-                target_tab = tab_map['macos']
-                break
-
-            elif device.device_type == DeviceType.LINUX_LOCAL_SYSTEM:
-                target_tab = tab_map['linux']
-                break
-
-            elif device.device_type == DeviceType.ANDROID_DEVICE:
-                target_tab = tab_map['android']
-                break
-
-            elif device.device_type in (DeviceType.IOS_BACKUP, DeviceType.IOS_DEVICE):
-                target_tab = tab_map['ios']
-                break
-
-            elif device.device_type == DeviceType.MOBILE_FFS_BUNDLE_ANDROID:
-                target_tab = tab_map['android']
-                break
-
-            elif device.device_type == DeviceType.MOBILE_FFS_BUNDLE_IOS:
-                target_tab = tab_map['ios']
-                break
-
-            elif device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
-                                        DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
-                                        DeviceType.VHDX_IMAGE, DeviceType.QCOW2_IMAGE,
-                                        DeviceType.VDI_IMAGE, DeviceType.DMG_IMAGE):
-                detected_os = device.metadata.get('detected_os', 'unknown')
-                if detected_os == 'windows':
-                    target_tab = tab_map['windows']
-                elif detected_os == 'linux':
-                    target_tab = tab_map['linux']
-                elif detected_os == 'macos':
-                    target_tab = tab_map['macos']
-                # Don't auto-navigate for unknown (let user choose)
-                if target_tab is not None:
-                    break
-
-        # Update Linux/macOS tab info labels
-        self._update_linux_macos_info_labels(selected_devices)
 
         # Detect FFS bundle devices (offline forensic image — no live phone controls)
         android_bundle = next(
@@ -2435,97 +2044,24 @@ class CollectorWindow(QMainWindow):
             else:
                 self._update_android_root_status(is_rooted=False, connected=False)
 
-        # Update iOS tab info label
-        self._update_ios_info_label(ios_bundle, selected_devices)
-
-        # Auto-navigate to detected tab (only if different from current)
-        if target_tab is not None and self.artifacts_tab.currentIndex() != target_tab:
-            self.artifacts_tab.setCurrentIndex(target_tab)
-
-    def _update_linux_macos_info_labels(self, selected_devices: list):
-        """Update Linux/macOS tab info labels"""
-        linux_images = []
-        macos_images = []
-
-        for device in selected_devices:
-            # Local system devices
-            if device.device_type == DeviceType.LINUX_LOCAL_SYSTEM:
-                is_root = device.metadata.get('is_root', False)
-                root_tag = " [root]" if is_root else " [non-root]"
-                linux_images.append(f"Local system{root_tag}")
-            elif device.device_type == DeviceType.MACOS_LOCAL_SYSTEM:
-                is_root = device.metadata.get('is_root', False)
-                root_tag = " [root]" if is_root else " [non-root]"
-                macos_images.append(f"Local system{root_tag}")
-            # Disk images
-            elif device.device_type in (DeviceType.E01_IMAGE, DeviceType.RAW_IMAGE,
-                                        DeviceType.VMDK_IMAGE, DeviceType.VHD_IMAGE,
-                                        DeviceType.VHDX_IMAGE, DeviceType.QCOW2_IMAGE,
-                                        DeviceType.VDI_IMAGE, DeviceType.DMG_IMAGE):
-                detected_os = device.metadata.get('detected_os', 'unknown')
-                fs_type = device.metadata.get('filesystem_type', 'Unknown')
-
-                if detected_os == 'linux':
-                    linux_images.append(f"{device.display_name} ({fs_type})")
-                elif detected_os == 'macos':
-                    macos_images.append(f"{device.display_name} ({fs_type})")
-
-        # Update Linux tab info
-        if hasattr(self, 'linux_info_label'):
-            if linux_images:
-                self.linux_info_label.setText(
-                    f"✓ Selected: {', '.join(linux_images)}"
-                )
-                self.linux_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
-            else:
-                self.linux_info_label.setText("Select a Linux disk image or local system from device list")
-                self.linux_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
-
-        # Update macOS tab info
-        if hasattr(self, 'macos_info_label'):
-            if macos_images:
-                self.macos_info_label.setText(
-                    f"✓ Selected: {', '.join(macos_images)}"
-                )
-                self.macos_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
-            else:
-                self.macos_info_label.setText("Select a macOS disk image or local system from device list")
-                self.macos_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
+        self._update_ios_artifact_states(ios_bundle, selected_devices)
 
     def _update_android_bundle_status(self, bundle_device):
-        """Display Android tab status for an FFS bundle (offline filesystem image)."""
-        if not hasattr(self, 'android_root_banner'):
-            return
-
-        fmt = bundle_device.metadata.get('format_id', 'FFS')
-        size = bundle_device.size_display
-        self.android_root_banner.setText(
-            f"FFS Bundle Loaded — {fmt} ({size}) — Full filesystem access"
-        )
-        self.android_root_banner.setStyleSheet(
-            f"background: {COLORS['success_bg']}; color: {COLORS['success']}; "
-            f"font-size: 9px; border-radius: 4px; padding: 2px 8px;"
-        )
-        if hasattr(self, 'android_limitation_label'):
-            self.android_limitation_label.setVisible(False)
-
+        """Apply Android artifact availability for an FFS bundle."""
         supported = self._bundle_supported_artifacts(bundle_device, "android")
-        for artifact_type, cb in self.artifact_checks.items():
+        for artifact_type, selection in self.artifact_selection.items.items():
             info = ARTIFACT_TYPES.get(artifact_type, {})
             if info.get('category') != 'android':
                 continue
-            if self._disable_disallowed_artifact(artifact_type, cb):
+            if self._disable_disallowed_artifact(artifact_type, selection):
                 continue
             if self._disable_unsupported_mobile_artifact(
-                artifact_type, cb, supported, "Android FFS bundle"
+                artifact_type, selection, supported, "Android FFS bundle"
             ):
                 continue
-            cb.setEnabled(True)
-            cb.setChecked(True)
-            cb.setToolTip(
-                info.get('description', '') +
-                " | Source: FFS bundle (offline filesystem image)"
-            )
+            selection.enabled = True
+            selection.checked = True
+            selection.availability_reason = "Android FFS bundle"
 
     def _set_ios_artifact_states(
         self,
@@ -2535,49 +2071,33 @@ class CollectorWindow(QMainWindow):
     ):
         """Enable only iOS artifacts supported by the selected iOS source."""
         supported = supported_override or self._mobile_supported_artifacts("ios", source)
-        for artifact_type, cb in self.artifact_checks.items():
+        for artifact_type, selection in self.artifact_selection.items.items():
             info = ARTIFACT_TYPES.get(artifact_type, {})
             if info.get('category') != 'ios':
                 continue
-            if self._disable_disallowed_artifact(artifact_type, cb):
+            if self._disable_disallowed_artifact(artifact_type, selection):
                 continue
             if self._disable_unsupported_mobile_artifact(
-                artifact_type, cb, supported, source_label
+                artifact_type, selection, supported, source_label
             ):
                 continue
-            cb.setEnabled(True)
-            cb.setChecked(True)
-            cb.setToolTip(
-                info.get('description', '') +
-                f" | Source: {source_label}"
-            )
+            selection.enabled = True
+            selection.checked = True
+            selection.availability_reason = source_label
 
     def _disable_ios_artifacts_without_source(self):
         """Disable iOS artifacts until an iOS source is selected."""
-        for artifact_type, cb in self.artifact_checks.items():
+        for artifact_type, selection in self.artifact_selection.items.items():
             info = ARTIFACT_TYPES.get(artifact_type, {})
             if info.get('category') != 'ios':
                 continue
-            cb.setEnabled(False)
-            cb.setChecked(False)
-            tooltip = info.get('description', '')
-            cb.setToolTip((tooltip + " | " if tooltip else "") + "Select an iOS source first")
+            selection.enabled = False
+            selection.checked = False
+            selection.availability_reason = "Select an iOS source first"
 
-    def _update_ios_info_label(self, ios_bundle, selected_devices):
-        """Update iOS tab info label for backup or FFS bundle selection."""
-        if not hasattr(self, 'ios_info_label'):
-            return
-
+    def _update_ios_artifact_states(self, ios_bundle, selected_devices):
+        """Apply iOS artifact availability for the selected source."""
         if ios_bundle:
-            fmt = ios_bundle.metadata.get('format_id', 'FFS')
-            size = ios_bundle.size_display
-            self.ios_info_label.setText(
-                f"✓ FFS Bundle: {ios_bundle.display_name} — {fmt} ({size})"
-            )
-            self.ios_info_label.setStyleSheet(
-                f"color: {COLORS['success']}; font-size: 9px;"
-            )
-
             self._set_ios_artifact_states(
                 "ffs",
                 "iOS FFS bundle (offline filesystem image)",
@@ -2590,8 +2110,6 @@ class CollectorWindow(QMainWindow):
             None,
         )
         if ios_backup:
-            self.ios_info_label.setText(f"✓ Backup: {ios_backup.display_name}")
-            self.ios_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
             self._set_ios_artifact_states("backup", "iOS backup extraction")
             return
 
@@ -2600,34 +2118,26 @@ class CollectorWindow(QMainWindow):
             None,
         )
         if ios_device:
-            self.ios_info_label.setText(
-                f"✓ iOS USB: {ios_device.display_name} - backup-based extraction"
-            )
-            self.ios_info_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 9px;")
             self._set_ios_artifact_states("usb_backup", "iOS USB backup extraction")
             return
 
-        self.ios_info_label.setText("Select iOS backup, iOS device, or FFS bundle from device list")
-        self.ios_info_label.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9px;")
         self._disable_ios_artifacts_without_source()
 
     def _update_collect_button_state(self):
         """Update collect button state"""
         if getattr(self, '_token_validation_in_progress', False) or getattr(self, '_collection_in_progress', False):
             self.collect_btn.setEnabled(False)
-            self._update_scope_summary()
             self._update_workflow_status()
             return
 
         has_token = self.collection_token is not None
         selected_devices = self.device_manager.get_selected_devices()
         has_devices = len(selected_devices) > 0
-        has_artifacts = any(cb.isChecked() for cb in self.artifact_checks.values())
+        has_artifacts = self.artifact_selection.any_selected()
         has_axiom_sources = bool(self._selected_axiom_sources(selected_devices))
         has_export_sources = bool(self._selected_third_party_export_sources(selected_devices))
 
         self.collect_btn.setEnabled(has_token and has_devices and (has_artifacts or has_axiom_sources or has_export_sources))
-        self._update_scope_summary()
         self._update_workflow_status()
 
     def _set_simple_source_controls_enabled(self, enabled: bool):
@@ -2650,29 +2160,26 @@ class CollectorWindow(QMainWindow):
         self.validate_btn.setEnabled(not locked and not getattr(self, '_token_validation_in_progress', False))
         self.show_token_btn.setEnabled(not locked and not getattr(self, '_token_validation_in_progress', False))
         self.token_input.setEnabled(not locked and not getattr(self, '_token_validation_in_progress', False))
-        self.select_all_cb.setEnabled(not locked)
-        self.include_deleted_cb.setEnabled(not locked)
-        self.advanced_scope_cb.setEnabled(not locked)
         if hasattr(self, "source_back_btn"):
             self.source_back_btn.setEnabled(not locked)
         if hasattr(self, "source_detail_refresh_btn"):
             self.source_detail_refresh_btn.setEnabled(not locked)
+        if hasattr(self, "source_detail_open_btn"):
+            self.source_detail_open_btn.setEnabled(not locked)
         self._set_simple_source_controls_enabled(not locked)
-        self.artifacts_tab.setEnabled(not locked)
         if hasattr(self, 'linux_mount_path'):
             self.linux_mount_path.setEnabled(not locked)
         if hasattr(self, 'macos_mount_path'):
             self.macos_mount_path.setEnabled(not locked)
-        if hasattr(self, 'device_panel'):
-            self.device_panel.set_interaction_locked(locked)
-        for cb in self.artifact_checks.values():
-            cb.setEnabled(False if locked else self._is_artifact_allowed(cb.property("artifact_type") or ""))
+        self.evidence_source_registrar.set_interaction_locked(locked)
+        for artifact_type, selection in self.artifact_selection.items.items():
+            selection.enabled = False if locked else self._is_artifact_allowed(artifact_type)
         if not locked:
-            self._update_platform_tab_states()
+            self._update_platform_artifact_states()
             self._update_collect_button_state()
-        self._update_scope_summary()
         self._update_workflow_status()
         self._refresh_source_detail_panel()
+        self._refresh_selected_sources_panel()
 
     def _log_mobile_preflight(self, selected_devices: list, selected_artifacts: list):
         """Log mobile collection readiness without changing collection behavior."""
@@ -2835,41 +2342,6 @@ class CollectorWindow(QMainWindow):
         else:
             self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
             self.show_token_btn.setText(self._tr("token.show"))
-
-    def _toggle_select_all(self, state):
-        """Toggle artifact checkboxes for current tab only"""
-        if getattr(self, '_collection_in_progress', False):
-            return
-
-        checked = state == Qt.CheckState.Checked.value
-
-        # Determine category based on current tab index
-        current_tab = self.artifacts_tab.currentIndex()
-        category_map = {0: 'windows', 1: 'android', 2: 'ios', 3: 'linux', 4: 'macos', 5: 'ai_activity'}
-        current_category = category_map.get(current_tab, 'windows')
-
-        for artifact_type, cb in self.artifact_checks.items():
-            if not cb.isEnabled():
-                continue
-
-            # Check artifact category
-            artifact_info = ARTIFACT_TYPES.get(artifact_type, {})
-            artifact_category = artifact_info.get('category', 'windows')
-
-            # Windows tab: items without category or 'windows', exclude mobile
-            if current_category == 'windows':
-                if artifact_type.startswith('mobile_'):
-                    continue
-                if artifact_category not in ('windows', None) and 'category' in artifact_info:
-                    continue
-
-            # Other tabs: matching category only
-            elif artifact_category != current_category:
-                continue
-
-            cb.setChecked(checked)
-        self._update_scope_summary()
-        self._update_collect_button_state()
 
     def _start_connection_sync(self):
         """Start pairing or resume a trusted collector connection."""
@@ -3190,28 +2662,31 @@ class CollectorWindow(QMainWindow):
             self._allow_all_artifacts = allow_all
             self._mapped_allowed_artifacts = mapped_allowed
 
-            self._log(f"Mapped artifacts for GUI: {', '.join(sorted(mapped_allowed))}")
+            self._log(f"Mapped artifacts for collector: {', '.join(sorted(mapped_allowed))}")
             if allow_all:
                 self._log("All artifacts are allowed - selecting all by default")
 
             enabled_count = 0
-            for artifact_type, cb in self.artifact_checks.items():
+            for artifact_type, selection in self.artifact_selection.items.items():
                 allowed = self._is_artifact_allowed(artifact_type)
                 info = ARTIFACT_TYPES.get(artifact_type, {})
                 default_checked = allowed and not (allow_all and info.get('default_enabled') is False)
-                cb.setEnabled(allowed)
-                cb.setChecked(default_checked)
+                selection.enabled = allowed
+                selection.checked = default_checked
                 if allowed:
                     enabled_count += 1
                     if info.get('default_enabled') is False:
-                        tooltip = info.get('description', '')
-                        cb.setToolTip((tooltip + " | " if tooltip else "") + "Optional high-volume collection; select explicitly when needed")
+                        selection.availability_reason = "Optional high-volume collection"
+                    else:
+                        selection.availability_reason = ""
                 else:
-                    tooltip = info.get('description', '')
-                    cb.setToolTip((tooltip + " | " if tooltip else "") + "Not allowed by collection token")
+                    selection.availability_reason = "Not allowed by collection token"
 
-            self._log(f"[DEBUG] Enabled and checked {enabled_count}/{len(self.artifact_checks)} checkboxes")
-            self._update_platform_tab_states()
+            self._log(
+                f"[DEBUG] Enabled {enabled_count}/"
+                f"{len(self.artifact_selection.items)} artifact types"
+            )
+            self._update_platform_artifact_states()
 
             # Update collect button state including device selection status
             self._update_collect_button_state()
@@ -3286,7 +2761,7 @@ class CollectorWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Please select at least one device")
             return
 
-        selected = [k for k, cb in self.artifact_checks.items() if cb.isChecked()]
+        selected = self.artifact_selection.selected_types()
         axiom_sources = self._selected_axiom_sources(selected_devices)
         export_sources = self._selected_third_party_export_sources(selected_devices)
         if not selected and not axiom_sources and not export_sources:
@@ -4001,7 +3476,7 @@ class CollectorWindow(QMainWindow):
             # iOS encrypted backup password
             ios_backup_password=ios_backup_password,
             # Include deleted files option
-            include_deleted=self.include_deleted_cb.isChecked(),
+            include_deleted=self.artifact_selection.include_deleted,
             # Application config (for security settings)
             config=self.config,
             # Request signing
@@ -4487,7 +3962,6 @@ class CollectorWindow(QMainWindow):
         # Clear token input field
         if hasattr(self, 'token_input') and self.token_input:
             self.token_input.clear()
-        self._update_scope_summary()
         self._update_workflow_status()
 
     def _notify_server_cancel(self):

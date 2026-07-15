@@ -130,11 +130,12 @@ DEFAULT_MESSAGES: Dict[str, str] = {
         "automatically after authentication."
     ),
     "simple.detail.title": "Evidence source details",
-    "simple.detail.caption": "Choose one detected source.",
-    "simple.detail.caption.local": "Choose the local computer or drive to collect.",
-    "simple.detail.caption.phone": "Choose the connected phone, backup, or mobile FFS bundle.",
-    "simple.detail.caption.image": "Choose the registered disk image or mobile FFS bundle.",
-    "simple.detail.caption.tool": "Choose the registered forensic tool result.",
+    "simple.detail.caption": "Choose one or more detected sources.",
+    "simple.detail.caption.local": "Choose one or more local computers or drives to collect.",
+    "simple.detail.caption.phone": "Choose one or more connected phones, backups, or mobile FFS bundles.",
+    "simple.detail.caption.image": "Choose one or more registered disk images or mobile FFS bundles.",
+    "simple.detail.caption.tool": "Choose one or more registered forensic tool results.",
+    "simple.detail.open": "Open...",
     "simple.detail.refresh": "Refresh",
     "simple.detail.empty": "No matching source is available yet.",
     "simple.detail.empty.local": (
@@ -145,11 +146,15 @@ DEFAULT_MESSAGES: Dict[str, str] = {
         "then click Refresh."
     ),
     "simple.detail.empty.image": (
-        "No evidence file has been registered yet. Use Add Evidence File above."
+        "No evidence file has been registered yet. Click Open to add one."
     ),
     "simple.detail.empty.tool": (
         "No tool result has been registered yet. Use Add Tool Result above."
     ),
+    "simple.selected.title": "Selected analysis media",
+    "simple.selected.empty": "No analysis media selected.",
+    "simple.selected.summary": "{count} analysis media selected. Review the list before starting collection.",
+    "simple.selected.remove": "Remove",
     "simple.status.ready": (
         "Ready. Connect a case and choose an evidence source to begin."
     ),
@@ -190,13 +195,11 @@ DEFAULT_MESSAGES: Dict[str, str] = {
     ),
     "step.scope.tool": "{tool_count} verified tool result source(s) selected.",
     "step.scope.artifacts": "{artifact_count} artifact type(s) selected.",
-    "step.scope.choose": "Open advanced options to choose artifacts.",
+    "step.scope.choose": "No authorized artifact targets are available.",
     "step.scope.locked": "Collection scope is enabled after authentication.",
     "step.start.ready": "Ready to start collection.",
     "step.start.incomplete": "Complete the required steps above.",
     "group.connect": "1. Connect Case",
-    "group.source_details": "2. Evidence Source Details",
-    "group.expert_scope": "3. Expert Collection Scope",
     "group.progress": "Collection Progress",
     "group.status": "Collection Status",
     "group.technical_log": "Technical Activity Log",
@@ -206,35 +209,6 @@ DEFAULT_MESSAGES: Dict[str, str] = {
     "token.validate": "Validate Token",
     "token.validating": "Validating...",
     "token.status.validating": "Validating token...",
-    "scope.advanced": "Show advanced artifact options",
-    "scope.select_all": "Select All (current tab)",
-    "scope.deleted": "Include deleted files",
-    "scope.deleted.tooltip": (
-        "Recover and collect deleted files from MFT (slower but more thorough)"
-    ),
-    "scope.summary.auth_first": (
-        "Authenticate first. The server profile will enable the allowed "
-        "artifact set automatically."
-    ),
-    "scope.summary.deleted_on": "Deleted files included where supported.",
-    "scope.summary.deleted_off": "Deleted files excluded.",
-    "scope.summary.mixed": (
-        "Scope ready: {checked} selected artifact type(s) out of {enabled} "
-        "allowed, plus {tool_count} verified tool result source(s). {deleted}"
-    ),
-    "scope.summary.artifacts": (
-        "Recommended scope ready: {checked} selected artifact type(s) out of "
-        "{enabled} allowed. {deleted}"
-    ),
-    "scope.summary.tool": (
-        "Verified tool result scope ready: {tool_count} source(s). Server "
-        "parsing will expand AXIOM, Cellebrite, or Autopsy results into "
-        "searchable documents."
-    ),
-    "scope.summary.empty": (
-        "No artifact type selected. Open advanced options to choose artifacts. "
-        "{enabled} artifact type(s) are allowed."
-    ),
     "log.show": "Show technical activity log",
     "button.start": "Start Collection",
     "button.cancel": "Cancel",
