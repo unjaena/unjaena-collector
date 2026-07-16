@@ -33,6 +33,36 @@ USER_CONFIG_FILE = USER_CONFIG_DIR / "config.json"
 
 
 DEFAULT_MESSAGES: Dict[str, str] = {
+    "auth.browser.title": "Connect to unJaena AI",
+    "auth.browser.message": (
+        "A secure browser window will open to connect this collector."
+    ),
+    "auth.browser.instructions": (
+        "In the browser:\n"
+        "1. Sign in to unJaena AI.\n"
+        "2. Create or select an analysis case.\n"
+        "3. Approve the collector connection.\n\n"
+        "Return to this window after approval. No evidence is collected or "
+        "uploaded during this step."
+    ),
+    "auth.browser.open": "Open Browser",
+    "auth.browser.waiting": "Waiting for secure browser approval...",
+    "auth.browser.open_failed.title": "Browser could not be opened",
+    "auth.browser.open_failed.message": (
+        "The secure authorization link was copied to the clipboard. Open it "
+        "in your browser to continue."
+    ),
+    "auth.browser.approved": "Browser approval received - preparing this analysis",
+    "auth.browser.approved_status": "Authentication complete - continue in the collector",
+    "auth.callback.title": "Collector authentication complete",
+    "auth.callback.message": (
+        "The browser approval was securely returned to the collector."
+    ),
+    "auth.callback.next_title": "Continue in the collector",
+    "auth.callback.next_steps": (
+        "Return to the collector window. After the connection finishes, choose "
+        "the evidence source to continue. You may close this browser tab."
+    ),
     "wizard.step.token": "Enter key",
     "wizard.step.source": "Choose target",
     "wizard.step.status": "Check status",
@@ -67,7 +97,13 @@ DEFAULT_MESSAGES: Dict[str, str] = {
         "Collection did not complete. Open the technical log to review the cause."
     ),
     "wizard.button.back": "Back",
+    "wizard.button.case_status": "View case status",
     "wizard.button.new_collection": "Start another collection",
+    "wizard.case.opened": "The case status page was opened in your browser.",
+    "wizard.case.open_failed.title": "Case page could not be opened",
+    "wizard.case.open_failed.message": (
+        "The case page link was copied to the clipboard. Open it in your browser to continue."
+    ),
     "wizard.progress.overall": "Overall",
     "wizard.progress.collect": "1. Collect data",
     "wizard.progress.encrypt": "2. Protect data",

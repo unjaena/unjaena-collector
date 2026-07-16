@@ -27,16 +27,24 @@ class ArtifactSelectionModel:
         self._items: Dict[str, ArtifactSelection] = {}
         self.include_deleted = True
 
+        self.replace_registry(registry)
+
+    def replace_registry(self, registry: Mapping[str, Mapping[str, object]]) -> None:
+        """Rebuild selection state after an authenticated runtime profile update."""
+        items: Dict[str, ArtifactSelection] = {}
+
         for artifact_type, info in registry.items():
             category = str(info.get("category") or "windows")
             if category not in SUPPORTED_ARTIFACT_CATEGORIES:
                 continue
             if artifact_type.startswith("mobile_") and "category" not in info:
                 continue
-            self._items[artifact_type] = ArtifactSelection(
+            items[artifact_type] = ArtifactSelection(
                 artifact_type=artifact_type,
                 category=category,
             )
+
+        self._items = items
 
     @property
     def items(self) -> Dict[str, ArtifactSelection]:

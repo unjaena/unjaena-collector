@@ -6,11 +6,14 @@ Supports unified device management and parallel collection.
 """
 import asyncio
 import logging
+import os
 import queue
 import requests
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
+from urllib.parse import quote
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -19,8 +22,8 @@ from PyQt6.QtWidgets import (
     QStatusBar, QScrollArea, QComboBox, QStackedWidget,
     QApplication, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl
+from PyQt6.QtGui import QColor, QDesktopServices, QFont, QPainter, QPen
 
 from core.token_validator import TokenValidator, _get_ssl_verify
 from core.connection_client import CollectorConnectionClient
@@ -101,16 +104,28 @@ class ConnectionSyncWorker(QThread):
     """Maintain the trusted-device lease and deliver server connection commands."""
 
     command_ready = pyqtSignal(str, str, str)  # token, command_id, run_id
+    authorization_url_ready = pyqtSignal(str)
+    authorization_completed = pyqtSignal()
     status_changed = pyqtSignal(str)
     error_ready = pyqtSignal(str)
 
-    def __init__(self, server_url: str, client_version: str, pairing_code: str = ""):
+    def __init__(
+        self,
+        server_url: str,
+        client_version: str,
+        pairing_code: str = "",
+        locale: str = "en",
+        callback_copy: Optional[Dict[str, str]] = None,
+    ):
         super().__init__()
         self.server_url = server_url
         self.client_version = client_version
         self.pairing_code = pairing_code
+        self.locale = locale
+        self.callback_copy = callback_copy or {}
         self._running = True
         self._acks = queue.Queue()
+        self._inflight_command_ids: set[str] = set()
         self.client = None
 
     def stop(self):
@@ -119,45 +134,118 @@ class ConnectionSyncWorker(QThread):
     def acknowledge(self, command_id: str, success: bool, result: Optional[Dict] = None):
         self._acks.put((command_id, success, result or {}))
 
+    def _deliver_commands(self, data: Dict) -> set[str]:
+        delivered_command_ids: set[str] = set()
+        for command in data.get("commands") or []:
+            if command.get("type") != "connect_case":
+                continue
+            payload = command.get("payload") or {}
+            token = str(payload.get("session_token") or "")
+            if token:
+                command_id = str(command.get("id") or "")
+                if command_id and command_id in self._inflight_command_ids:
+                    continue
+                if command_id:
+                    delivered_command_ids.add(command_id)
+                    self._inflight_command_ids.add(command_id)
+                self.command_ready.emit(
+                    token,
+                    command_id,
+                    str(command.get("run_id") or ""),
+                )
+        return delivered_command_ids
+
+    def _drain_acknowledgements(self) -> list[tuple[str, bool]]:
+        acknowledged: list[tuple[str, bool]] = []
+        while True:
+            try:
+                command_id, success, result = self._acks.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self.client.acknowledge(command_id, success, result)
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Connection command ack failed: %s", exc)
+                self._acks.put((command_id, success, result))
+                break
+            self._inflight_command_ids.discard(command_id)
+            acknowledged.append((command_id, success))
+        return acknowledged
+
     def run(self):
+        authorization = None
         try:
             self.client = CollectorConnectionClient(self.server_url)
             if self.pairing_code:
+                # Compatibility path for already released web-to-collector links.
                 self.status_changed.emit("pairing")
                 self.client.claim(self.pairing_code, self.client_version)
                 self.pairing_code = ""
                 self.status_changed.emit("connected")
-            elif self.client.identity.device_id:
-                self.status_changed.emit("reconnecting")
             else:
-                self.status_changed.emit("unpaired")
-                return
+                self.status_changed.emit("authorizing")
+                authorization = self.client.begin_browser_authorization(
+                    self.client_version,
+                    self.locale,
+                    self.callback_copy,
+                )
+                self.authorization_url_ready.emit(authorization.authorization_url)
+                deadline = time.monotonic() + 10 * 60
+                last_compatibility_sync = 0.0
+                compatibility_command_ids: set[str] = set()
+
+                while self._running and time.monotonic() < deadline:
+                    compatibility_connected = False
+                    for command_id, success in self._drain_acknowledgements():
+                        if command_id not in compatibility_command_ids:
+                            continue
+                        compatibility_command_ids.discard(command_id)
+                        if success:
+                            compatibility_connected = True
+                        else:
+                            self.status_changed.emit("authorizing")
+                    if compatibility_connected:
+                        self.status_changed.emit("connected")
+                        break
+
+                    authorization_code = authorization.poll_for_code()
+                    if authorization_code:
+                        self.status_changed.emit("pairing")
+                        self.client.claim(
+                            authorization_code,
+                            self.client_version,
+                            authorization.code_verifier,
+                        )
+                        self.authorization_completed.emit()
+                        self.status_changed.emit("connected")
+                        break
+
+                    now = time.monotonic()
+                    if self.client.identity.device_id and now - last_compatibility_sync >= 5:
+                        last_compatibility_sync = now
+                        try:
+                            compatibility_command_ids.update(
+                                self._deliver_commands(self.client.sync())
+                            )
+                        except Exception as exc:
+                            logging.getLogger(__name__).warning(
+                                "Compatibility connection sync failed during browser authorization: %s",
+                                exc,
+                            )
+                else:
+                    if self._running:
+                        raise TimeoutError("Collector browser authorization expired")
+                    return
+
+                authorization.close()
+                authorization = None
 
             while self._running:
-                while True:
-                    try:
-                        command_id, success, result = self._acks.get_nowait()
-                    except queue.Empty:
-                        break
-                    try:
-                        self.client.acknowledge(command_id, success, result)
-                    except Exception as exc:
-                        logging.getLogger(__name__).warning("Connection command ack failed: %s", exc)
-
+                self._drain_acknowledgements()
                 try:
                     data = self.client.sync()
                     self.status_changed.emit("connected")
-                    for command in data.get("commands") or []:
-                        if command.get("type") != "connect_case":
-                            continue
-                        payload = command.get("payload") or {}
-                        token = str(payload.get("session_token") or "")
-                        if token:
-                            self.command_ready.emit(
-                                token,
-                                str(command.get("id") or ""),
-                                str(command.get("run_id") or ""),
-                            )
+                    self._deliver_commands(data)
                 except Exception as exc:
                     self.status_changed.emit("offline")
                     logging.getLogger(__name__).warning("Collector connection sync failed: %s", exc)
@@ -168,6 +256,9 @@ class ConnectionSyncWorker(QThread):
         except Exception as exc:
             logging.getLogger(__name__).exception("Collector connection worker failed")
             self.error_ready.emit(str(exc) or exc.__class__.__name__)
+        finally:
+            if authorization is not None:
+                authorization.close()
 
 
 class ServerHealthWorker(QThread):
@@ -266,6 +357,7 @@ class CollectorWindow(QMainWindow):
         self.session_token = None
         self.session_id = None
         self.case_id = None
+        self._last_case_status_url = ""
         self.collection_token = None
         self.server_url = None
         self.ws_url = None
@@ -285,6 +377,7 @@ class CollectorWindow(QMainWindow):
         self._connection_worker = None
         self._pending_connection_command_id = None
         self.connection_run_id = None
+        self._browser_authorization_completed = False
         self.artifact_selection = ArtifactSelectionModel(ARTIFACT_TYPES)
 
         # Unified device manager
@@ -410,6 +503,7 @@ class CollectorWindow(QMainWindow):
             "source_back_btn": ("setText", "wizard.button.back"),
             "collect_btn": ("setText", "button.start"),
             "cancel_btn": ("setText", "button.cancel"),
+            "case_status_btn": ("setText", "wizard.button.case_status"),
             "new_collection_btn": ("setText", "wizard.button.new_collection"),
             "overall_progress_label": ("setText", "wizard.progress.overall"),
             "stage1_label": ("setText", "wizard.progress.collect"),
@@ -1353,13 +1447,19 @@ class CollectorWindow(QMainWindow):
         self.cancel_btn.clicked.connect(self._cancel_collection)
 
         self.new_collection_btn = QPushButton(self._tr("wizard.button.new_collection"))
-        self.new_collection_btn.setObjectName("primaryButton")
         self.new_collection_btn.setMinimumHeight(38)
         self.new_collection_btn.setVisible(False)
         self.new_collection_btn.clicked.connect(self._restart_wizard)
 
+        self.case_status_btn = QPushButton(self._tr("wizard.button.case_status"))
+        self.case_status_btn.setObjectName("primaryButton")
+        self.case_status_btn.setMinimumHeight(38)
+        self.case_status_btn.setVisible(False)
+        self.case_status_btn.clicked.connect(self._open_case_status)
+
         footer_layout.addWidget(self.cancel_btn)
         footer_layout.addStretch()
+        footer_layout.addWidget(self.case_status_btn)
         footer_layout.addWidget(self.new_collection_btn)
         page_layout.addWidget(footer)
 
@@ -1527,8 +1627,32 @@ class CollectorWindow(QMainWindow):
         self.time_estimate_label.clear()
         self.log_text.clear()
         self.show_log_cb.setChecked(False)
+        self._last_case_status_url = ""
+        self.case_status_btn.setVisible(False)
         self.new_collection_btn.setVisible(False)
         self._show_wizard_step(0)
+
+    def _build_case_status_url(self) -> str:
+        """Build a non-secret case URL before collection credentials are cleared."""
+        if not self.server_url or not self.case_id:
+            return ""
+        locale_code = self.i18n.locale if self.i18n.locale in SUPPORTED_LOCALES else "en"
+        case_id = quote(str(self.case_id), safe="")
+        return f"{self.server_url.rstrip('/')}/{locale_code}/cases/{case_id}"
+
+    def _open_case_status(self):
+        """Open the completed collection's case page in the default browser."""
+        if not self._last_case_status_url:
+            return
+        if QDesktopServices.openUrl(QUrl(self._last_case_status_url)):
+            self.status_bar.showMessage(self._tr("wizard.case.opened"))
+            return
+        QApplication.clipboard().setText(self._last_case_status_url)
+        QMessageBox.information(
+            self,
+            self._tr("wizard.case.open_failed.title"),
+            self._tr("wizard.case.open_failed.message"),
+        )
 
     def _set_technical_log_visible(self, visible: bool):
         """Toggle the raw log without changing logging behavior."""
@@ -2352,13 +2476,72 @@ class CollectorWindow(QMainWindow):
             server_url=server_url,
             client_version=str(self.config.get("version") or "0.0.0"),
             pairing_code=str(self.config.pop("pairing_code", "") or ""),
+            locale=self.i18n.locale,
+            callback_copy={
+                "title": self._tr("auth.callback.title"),
+                "message": self._tr("auth.callback.message"),
+                "next_title": self._tr("auth.callback.next_title"),
+                "next_steps": self._tr("auth.callback.next_steps"),
+            },
         )
         self._connection_worker = worker
         worker.command_ready.connect(self._on_connection_command)
+        worker.authorization_url_ready.connect(self._on_connection_authorization_url)
+        worker.authorization_completed.connect(self._on_connection_authorization_completed)
         worker.status_changed.connect(self._on_connection_status)
         worker.error_ready.connect(self._on_connection_error)
         worker.finished.connect(self._on_connection_worker_finished)
         worker.start()
+
+    def _on_connection_authorization_url(self, url: str):
+        """Open the signed authorization request in the user's default browser."""
+        self._browser_authorization_completed = False
+        waiting_message = self._tr("auth.browser.waiting")
+        self.status_bar.showMessage(waiting_message)
+        self.token_status.setText(waiting_message)
+        self.token_status.setStyleSheet(f"color: {COLORS['warning']};")
+
+        notice = QMessageBox(self)
+        notice.setIcon(QMessageBox.Icon.Information)
+        notice.setWindowTitle(self._tr("auth.browser.title"))
+        notice.setText(self._tr("auth.browser.message"))
+        notice.setInformativeText(self._tr("auth.browser.instructions"))
+        open_button = notice.addButton(
+            self._tr("auth.browser.open"),
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        notice.setDefaultButton(open_button)
+        notice.exec()
+
+        if QDesktopServices.openUrl(QUrl(url)):
+            self.status_bar.showMessage(waiting_message)
+            return
+        QApplication.clipboard().setText(url)
+        QMessageBox.information(
+            self,
+            self._tr("auth.browser.open_failed.title"),
+            self._tr("auth.browser.open_failed.message"),
+        )
+
+    def _on_connection_authorization_completed(self):
+        """Bring the collector back after the loopback callback is accepted."""
+        self._browser_authorization_completed = True
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        if os.name == "nt":
+            try:
+                import ctypes
+
+                hwnd = int(self.winId())
+                ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                if not ctypes.windll.user32.SetForegroundWindow(hwnd):
+                    ctypes.windll.user32.FlashWindow(hwnd, True)
+            except Exception as exc:
+                logging.getLogger(__name__).debug("Collector focus request was denied: %s", exc)
+        self.status_bar.showMessage(self._tr("auth.browser.approved_status"))
+        self.token_status.setText(self._tr("auth.browser.approved"))
+        self.token_status.setStyleSheet(f"color: {COLORS['success']};")
 
     def _on_connection_worker_finished(self):
         worker = self.sender()
@@ -2367,6 +2550,7 @@ class CollectorWindow(QMainWindow):
 
     def _on_connection_status(self, status: str):
         labels = {
+            "authorizing": "Waiting for secure browser approval...",
             "pairing": "Connecting collector...",
             "reconnecting": "Restoring collector connection...",
             "connected": "Collector connected",
@@ -2374,9 +2558,21 @@ class CollectorWindow(QMainWindow):
             "unpaired": "Ready for collector connection",
         }
         self.status_bar.showMessage(labels.get(status, status))
+        if status == "authorizing":
+            self.token_status.setText(self._tr("auth.browser.waiting"))
+            self.token_status.setStyleSheet(f"color: {COLORS['warning']};")
         if status == "connected" and not self.session_id:
             self.token_status.setText("Collector connected - waiting for an analysis")
             self.token_status.setStyleSheet(f"color: {COLORS['success']};")
+
+    def _ack_pending_connection_command(self, success: bool, result: Dict) -> bool:
+        """Acknowledge one web-issued command after local validation finishes."""
+        command_id = self._pending_connection_command_id
+        if not command_id or not self._connection_worker:
+            return False
+        self._connection_worker.acknowledge(command_id, success, result)
+        self._pending_connection_command_id = None
+        return True
 
     def _on_connection_error(self, error: str):
         self._log(f"Collector connection failed: {error}", error=True)
@@ -2464,14 +2660,16 @@ class CollectorWindow(QMainWindow):
 
     def _on_token_validation_error(self, error: str):
         """Handle unexpected validation worker failures."""
-        if self._pending_connection_command_id and self._connection_worker:
-            self._connection_worker.acknowledge(
-                self._pending_connection_command_id,
-                False,
-                {"reason": error[:200]},
-            )
-            self._pending_connection_command_id = None
+        internal_command = self._ack_pending_connection_command(
+            False,
+            {"reason": error[:200]},
+        )
         self._set_token_validation_busy(False)
+        if internal_command and not self._browser_authorization_completed:
+            self.token_status.setText(self._tr("auth.browser.waiting"))
+            self.token_status.setStyleSheet(f"color: {COLORS['warning']};")
+            self._log("Previous web connection expired; waiting for current browser approval")
+            return
         self.token_status.setText("Invalid: validation failed")
         self.token_status.setStyleSheet("color: #f72585;")
         self._log(f"Token validation failed: {error}", error=True)
@@ -2491,14 +2689,6 @@ class CollectorWindow(QMainWindow):
 
     def _handle_token_validation_result(self, result):
         """Apply successful or failed token validation results."""
-
-        if self._pending_connection_command_id and self._connection_worker:
-            self._connection_worker.acknowledge(
-                self._pending_connection_command_id,
-                bool(result.valid),
-                {"case_id": getattr(result, "case_id", None), "error": getattr(result, "error", None)},
-            )
-            self._pending_connection_command_id = None
 
         if result.valid:
             # [Security] Original session token not stored (unnecessary after validation)
@@ -2535,7 +2725,7 @@ class CollectorWindow(QMainWindow):
             refreshed_ffs_bundles = 0
             if android_ffs_count or ios_ffs_count:
                 refreshed_ffs_bundles = self.device_manager.refresh_mobile_ffs_bundles()
-            self._build_artifact_tabs(preserve_index=True)
+            self.artifact_selection.replace_registry(ARTIFACT_TYPES)
             # Wire server-issued consent signing key through to the consent
             # dialog. Without this, the dialog falls back to the
             # CONSENT_SIGNING_KEY env var on the user's PC (typically unset)
@@ -2691,7 +2881,20 @@ class CollectorWindow(QMainWindow):
             # Update collect button state including device selection status
             self._update_collect_button_state()
             self._show_wizard_step(1)
+            self._ack_pending_connection_command(
+                True,
+                {"case_id": getattr(result, "case_id", None), "error": None},
+            )
         else:
+            internal_command = self._ack_pending_connection_command(
+                False,
+                {"case_id": None, "error": getattr(result, "error", None)},
+            )
+            if internal_command and not self._browser_authorization_completed:
+                self.token_status.setText(self._tr("auth.browser.waiting"))
+                self.token_status.setStyleSheet(f"color: {COLORS['warning']};")
+                self._log("Previous web connection expired; waiting for current browser approval")
+                return
             self.token_status.setText(f"Invalid: {result.error}")
             self.token_status.setStyleSheet("color: #f72585;")
 
@@ -3801,6 +4004,7 @@ class CollectorWindow(QMainWindow):
     def _collection_finished(self, success: bool, message: str):
         """Handle collection completion"""
         close_after_finish = getattr(self, '_close_after_worker_finish', False)
+        self._last_case_status_url = self._build_case_status_url()
 
         # Stop heartbeat timer and show final elapsed time
         self._heartbeat_timer.stop()
@@ -3859,6 +4063,9 @@ class CollectorWindow(QMainWindow):
         self.token_status.setText("New token required")
         self.token_status.setStyleSheet("color: #ffc107;")
         self._collection_result = bool(success)
+        self.case_status_btn.setVisible(
+            bool(self._last_case_status_url) and not close_after_finish
+        )
         self.new_collection_btn.setVisible(not close_after_finish)
         if success:
             self.simple_activity_label.setText(self._tr("wizard.status.complete"))
