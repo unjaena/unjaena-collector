@@ -1003,6 +1003,96 @@ class LocalMFTCollector(_LocalMFTBase):
                     else:
                         logger.debug(f"[MFT+Memory] {artifact_type}: collector={at_config.get('collector')}, skipping dump")
 
+        live_config = ARTIFACT_TYPES.get(artifact_type, {})
+        if live_config.get('registry_context'):
+            for result in self._collect_live_registry_context(
+                artifact_type, live_config
+            ):
+                yield result
+                if progress_callback:
+                    progress_callback(result[0])
+
+    def _collect_live_registry_context(
+        self,
+        artifact_type: str,
+        config: Dict[str, Any],
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """Collect explicit registry values authorized by the runtime profile."""
+        if os.name != 'nt':
+            return
+        system_drive = os.environ.get('SystemDrive', 'C:').rstrip(':').lower()
+        if str(self.volume).rstrip(':').lower() != system_drive:
+            return
+        try:
+            import base64
+            import json
+            import winreg
+        except ImportError:
+            return
+
+        roots = {
+            'HKCU': winreg.HKEY_CURRENT_USER,
+            'HKLM': winreg.HKEY_LOCAL_MACHINE,
+        }
+        values = []
+        for descriptor in config.get('registry_context', [])[:16]:
+            root_name = str(descriptor.get('root', '')).upper()
+            key_path = str(descriptor.get('path', ''))
+            root = roots.get(root_name)
+            if root is None or not key_path:
+                continue
+            try:
+                with winreg.OpenKey(root, key_path) as key:
+                    for value_name in descriptor.get('values', [])[:32]:
+                        try:
+                            value, value_type = winreg.QueryValueEx(key, value_name)
+                        except OSError:
+                            continue
+                        if isinstance(value, bytes):
+                            encoded: Any = {
+                                'encoding': 'base64',
+                                'data': base64.b64encode(value).decode('ascii'),
+                            }
+                        elif isinstance(value, (str, int)):
+                            encoded = value
+                        elif isinstance(value, (list, tuple)):
+                            encoded = [str(item) for item in value[:256]]
+                        else:
+                            encoded = str(value)
+                        values.append({
+                            'root': root_name,
+                            'path': key_path,
+                            'name': str(value_name),
+                            'type': int(value_type),
+                            'value': encoded,
+                        })
+            except OSError:
+                continue
+        if not values:
+            return
+
+        artifact_dir = self.output_dir / artifact_type
+        artifact_dir.mkdir(exist_ok=True)
+        output_path = artifact_dir / '_registry_context.json'
+        output_path.write_text(
+            json.dumps(
+                {
+                    'schema': 'unjaena.registry-context.v1',
+                    'artifact_type': artifact_type,
+                    'values': values,
+                },
+                ensure_ascii=True,
+                separators=(',', ':'),
+            ),
+            encoding='utf-8',
+        )
+        metadata = self._get_metadata(
+            str(output_path), output_path, artifact_type
+        )
+        metadata['collection_method'] = 'authorized_registry_context'
+        metadata['original_path'] = 'registry://authorized-context'
+        yield str(output_path), metadata
+
     def _get_metadata(
         self,
         src_path: str,
@@ -1168,6 +1258,28 @@ class LocalMFTCollector(_LocalMFTBase):
                             yield result
                             if progress_callback:
                                 progress_callback(result[0])
+
+        elif collector_type == 'collect_app_bundle':
+            seen_paths = set()
+            for path_pattern in paths:
+                expanded = self._expand_path(path_pattern)
+                for match in glob.glob(expanded, recursive=True):
+                    if os.path.isdir(match):
+                        continue
+                    normalized = os.path.normcase(os.path.abspath(match))
+                    if normalized in seen_paths:
+                        continue
+                    seen_paths.add(normalized)
+                    result = self._copy_file_with_metadata(
+                        match, artifact_dir, artifact_type
+                    )
+                    if result:
+                        result[1]['collection_method'] = 'application_bundle_directory_fallback'
+                        result[1]['source_pattern'] = path_pattern
+                        collected_count += 1
+                        yield result
+                        if progress_callback:
+                            progress_callback(result[0])
 
         elif collector_type == 'collect_ai_activity':
             seen_paths = set()
@@ -1792,6 +1904,7 @@ class ArtifactCollector:
         self._scan_cache = None
         # Pre-built index from scan cache for O(1) extension/filename lookups
         self._scan_index = None
+        self._app_bundle_seen: Dict[str, set[str]] = {}
 
     def _get_physical_drive_number(self) -> Optional[int]:
         """Get physical drive number from volume letter"""
@@ -2164,6 +2277,14 @@ class ArtifactCollector:
                 progress_callback
             )
 
+        if artifact_info.get('registry_context'):
+            for result in self._collect_registry_context(
+                artifact_type, artifact_info, artifact_dir
+            ):
+                yield result
+                if progress_callback:
+                    progress_callback(result[0])
+
     def _collect_browsers(
         self,
         artifact_info: Dict[str, Any],
@@ -2398,6 +2519,20 @@ class ArtifactCollector:
                     yield from self._collect_forensic_disk_file(
                         file_path, artifact_type, artifact_dir, progress_callback
                     )
+
+        for extra in mft_config.get('additional_patterns', []):
+            if not isinstance(extra, dict) or not extra.get('pattern'):
+                continue
+            yield from self._collect_forensic_disk_pattern(
+                str(extra.get('base_path', '')),
+                str(extra['pattern']),
+                artifact_type,
+                artifact_dir,
+                progress_callback,
+                include_deleted,
+                extensions=extra.get('extensions'),
+                exclude_extensions=extra.get('exclude_extensions'),
+            )
 
         # ==========================================================
         # System-wide paths (TeamViewer/AnyDesk ProgramData, etc.)
@@ -3112,6 +3247,21 @@ class ArtifactCollector:
                         if progress_callback:
                             progress_callback(result[0])
 
+        for extra in mft_config.get('additional_patterns', []):
+            if not isinstance(extra, dict) or not extra.get('pattern'):
+                continue
+            for result in self.mft_collector.collect_by_pattern(
+                str(extra.get('base_path', '')),
+                str(extra['pattern']),
+                artifact_type,
+                include_deleted,
+                extensions=extra.get('extensions'),
+                exclude_extensions=extra.get('exclude_extensions'),
+            ):
+                yield result
+                if progress_callback:
+                    progress_callback(result[0])
+
         # System-wide paths (TeamViewer/AnyDesk ProgramData, etc.)
         for sys_path in mft_config.get('system_base_paths', []):
             extensions = mft_config.get('extensions', None)
@@ -3334,6 +3484,132 @@ class ArtifactCollector:
     # =========================================================================
     # Legacy Collection Methods (Fallback)
     # =========================================================================
+
+    def collect_app_bundle(
+        self,
+        pattern: str,
+        output_dir: Path,
+        artifact_type: str,
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """Collect a bounded application bundle while preserving its path."""
+        expanded_pattern = os.path.expandvars(pattern)
+        if re.match(r'^[A-Za-z]:[\\/]', expanded_pattern):
+            volume = getattr(self, 'volume', expanded_pattern[0])
+            expanded_pattern = f"{volume}:{expanded_pattern[2:]}"
+
+        seen_paths = self._app_bundle_seen.setdefault(artifact_type, set())
+        for src_path in glob.glob(expanded_pattern, recursive=True):
+            if not os.path.isfile(src_path):
+                continue
+
+            normalized = os.path.normcase(os.path.abspath(src_path))
+            if normalized in seen_paths:
+                continue
+            seen_paths.add(normalized)
+
+            rel_output = self._safe_ai_output_path(src_path)
+            dst_path = output_dir / rel_output
+            try:
+                validate_safe_path(output_dir, dst_path)
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, dst_path)
+                collection_method = 'application_bundle_file_api'
+            except (PermissionError, OSError, ValueError):
+                try:
+                    vss_path = self._get_vss_path(str(src_path))
+                    if not vss_path or not Path(vss_path).is_file():
+                        continue
+                    validate_safe_path(output_dir, dst_path)
+                    dst_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(vss_path, dst_path)
+                    collection_method = 'application_bundle_vss'
+                except (PermissionError, OSError, ValueError):
+                    continue
+
+            metadata = self._get_metadata(src_path, dst_path, artifact_type)
+            metadata['collection_method'] = collection_method
+            metadata['source_pattern'] = pattern
+            yield str(dst_path), metadata
+
+    def _collect_registry_context(
+        self,
+        artifact_type: str,
+        artifact_info: Dict[str, Any],
+        output_dir: Path,
+    ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
+        """Collect explicitly authorized registry values for a live bundle."""
+        if os.name != 'nt' or self.decrypted_reader is not None:
+            return
+
+        system_drive = os.environ.get('SystemDrive', 'C:').rstrip(':').lower()
+        if str(self.volume).rstrip(':').lower() != system_drive:
+            return
+
+        try:
+            import base64
+            import json
+            import winreg
+        except ImportError:
+            return
+
+        roots = {
+            'HKCU': winreg.HKEY_CURRENT_USER,
+            'HKLM': winreg.HKEY_LOCAL_MACHINE,
+        }
+        records: List[Dict[str, Any]] = []
+        for descriptor in artifact_info.get('registry_context', [])[:16]:
+            root_name = str(descriptor.get('root', '')).upper()
+            key_path = str(descriptor.get('path', ''))
+            root = roots.get(root_name)
+            if root is None or not key_path:
+                continue
+            try:
+                with winreg.OpenKey(root, key_path) as key:
+                    for value_name in descriptor.get('values', [])[:32]:
+                        try:
+                            value, value_type = winreg.QueryValueEx(key, value_name)
+                        except OSError:
+                            continue
+                        if isinstance(value, bytes):
+                            encoded_value: Any = {
+                                'encoding': 'base64',
+                                'data': base64.b64encode(value).decode('ascii'),
+                            }
+                        elif isinstance(value, (str, int)):
+                            encoded_value = value
+                        elif isinstance(value, (list, tuple)):
+                            encoded_value = [str(item) for item in value[:256]]
+                        else:
+                            encoded_value = str(value)
+                        records.append({
+                            'root': root_name,
+                            'path': key_path,
+                            'name': str(value_name),
+                            'type': int(value_type),
+                            'value': encoded_value,
+                        })
+            except OSError:
+                continue
+
+        if not records:
+            return
+
+        output_path = output_dir / '_registry_context.json'
+        payload = {
+            'schema': 'unjaena.registry-context.v1',
+            'artifact_type': artifact_type,
+            'values': records,
+        }
+        output_path.write_text(
+            json.dumps(payload, ensure_ascii=True, separators=(',', ':')),
+            encoding='utf-8',
+        )
+        metadata = self._get_metadata(
+            str(output_path), output_path, artifact_type
+        )
+        metadata['collection_method'] = 'authorized_registry_context'
+        metadata['original_path'] = 'registry://authorized-context'
+        yield str(output_path), metadata
 
     def collect_ai_activity(
         self,

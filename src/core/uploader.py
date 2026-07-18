@@ -22,6 +22,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 
 import aiohttp
 import requests
@@ -66,10 +67,12 @@ HEARTBEAT_INTERVAL_SECONDS = 15
 RECONNECT_BACKOFF_INITIAL = 3
 RECONNECT_BACKOFF_MAX = 60
 WS_RECEIVE_TIMEOUT = 30  # if no message for this long, assume dead
+PARSING_UPLOAD_OPERATION_NAMESPACE = "unjaena-parsing-upload-v1"
 
 # Consolidated API endpoint paths for maintainability.
 _ENDPOINTS = {
     'raw_upload': '/api/v1/collector/raw-files/upload',
+    'credit_preflight': '/api/v1/collector/uploads/preflight',
     'presigned_url': '/api/v1/collector/r2/presigned-url',
     'upload_complete': '/api/v1/collector/r2/upload-complete',
     'abort_upload': '/api/v1/collector/r2/abort-upload',
@@ -299,6 +302,12 @@ class RealTimeUploader:
         self._dev_mode = config.get('dev_mode', False) if config else False
         self.request_signer = request_signer
         self.profile_id = profile_id
+        self.request_retries = _coerce_int(
+            os.getenv("COLLECTOR_RAW_UPLOAD_RETRIES", (config or {}).get("raw_upload_retries")),
+            5,
+            1,
+            10,
+        )
         self.ws = None
 
         # [2026-04-27 Phase 4] Control-protocol state
@@ -592,6 +601,85 @@ class RealTimeUploader:
             except Exception as e:
                 logger.warning(f"Failed to send progress: {e}")
 
+    async def _request_credit_preflight_async(
+        self,
+        *,
+        file_path: str,
+        file_size: int,
+        file_hash: str,
+        artifact_type: str,
+        operation_id: str,
+        metadata: dict,
+    ) -> dict:
+        endpoint = _ENDPOINTS["credit_preflight"]
+        payload = {
+            "case_id": self.case_id,
+            "operation_id": operation_id,
+            "artifact_type": artifact_type,
+            "file_name": Path(file_path).name,
+            "file_size": file_size,
+            "file_hash": file_hash,
+            "profile_id": self.profile_id,
+            "original_path": str((metadata or {}).get("original_path") or file_path),
+        }
+        body = canonical_json_bytes(payload)
+        timeout = aiohttp.ClientTimeout(total=60)
+        last_error = "Credit preflight failed"
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for attempt in range(1, self.request_retries + 1):
+                headers = {
+                    "X-Session-ID": self.session_id,
+                    "X-Collection-Token": self.collection_token,
+                    "Content-Type": "application/json",
+                }
+                if self.request_signer:
+                    headers.update(self.request_signer.sign_request(
+                        "POST", endpoint, body, self.collection_token
+                    ))
+                try:
+                    async with session.post(
+                        f"{self.server_url}{endpoint}",
+                        data=body,
+                        headers=headers,
+                        ssl=_get_ssl_verify(),
+                    ) as response:
+                        if response.status == 200:
+                            return await response.json(content_type=None)
+                        try:
+                            response_json = await response.json(content_type=None)
+                            detail = response_json.get("detail", response_json)
+                        except Exception:
+                            detail = {}
+                        if response.status == 402:
+                            raise CreditPausedError(
+                                detail.get("message", "Insufficient credits for this upload."),
+                                detail=detail,
+                            )
+                        if response.status in (429, 502, 503, 504):
+                            wait = _safe_retry_after(response, default=min(60, 5 * attempt))
+                            last_error = f"Credit preflight failed ({response.status})"
+                            if attempt < self.request_retries:
+                                logger.warning(
+                                    "[CREDIT_PREFLIGHT] HTTP %s; retrying metadata only in %ss",
+                                    response.status,
+                                    wait,
+                                )
+                                await asyncio.sleep(wait)
+                                continue
+                        raise RuntimeError(
+                            f"Credit preflight failed ({response.status}): "
+                            f"{detail.get('error', 'request rejected')}"
+                        )
+                except CreditPausedError:
+                    raise
+                except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                    last_error = f"Credit preflight connection error: {type(exc).__name__}"
+                    if attempt < self.request_retries:
+                        await asyncio.sleep(min(60, 5 * attempt))
+                        continue
+                    break
+        raise RuntimeError(last_error)
+
     async def upload_file(
         self,
         file_path: str,
@@ -638,6 +726,64 @@ class RealTimeUploader:
             )
 
         try:
+            digest = hashlib.sha256()
+            with open(file_path, "rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            file_hash = digest.hexdigest()
+        except OSError as exc:
+            return UploadResult.from_error(f"Cannot hash upload file: {exc}")
+        operation_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "|".join((
+                PARSING_UPLOAD_OPERATION_NAMESPACE,
+                str(self.session_id or ""),
+                str(self.case_id or ""),
+                os.path.abspath(file_path),
+                file_hash,
+            )),
+        ))
+        upload_metadata = dict(metadata or {})
+        upload_metadata.update({
+            "original_hash": file_hash,
+            "original_size": file_size,
+            "artifact_type": artifact_type,
+            "credit_operation_id": operation_id,
+        })
+        try:
+            preflight = await self._request_credit_preflight_async(
+                file_path=file_path,
+                file_size=file_size,
+                file_hash=file_hash,
+                artifact_type=artifact_type,
+                operation_id=operation_id,
+                metadata=upload_metadata,
+            )
+        except CreditPausedError as exc:
+            return UploadResult(
+                success=False,
+                error=str(exc),
+                error_title="Upload Paused",
+                error_solution="Please recharge credits. No evidence bytes were uploaded.",
+                is_recoverable=False,
+                is_credit_paused=True,
+            )
+        except Exception as exc:
+            logger.warning("[CREDIT_PREFLIGHT] Async upload not started: %s", exc)
+            return UploadResult(
+                success=False,
+                error="Credit verification is temporarily unavailable.",
+                error_title="Upload Not Started",
+                error_solution="Retry later. No evidence bytes were uploaded.",
+                is_recoverable=True,
+            )
+        if preflight.get("already_completed") and preflight.get("file_id"):
+            return UploadResult(success=True, artifact_id=str(preflight["file_id"]))
+        credit_ticket = str(preflight.get("credit_ticket") or "")
+        if not credit_ticket:
+            return UploadResult.from_error("Credit preflight returned no admission ticket")
+
+        try:
             # Dynamic timeout calculation based on file size (min 5 min, max 30 min)
             # Assuming 10MB/s upload speed + 2 min buffer time
             upload_timeout = max(300, min(1800, (file_size / (10 * 1024 * 1024)) + 120))
@@ -653,7 +799,7 @@ class RealTimeUploader:
                         content_type='application/octet-stream'
                     )
                     data.add_field('artifact_type', artifact_type)
-                    data.add_field('metadata', json.dumps(metadata))
+                    data.add_field('metadata', json.dumps(upload_metadata))
                     if self.case_id:
                         data.add_field('case_id', self.case_id)
                     # P0 Legally required: Send consent record to server
@@ -663,6 +809,12 @@ class RealTimeUploader:
                     upload_headers = {
                         'X-Session-ID': self.session_id,
                         'X-Collection-Token': self.collection_token,
+                        'X-Credit-Ticket': credit_ticket,
+                        'X-Credit-Operation-ID': operation_id,
+                        'X-Case-ID': str(self.case_id or ''),
+                        'X-Artifact-Type': artifact_type,
+                        'X-File-Size': str(file_size),
+                        'X-File-Hash': file_hash,
                     }
                     if self.request_signer:
                         upload_headers.update(self.request_signer.sign_request(
@@ -679,7 +831,7 @@ class RealTimeUploader:
                             result = await response.json()
                             return UploadResult(
                                 success=True,
-                                artifact_id=result.get('artifact_id'),
+                                artifact_id=result.get('file_id') or result.get('artifact_id'),
                             )
                         else:
                             await response.text()
@@ -815,6 +967,109 @@ class SyncUploader:
             self._thread_local.session = session
         return session
 
+    @staticmethod
+    def _compute_upload_hash(file_path: str) -> str:
+        digest = hashlib.sha256()
+        with open(file_path, "rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _request_credit_preflight(
+        self,
+        *,
+        file_path: str,
+        file_size: int,
+        file_hash: str,
+        artifact_type: str,
+        operation_id: str,
+        metadata: dict,
+    ) -> dict:
+        """Reserve credits with metadata only; never retries evidence bytes."""
+        endpoint = _ENDPOINTS["credit_preflight"]
+        payload = {
+            "case_id": self.case_id,
+            "operation_id": operation_id,
+            "artifact_type": artifact_type,
+            "file_name": Path(file_path).name,
+            "file_size": file_size,
+            "file_hash": file_hash,
+            "profile_id": self.profile_id,
+            "original_path": str((metadata or {}).get("original_path") or file_path),
+        }
+        body = canonical_json_bytes(payload)
+        max_retries = self.request_retries
+        last_error = "Credit preflight failed"
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                headers = {
+                    "X-Session-ID": self.session_id,
+                    "X-Collection-Token": self.collection_token,
+                    "Content-Type": "application/json",
+                }
+                if self.request_signer:
+                    headers.update(self.request_signer.sign_request(
+                        "POST", endpoint, body, self.collection_token
+                    ))
+                response = self._http_session().post(
+                    f"{self.server_url}{endpoint}",
+                    data=body,
+                    headers=headers,
+                    timeout=60,
+                    verify=_get_ssl_verify(),
+                )
+                if response.status_code == 200:
+                    return response.json()
+                if response.status_code == 402:
+                    try:
+                        detail = response.json().get("detail", response.json())
+                    except Exception:
+                        detail = {}
+                    raise CreditPausedError(
+                        detail.get("message", "Insufficient credits for this upload."),
+                        detail=detail,
+                    )
+                if response.status_code in (429, 502, 503, 504):
+                    retry_after = _safe_retry_after(
+                        response, default=min(60, 5 * attempt)
+                    )
+                    last_error = (
+                        f"Credit preflight failed ({response.status_code}): "
+                        f"{_user_upload_message(response.status_code, retry_after=retry_after)}"
+                    )
+                    if attempt < max_retries:
+                        logger.warning(
+                            "[CREDIT_PREFLIGHT] HTTP %s (attempt %s/%s); "
+                            "retrying metadata only in %ss",
+                            response.status_code,
+                            attempt,
+                            max_retries,
+                            retry_after,
+                        )
+                        time.sleep(retry_after)
+                        continue
+                sanitized = _sanitize_error_for_logging(response.text)
+                raise RuntimeError(
+                    f"Credit preflight failed ({response.status_code}): {sanitized}"
+                )
+            except CreditPausedError:
+                raise
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                last_error = f"Credit preflight connection error: {type(exc).__name__}"
+                if attempt < max_retries:
+                    wait = min(60, 5 * attempt)
+                    logger.warning(
+                        "[CREDIT_PREFLIGHT] %s; retrying metadata only in %ss",
+                        type(exc).__name__,
+                        wait,
+                    )
+                    time.sleep(wait)
+                    continue
+            except RuntimeError:
+                raise
+        raise RuntimeError(last_error)
+
     def upload_file(
         self,
         file_path: str,
@@ -869,11 +1124,74 @@ class SyncUploader:
             except TypeError:
                 return self.large_file_uploader.upload_file(file_path, artifact_type, metadata)
 
+        try:
+            file_hash = self._compute_upload_hash(file_path)
+        except OSError as exc:
+            return UploadResult.from_error(f"Cannot hash upload file: {exc}")
+        operation_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "|".join((
+                PARSING_UPLOAD_OPERATION_NAMESPACE,
+                str(self.session_id or ""),
+                str(self.case_id or ""),
+                os.path.abspath(file_path),
+                file_hash,
+            )),
+        ))
+        upload_metadata = dict(metadata or {})
+        upload_metadata.update({
+            "original_hash": file_hash,
+            "original_size": file_size,
+            "artifact_type": artifact_type,
+            "credit_operation_id": operation_id,
+        })
+
+        try:
+            preflight = self._request_credit_preflight(
+                file_path=file_path,
+                file_size=file_size,
+                file_hash=file_hash,
+                artifact_type=artifact_type,
+                operation_id=operation_id,
+                metadata=upload_metadata,
+            )
+        except CreditPausedError as exc:
+            return UploadResult(
+                success=False,
+                error=str(exc),
+                error_title="Upload Paused",
+                error_solution=(
+                    "Please check your account balance on the web platform. "
+                    "No evidence bytes were uploaded."
+                ),
+                is_recoverable=False,
+                is_credit_paused=True,
+            )
+        except Exception as exc:
+            logger.warning("[CREDIT_PREFLIGHT] Upload not started: %s", exc)
+            return UploadResult(
+                success=False,
+                error="Credit verification is temporarily unavailable.",
+                error_title="Upload Not Started",
+                error_solution="Retry later. No evidence bytes were uploaded.",
+                is_recoverable=True,
+            )
+
+        if preflight.get("already_completed") and preflight.get("file_id"):
+            return UploadResult(success=True, artifact_id=str(preflight["file_id"]))
+        credit_ticket = str(preflight.get("credit_ticket") or "")
+        if not credit_ticket:
+            return UploadResult.from_error("Credit preflight returned no admission ticket")
+
         # Dynamic timeout: 1MB/s baseline + 5min buffer, no upper cap for large files
         upload_timeout = max(300, (file_size / (1 * 1024 * 1024)) + 300)
 
         # Retry with backoff (network instability and server-side throttling during large uploads)
-        max_retries = self.request_retries
+        # Once a multipart POST starts, an HTTP/connection failure is ambiguous:
+        # the server may already have received the entire file.  Do not perform
+        # automatic whole-file retries.  A later user retry reuses the stable
+        # operation_id and preflight resolves an already-accepted upload.
+        max_retries = 1
         last_error = None
 
         for attempt in range(1, max_retries + 1):
@@ -884,7 +1202,7 @@ class SyncUploader:
                     }
                     data = {
                         'artifact_type': artifact_type,
-                        'metadata': json.dumps(metadata),
+                        'metadata': json.dumps(upload_metadata),
                     }
                     if self.case_id:
                         data['case_id'] = self.case_id
@@ -896,6 +1214,12 @@ class SyncUploader:
                     headers = {
                         'X-Session-ID': self.session_id,
                         'X-Collection-Token': self.collection_token,
+                        'X-Credit-Ticket': credit_ticket,
+                        'X-Credit-Operation-ID': operation_id,
+                        'X-Case-ID': str(self.case_id or ''),
+                        'X-Artifact-Type': artifact_type,
+                        'X-File-Size': str(file_size),
+                        'X-File-Hash': file_hash,
                     }
                     if self.request_signer:
                         headers.update(self.request_signer.sign_request(
@@ -932,7 +1256,7 @@ class SyncUploader:
                             logger.info(f"[UPLOAD] Succeeded on attempt {attempt}")
                         return UploadResult(
                             success=True,
-                            artifact_id=result.get('artifact_id'),
+                            artifact_id=result.get('file_id') or result.get('artifact_id'),
                         )
                     else:
                         error_text = response.text
@@ -954,14 +1278,19 @@ class SyncUploader:
                                 f"{_user_upload_message(response.status_code, retry_after=retry_after)}"
                             )
                             sanitized_error = _sanitize_error_for_logging(error_text)
-                            logger.warning(
-                                f"[UPLOAD] HTTP {response.status_code} "
-                                f"(attempt {attempt}/{max_retries}), retrying in {retry_after}s: "
-                                f"{sanitized_error}"
-                            )
                             if attempt < max_retries:
+                                logger.warning(
+                                    f"[UPLOAD] HTTP {response.status_code} "
+                                    f"(attempt {attempt}/{max_retries}), retrying in {retry_after}s: "
+                                    f"{sanitized_error}"
+                                )
                                 time.sleep(retry_after)
                                 continue
+                            logger.warning(
+                                f"[UPLOAD] HTTP {response.status_code}; "
+                                "whole-file retry suppressed because server acceptance is ambiguous: "
+                                f"{sanitized_error}"
+                            )
                             break
 
                         # Non-retryable HTTP errors (client/request state issues)
@@ -1177,11 +1506,25 @@ class DirectUploader:
 
         return file_hash
 
-    def _request_presigned_url(self, file_path: str, artifact_type: str, file_hash: str) -> dict:
+    def _request_presigned_url(
+        self, file_path: str, artifact_type: str, file_hash: str,
+        operation_id: str = "",
+    ) -> dict:
         """Request presigned URL from server (up to 5 retries)."""
         file_size = os.path.getsize(file_path)
         file_name = Path(file_path).name
         endpoint = _ENDPOINTS['presigned_url']
+        if not operation_id:
+            operation_id = str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                "|".join((
+                    PARSING_UPLOAD_OPERATION_NAMESPACE,
+                    str(self.session_id or ""),
+                    str(self.case_id or ""),
+                    os.path.abspath(file_path),
+                    file_hash,
+                )),
+            ))
 
         payload = {
             "case_id": self.case_id,
@@ -1190,6 +1533,7 @@ class DirectUploader:
             "file_hash": file_hash,
             "artifact_type": artifact_type,
             "profile_id": self.profile_id,
+            "operation_id": operation_id,
         }
 
         max_retries = self.request_retries
@@ -1366,6 +1710,7 @@ class DirectUploader:
         self, key: str, upload_id: str, file_hash: str,
         file_name: str, artifact_type: str, file_size: int = 0, parts: list = None,
         is_encrypted: bool = False, original_path: str = "",
+        operation_id: str = "", credit_ticket: str = "",
     ) -> dict:
         """Confirm upload completion with server (up to 5 retries)."""
         endpoint = _ENDPOINTS['upload_complete']
@@ -1383,6 +1728,8 @@ class DirectUploader:
             "consent_record": self.consent_record,
             "original_path": original_path,
             "profile_id": self.profile_id,
+            "operation_id": operation_id,
+            "credit_ticket": credit_ticket,
         }
 
         max_retries = self.request_retries
@@ -1523,6 +1870,16 @@ class DirectUploader:
             return UploadResult.from_error(f"Hash computation failed: {e}")
 
         file_name = Path(file_path).name
+        operation_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "|".join((
+                PARSING_UPLOAD_OPERATION_NAMESPACE,
+                str(self.session_id or ""),
+                str(self.case_id or ""),
+                os.path.abspath(file_path),
+                file_hash,
+            )),
+        ))
         presigned_info = None
         encrypted_path = None
 
@@ -1533,11 +1890,19 @@ class DirectUploader:
                     file_path, artifact_type, metadata, progress_callback
                 )
             presign_start = time.perf_counter()
-            presigned_info = self._request_presigned_url(file_path, artifact_type, file_hash)
+            presigned_info = self._request_presigned_url(
+                file_path, artifact_type, file_hash, operation_id
+            )
             timings['presigned_ms'] = int((time.perf_counter() - presign_start) * 1000)
             key = presigned_info['key']
             is_multipart = presigned_info.get('multipart', False)
             upload_id = presigned_info.get('upload_id')
+            credit_ticket = str(presigned_info.get('credit_ticket') or '')
+            credit_operation_id = str(
+                presigned_info.get('credit_operation_id') or operation_id
+            )
+            if not credit_ticket or credit_operation_id != operation_id:
+                raise RuntimeError("Presigned upload response has invalid credit admission")
 
             # Step 1.5: Per-case data protection if the server provides a secret.
             secret_field = 'enc' + 'ryption' + '_' + 'k' + 'ey'
@@ -1611,6 +1976,8 @@ class DirectUploader:
                 parts=completed_parts,
                 is_encrypted=is_encrypted,
                 original_path=original_path,
+                operation_id=operation_id,
+                credit_ticket=credit_ticket,
             )
             timings['confirm_ms'] = int((time.perf_counter() - confirm_start) * 1000)
             timings['total_ms'] = int((time.perf_counter() - total_start) * 1000)
