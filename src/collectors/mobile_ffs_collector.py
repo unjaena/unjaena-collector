@@ -13,6 +13,7 @@ session.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -161,6 +162,8 @@ class MobileFFSBundleCollector:
     """Per-artifact lazy extractor over an open Cellebrite zip handle."""
 
     SQLITE_SUFFIXES = (".db", ".sqlite", ".sqlitedb", ".sqlite3")
+    SQLITE_BUNDLE_MANIFEST = "__unjaena_sqlite_bundle__.json"
+    SQLITE_BUNDLE_FORMAT = "unjaena-mobile-sqlite-bundle"
 
     def __init__(self, output_dir: str, zip_path: str):
         self.output_dir = Path(output_dir)
@@ -237,7 +240,17 @@ class MobileFFSBundleCollector:
             if app_like:
                 self._artifacts_by_type.setdefault("mobile_ios_app", app_like)
 
-    def _stage_upload_file(self, artifact_type: str, entry) -> Path:
+    @staticmethod
+    def _safe_upload_name(source_name: str) -> str:
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", source_name).strip("._")
+        return (safe_name or "artifact.bin")[:96]
+
+    def _stage_upload_file(
+        self,
+        artifact_type: str,
+        entry: ExtractedEntry,
+        sidecar_entries: Iterable[ExtractedEntry] = (),
+    ) -> Path:
         """Move a nested extracted entry to a short upload-staging path.
 
         Zip paths can be deeply nested. Returning those paths directly makes
@@ -246,14 +259,52 @@ class MobileFFSBundleCollector:
         stable flat copy under ``ffs_bundle/_upload``.
         """
         source_name = entry.zip_entry_path.replace("\\", "/").rsplit("/", 1)[-1]
-        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", source_name).strip("._")
-        if not safe_name:
-            safe_name = "artifact.bin"
-        safe_name = safe_name[:96]
+        safe_name = self._safe_upload_name(source_name)
 
         prefix = (entry.source_sha256 or "unknown")[:16]
         upload_dir = self.output_dir / "ffs_bundle" / "_upload" / artifact_type
         upload_dir.mkdir(parents=True, exist_ok=True)
+        companions = list(sidecar_entries)
+        if companions:
+            candidate = upload_dir / f"{prefix}_{safe_name}.sqlitebundle.zip"
+            if not candidate.exists():
+                members = [entry, *companions]
+                manifest_members = []
+                with zipfile.ZipFile(candidate, "w", compression=zipfile.ZIP_STORED) as bundle:
+                    used_names = set()
+                    for member in members:
+                        member_name = self._safe_upload_name(
+                            member.zip_entry_path.replace("\\", "/").rsplit("/", 1)[-1]
+                        )
+                        if member_name in used_names:
+                            raise ContainerSafetyError(
+                                f"duplicate SQLite bundle member name: {member_name}"
+                            )
+                        used_names.add(member_name)
+                        bundle.write(member.extracted_path, arcname=member_name)
+                        manifest_members.append({
+                            "name": member_name,
+                            "role": "primary" if member is entry else "sidecar",
+                            "source_path": member.zip_entry_path,
+                            "sha256": member.source_sha256,
+                            "size": member.source_size,
+                        })
+                    bundle.writestr(
+                        self.SQLITE_BUNDLE_MANIFEST,
+                        json.dumps({
+                            "format": self.SQLITE_BUNDLE_FORMAT,
+                            "version": 1,
+                            "primary": safe_name,
+                            "members": manifest_members,
+                        }, sort_keys=True, separators=(",", ":")),
+                    )
+            for member in [entry, *companions]:
+                try:
+                    member.extracted_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return candidate
+
         candidate = upload_dir / f"{prefix}_{safe_name}"
 
         if not candidate.exists():
@@ -302,11 +353,24 @@ class MobileFFSBundleCollector:
         wanted_extract = {**wanted, **sidecars}
 
         try:
-            for entry in self._iter_selected_entries(dest_dir, wanted_extract):
-                if entry.zip_entry_path in sidecars:
+            extracted = {
+                entry.zip_entry_path: entry
+                for entry in self._iter_selected_entries(dest_dir, wanted_extract)
+            }
+            for primary_path, ra in wanted.items():
+                entry = extracted.get(primary_path)
+                if entry is None:
                     continue
-                ra = wanted[entry.zip_entry_path]
-                upload_path = self._stage_upload_file(ra.artifact_type, entry)
+                companion_entries = [
+                    extracted[path]
+                    for path in (primary_path + "-wal", primary_path + "-shm", primary_path + "-journal")
+                    if path in sidecars and path in extracted
+                ]
+                upload_path = self._stage_upload_file(
+                    ra.artifact_type,
+                    entry,
+                    companion_entries,
+                )
                 metadata = {
                     "status": "success",
                     "source_path": entry.zip_entry_path,
@@ -325,6 +389,11 @@ class MobileFFSBundleCollector:
                     "bundle_format": "cellebrite_clbx",
                     "bundle_path": str(self.zip_path),
                 }
+                if companion_entries:
+                    metadata.update({
+                        "transport_container": self.SQLITE_BUNDLE_FORMAT,
+                        "sqlite_sidecar_count": len(companion_entries),
+                    })
                 if requested_artifact_type != ra.artifact_type:
                     metadata["requested_artifact_type"] = requested_artifact_type
                     metadata["upload_artifact_type"] = ra.artifact_type
@@ -551,12 +620,12 @@ class MobileFFSBundleCollector:
         self, wanted: Dict[str, ResolvedArtifact]
     ) -> Dict[str, ResolvedArtifact]:
         """For every SQLite primary in *wanted*, also pull -wal/-shm
-        sidecars so sqlite3.connect transparently merges WAL state on
-        the parser side. Android apps often use extensionless SQLite
+        sidecars so the upload stage can preserve the database as one
+        transport unit. Android apps often use extensionless SQLite
         files (for example ``bugle_db`` or ``signal_v4.db`` variants),
         so sidecar detection is based on adjacent filenames rather than
-        only on the primary extension. Sidecars are extracted to disk but
-        not yielded as separate artifacts."""
+        only on the primary extension. Sidecars are not emitted as unrelated
+        artifacts; they are packaged with their primary database."""
         sidecars: Dict[str, ResolvedArtifact] = {}
         sidecar_suffixes = ("-wal", "-shm", "-journal")
 

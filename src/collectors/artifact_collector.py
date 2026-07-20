@@ -1226,7 +1226,7 @@ class LocalMFTCollector(_LocalMFTBase):
                         if progress_callback:
                             progress_callback(result[0])
 
-        elif collector_type == 'collect_user_glob':
+        elif collector_type in ('collect_user_glob', 'collect_user_files'):
             # Per-user glob collection (+ system-wide %PROGRAMDATA% support)
             for path_pattern in paths:
                 # System-wide paths (not per-user)
@@ -2490,7 +2490,7 @@ class ArtifactCollector:
         # ==========================================================
         # User-specific paths (NTUSER.DAT, browser profiles, messengers, etc.)
         # ==========================================================
-        if 'user_path' in mft_config:
+        if 'user_path' in mft_config or 'user_paths' in mft_config:
             yield from self._collect_forensic_disk_user_paths(
                 artifact_type, mft_config, artifact_dir,
                 progress_callback, include_deleted
@@ -3121,7 +3121,9 @@ class ArtifactCollector:
         users_dir = Path(r'C:\Users')
 
         # Support user_path as string or list
-        raw_user_path = mft_config.get('user_path', '')
+        raw_user_path = mft_config.get(
+            'user_path', mft_config.get('user_paths', '')
+        )
         if isinstance(raw_user_path, str):
             user_path_list = [raw_user_path]
         else:
@@ -3213,7 +3215,7 @@ class ArtifactCollector:
             return
 
         # Handle user-specific paths
-        if 'user_path' in mft_config:
+        if 'user_path' in mft_config or 'user_paths' in mft_config:
             yield from self._collect_mft_user_paths(
                 artifact_type, mft_config, artifact_dir,
                 progress_callback, include_deleted
@@ -3313,7 +3315,9 @@ class ArtifactCollector:
         users_dir = Path(r'C:\Users')
 
         # Support user_path as string or list
-        raw_user_path = mft_config.get('user_path', '')
+        raw_user_path = mft_config.get(
+            'user_path', mft_config.get('user_paths', '')
+        )
         if isinstance(raw_user_path, str):
             user_path_list = [raw_user_path]
         else:
@@ -3754,6 +3758,11 @@ class ArtifactCollector:
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """Collect files from user profile with environment variable expansion (legacy)"""
         expanded_path = os.path.expandvars(path_pattern)
+        if glob.has_magic(expanded_path):
+            yield from self.collect_user_glob(
+                path_pattern, output_dir, artifact_type
+            )
+            return
         src_path = Path(expanded_path)
 
         if src_path.exists():

@@ -29,6 +29,7 @@ _MFT_CONFIG_KEYS = {
     "pattern",
     "special",
     "user_path",
+    "user_paths",
 }
 
 _MERGE_SEQUENCE_KEYS = {
@@ -40,6 +41,7 @@ _MERGE_SEQUENCE_KEYS = {
     "manifest_targets",
     "path_patterns",
     "paths",
+    "user_paths",
 }
 
 _PLATFORM_CATEGORIES = {"windows", "android", "ios", "linux", "macos", "ai_activity"}
