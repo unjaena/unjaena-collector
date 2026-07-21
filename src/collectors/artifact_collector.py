@@ -462,13 +462,45 @@ def _collect_hardware_metadata_standalone() -> Optional[Dict[str, str]]:
                 break
     except Exception:
         pass
-    if 'sys_uuid' not in meta:
+
+    # Preserve the exact source semantics of SMBIOS and Win32_DiskDrive values;
+    # MachineGuid is not an equivalent substitute for the SMBIOS UUID.
+    if (
+        os.name == 'nt'
+        and (
+            not meta.get('sys_uuid')
+            or not meta.get('hdd_model')
+            or not meta.get('hdd_serial')
+        )
+    ):
         try:
-            import winreg
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Cryptography')
-            val, _ = winreg.QueryValueEx(key, 'MachineGuid')
-            meta['sys_uuid'] = val
-            winreg.CloseKey(key)
+            import json as _json
+            import subprocess
+
+            script = (
+                "$system=(Get-CimInstance Win32_ComputerSystemProduct | "
+                "Select-Object -First 1 UUID);"
+                "$disk=(Get-CimInstance Win32_DiskDrive | Sort-Object Index | "
+                "Select-Object -First 1 Model,SerialNumber);"
+                "[pscustomobject]@{sys_uuid=$system.UUID;hdd_model=$disk.Model;"
+                "hdd_serial=$disk.SerialNumber}|ConvertTo-Json -Compress"
+            )
+            creation_flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            result = subprocess.run(
+                ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                creationflags=creation_flags,
+                check=True,
+            )
+            cim = _json.loads(result.stdout.strip())
+            if cim.get('sys_uuid'):
+                meta['sys_uuid'] = str(cim['sys_uuid']).strip()
+            if cim.get('hdd_model'):
+                meta['hdd_model'] = str(cim['hdd_model']).strip()
+            if cim.get('hdd_serial'):
+                meta['hdd_serial'] = str(cim['hdd_serial']).strip()
         except Exception:
             pass
     if 'hdd_model' not in meta or 'hdd_serial' not in meta:
@@ -486,7 +518,8 @@ def _collect_hardware_metadata_standalone() -> Optional[Dict[str, str]]:
             winreg.CloseKey(key)
         except Exception:
             pass
-    return meta if meta.get('sys_uuid') else None
+    required = ('sys_uuid', 'hdd_model', 'hdd_serial')
+    return meta if all(str(meta.get(key, '')).strip() for key in required) else None
 
 
 def _save_hardware_metadata_standalone(
@@ -3907,64 +3940,7 @@ class ArtifactCollector:
         Returns:
             Dict with sys_uuid, hdd_model, hdd_serial or None if unavailable
         """
-        meta = {}
-
-        # Method 1: WMI (preferred - accurate hardware identifiers)
-        try:
-            import wmi
-            c = wmi.WMI()
-            # System UUID from SMBIOS
-            for cs in c.Win32_ComputerSystemProduct():
-                if cs.UUID:
-                    meta['sys_uuid'] = cs.UUID
-                    break
-            # Primary disk info
-            for disk in c.Win32_DiskDrive():
-                if disk.Index == 0:
-                    meta['hdd_model'] = disk.Model or ''
-                    meta['hdd_serial'] = (disk.SerialNumber or '').strip()
-                    break
-        except Exception:
-            pass
-
-        # Method 2: Registry fallback for MachineGuid
-        if 'sys_uuid' not in meta:
-            try:
-                import winreg
-                key = winreg.OpenKey(
-                    winreg.HKEY_LOCAL_MACHINE,
-                    r'SOFTWARE\Microsoft\Cryptography'
-                )
-                val, _ = winreg.QueryValueEx(key, 'MachineGuid')
-                meta['sys_uuid'] = val
-                winreg.CloseKey(key)
-            except Exception:
-                pass
-
-        # Method 3: Registry fallback for HDD info
-        if 'hdd_model' not in meta or 'hdd_serial' not in meta:
-            try:
-                import winreg
-                key = winreg.OpenKey(
-                    winreg.HKEY_LOCAL_MACHINE,
-                    r'SYSTEM\CurrentControlSet\Services\disk\Enum'
-                )
-                count, _ = winreg.QueryValueEx(key, 'Count')
-                if count > 0:
-                    disk_id, _ = winreg.QueryValueEx(key, '0')
-                    # disk_id format: IDE\DiskVENDOR_MODEL____SERIAL\...
-                    if 'hdd_model' not in meta:
-                        meta['hdd_model'] = disk_id.split('\\')[1] if '\\' in disk_id else ''
-                    if 'hdd_serial' not in meta:
-                        parts = disk_id.split('\\')
-                        meta['hdd_serial'] = parts[2] if len(parts) > 2 else ''
-                winreg.CloseKey(key)
-            except Exception:
-                pass
-
-        if meta.get('sys_uuid'):
-            return meta
-        return None
+        return _collect_hardware_metadata_standalone()
 
     def _save_hardware_metadata(
         self,
