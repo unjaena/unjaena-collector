@@ -90,6 +90,13 @@ class CreditPausedError(Exception):
         super().__init__(message)
         self.detail = detail or {}
 
+class CaseLockedError(Exception):
+    """Raised when the server requires the analysis space password."""
+    def __init__(self, message: str = "Analysis space is locked.", detail: dict = None):
+        super().__init__(message)
+        self.detail = detail or {}
+
+
 from utils.error_messages import translate_error
 
 logger = logging.getLogger(__name__)
@@ -238,6 +245,7 @@ class UploadResult:
     error_solution: Optional[str] = None   # P2-2: Solution/resolution
     is_recoverable: bool = True            # P2-2: Whether retry is possible
     is_credit_paused: bool = False         # True when server returns 402 (upload paused)
+    stop_batch_reason: Optional[str] = None  # Fatal server policy that stops queued uploads
     metrics: Optional[dict] = None         # Optional upload timing/size diagnostics
 
     @classmethod
@@ -655,6 +663,11 @@ class RealTimeUploader:
                                 detail.get("message", "Insufficient credits for this upload."),
                                 detail=detail,
                             )
+                        if response.status == 423:
+                            raise CaseLockedError(
+                                detail.get("message", "Unlock the analysis space before collecting."),
+                                detail=detail,
+                            )
                         if response.status in (429, 502, 503, 504):
                             wait = _safe_retry_after(response, default=min(60, 5 * attempt))
                             last_error = f"Credit preflight failed ({response.status})"
@@ -671,6 +684,8 @@ class RealTimeUploader:
                             f"{detail.get('error', 'request rejected')}"
                         )
                 except CreditPausedError:
+                    raise
+                except CaseLockedError:
                     raise
                 except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                     last_error = f"Credit preflight connection error: {type(exc).__name__}"
@@ -767,6 +782,16 @@ class RealTimeUploader:
                 error_solution="Please recharge credits. No evidence bytes were uploaded.",
                 is_recoverable=False,
                 is_credit_paused=True,
+                stop_batch_reason="credit_paused",
+            )
+        except CaseLockedError as exc:
+            return UploadResult(
+                success=False,
+                error=str(exc),
+                error_title="Analysis Space Locked",
+                error_solution="Unlock the analysis space on the web, then start collection again.",
+                is_recoverable=False,
+                stop_batch_reason="case_locked",
             )
         except Exception as exc:
             logger.warning("[CREDIT_PREFLIGHT] Async upload not started: %s", exc)
@@ -835,6 +860,15 @@ class RealTimeUploader:
                             )
                         else:
                             await response.text()
+                            if response.status == 423:
+                                return UploadResult(
+                                    success=False,
+                                    error="Analysis space locked during upload.",
+                                    error_title="Analysis Space Locked",
+                                    error_solution="Unlock the analysis space on the web, then start collection again.",
+                                    is_recoverable=False,
+                                    stop_batch_reason="case_locked",
+                                )
                             # P2-2: User-friendly error message
                             return UploadResult.from_error(
                                 f"Upload failed ({response.status}): {_user_upload_message(response.status)}"
@@ -878,9 +912,13 @@ class RealTimeUploader:
             # Upload file
             result = await self.upload_file(file_path, artifact_type, metadata)
             results.append(result)
+            if result.stop_batch_reason:
+                await self.send_progress(progress, "Upload stopped", filename)
+                break
 
         # Send completion
-        await self.send_progress(1.0, "Upload complete", None)
+        if not results or not results[-1].stop_batch_reason:
+            await self.send_progress(1.0, "Upload complete", None)
 
         return results
 
@@ -1030,6 +1068,15 @@ class SyncUploader:
                         detail.get("message", "Insufficient credits for this upload."),
                         detail=detail,
                     )
+                if response.status_code == 423:
+                    try:
+                        detail = response.json().get("detail", response.json())
+                    except Exception:
+                        detail = {}
+                    raise CaseLockedError(
+                        detail.get("message", "Unlock the analysis space before collecting."),
+                        detail=detail,
+                    )
                 if response.status_code in (429, 502, 503, 504):
                     retry_after = _safe_retry_after(
                         response, default=min(60, 5 * attempt)
@@ -1054,6 +1101,8 @@ class SyncUploader:
                     f"Credit preflight failed ({response.status_code}): {sanitized}"
                 )
             except CreditPausedError:
+                raise
+            except CaseLockedError:
                 raise
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
                 last_error = f"Credit preflight connection error: {type(exc).__name__}"
@@ -1166,6 +1215,16 @@ class SyncUploader:
                 ),
                 is_recoverable=False,
                 is_credit_paused=True,
+                stop_batch_reason="credit_paused",
+            )
+        except CaseLockedError as exc:
+            return UploadResult(
+                success=False,
+                error=str(exc),
+                error_title="Analysis Space Locked",
+                error_solution="Unlock the analysis space on the web, then start collection again.",
+                is_recoverable=False,
+                stop_batch_reason="case_locked",
             )
         except Exception as exc:
             logger.warning("[CREDIT_PREFLIGHT] Upload not started: %s", exc)
@@ -1270,6 +1329,16 @@ class SyncUploader:
                                 error_solution="Please check your account balance on the web platform. After resolving, restart the collector to continue. Already processed files are preserved.",
                                 is_recoverable=False,
                                 is_credit_paused=True,
+                                stop_batch_reason="credit_paused",
+                            )
+                        if response.status_code == 423:
+                            return UploadResult(
+                                success=False,
+                                error="Analysis space locked during upload.",
+                                error_title="Analysis Space Locked",
+                                error_solution="Unlock the analysis space on the web, then start collection again.",
+                                is_recoverable=False,
+                                stop_batch_reason="case_locked",
                             )
                         if response.status_code in (429, 502, 503, 504):
                             retry_after = _safe_retry_after(response, default=min(60, 5 * attempt))
@@ -1345,6 +1414,8 @@ class SyncUploader:
 
             result = self.upload_file(file_path, artifact_type, metadata)
             results.append(result)
+            if result.stop_batch_reason:
+                break
 
         return results
 
@@ -1562,6 +1633,14 @@ class DirectUploader:
                         detail=detail,
                     )
 
+                if response.status_code == 423:
+                    try:
+                        detail = response.json()
+                    except Exception:
+                        detail = {}
+                    message = detail.get("message") or detail.get("detail") or "Analysis space is locked."
+                    raise CaseLockedError(str(message))
+
                 if response.status_code in (429, 502, 503, 504):
                     wait = _safe_retry_after(response, default=attempt * 10)
                     logger.warning(f"[DIRECT] Presigned URL temporarily unavailable, retrying in {wait}s (attempt {attempt}/{max_retries})")
@@ -1583,6 +1662,8 @@ class DirectUploader:
                     _raise_upload_http_error("Presigned URL request", response)
 
                 return response.json()
+            except CaseLockedError:
+                raise
             except SessionCancelledError:
                 raise  # Do not retry cancelled sessions; propagate immediately.
             except RuntimeError:
@@ -1757,6 +1838,14 @@ class DirectUploader:
                         detail=detail,
                     )
 
+                if response.status_code == 423:
+                    try:
+                        detail = response.json()
+                    except Exception:
+                        detail = {}
+                    message = detail.get("message") or detail.get("detail") or "Analysis space is locked."
+                    raise CaseLockedError(str(message))
+
                 if response.status_code in (429, 502, 503, 504):
                     wait = _safe_retry_after(response, default=attempt * 10)
                     logger.warning(f"[DIRECT] Upload confirmation temporarily unavailable, retrying in {wait}s (attempt {attempt}/{max_retries})")
@@ -1769,6 +1858,8 @@ class DirectUploader:
                     _raise_upload_http_error("Upload confirmation", response)
 
                 return response.json()
+            except CaseLockedError:
+                raise
             except CreditPausedError:
                 raise  # Do not retry credit pause; propagate immediately.
             except RuntimeError:
@@ -2016,6 +2107,27 @@ class DirectUploader:
                 metrics=metrics,
             )
 
+        except CaseLockedError as cle:
+            logger.warning(f"[UPLOAD] Analysis space locked by server: {cle}")
+            if encrypted_path and os.path.exists(encrypted_path):
+                os.remove(encrypted_path)
+            if presigned_info and presigned_info.get('upload_id'):
+                self._abort_upload(
+                    self.case_id,
+                    presigned_info.get('key', ''),
+                    presigned_info['upload_id'],
+                )
+            return UploadResult(
+                success=False,
+                error="The selected analysis space is locked.",
+                error_title="Analysis Space Locked",
+                error_solution=(
+                    "Unlock the analysis space on the web platform, then start collection again."
+                ),
+                is_recoverable=False,
+                stop_batch_reason="case_locked",
+            )
+
         except SessionCancelledError as sce:
             logger.warning(f"[UPLOAD] Session cancelled by server: {sce}")
             if encrypted_path and os.path.exists(encrypted_path):
@@ -2039,6 +2151,7 @@ class DirectUploader:
                 error_solution="Please check your account balance on the web platform. After resolving, restart the collector to continue. Already processed files are preserved.",
                 is_recoverable=False,
                 is_credit_paused=True,
+                stop_batch_reason="credit_paused",
             )
 
         except Exception as e:
@@ -2089,16 +2202,21 @@ class DirectUploader:
         completed_count = 0
         lock = threading.Lock()
 
-        credit_paused = threading.Event()
+        batch_halted = threading.Event()
+        batch_halt_reason = {"reason": None}
 
         def _upload_one(idx, file_path, artifact_type, metadata):
             nonlocal completed_count
-            if credit_paused.is_set():
+            if batch_halted.is_set():
+                reason = batch_halt_reason["reason"]
                 result = UploadResult(
-                    success=False, error="Upload paused - insufficient account balance.",
-                    error_title="Upload Paused",
-                    error_solution="Please check your account balance on the web platform. After resolving, restart the collector to continue. Already processed files are preserved.",
-                    is_recoverable=False, is_credit_paused=True,
+                    success=False,
+                    error="Upload skipped because the server stopped the batch.",
+                    error_title="Upload Stopped",
+                    error_solution="Resolve the server policy state, then start collection again.",
+                    is_recoverable=False,
+                    is_credit_paused=reason == "credit_paused",
+                    stop_batch_reason=reason,
                 )
                 with lock:
                     results[idx] = result
@@ -2108,7 +2226,11 @@ class DirectUploader:
                 return result
             result = self.upload_file(file_path, artifact_type, metadata)
             if getattr(result, 'is_credit_paused', False):
-                credit_paused.set()  # Signal other threads to stop
+                batch_halt_reason["reason"] = "credit_paused"
+                batch_halted.set()
+            elif result.stop_batch_reason:
+                batch_halt_reason["reason"] = result.stop_batch_reason
+                batch_halted.set()
             with lock:
                 results[idx] = result
                 completed_count += 1

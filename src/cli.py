@@ -478,8 +478,13 @@ class HeadlessCollector:
 
         lock = threading.Lock()
         completed = [0]
+        upload_halt = threading.Event()
+        upload_halt_state = {"reason": None, "message": None}
 
         def _upload_one(entry):
+            if upload_halt.is_set():
+                return None, None
+
             filepath, artifact_type, metadata = self._unpack_upload_entry(entry)
             upload_metadata = dict(metadata or {})
             upload_metadata.setdefault("source", "headless_collector")
@@ -490,6 +495,16 @@ class HeadlessCollector:
                 metadata=upload_metadata,
             )
             with lock:
+                stop_reason = getattr(result, "stop_batch_reason", None)
+                if stop_reason and not upload_halt.is_set():
+                    upload_halt_state["reason"] = stop_reason
+                    upload_halt_state["message"] = (
+                        result.error_solution
+                        or result.error
+                        or "The server stopped this upload batch."
+                    )
+                    upload_halt.set()
+
                 completed[0] += 1
                 if completed[0] % 10 == 0 or completed[0] == len(files):
                     logger.info(f"  Uploading [{completed[0]}/{len(files)}]")
@@ -505,10 +520,14 @@ class HeadlessCollector:
                 futures.append(executor.submit(_upload_one, entry))
 
             for future in as_completed(futures):
-                if self._cancelled:
+                if self._cancelled or upload_halt.is_set():
+                    for pending in futures:
+                        pending.cancel()
                     break
                 try:
                     filepath, result = future.result()
+                    if result is None:
+                        continue
                     if result.success:
                         success_count += 1
                     else:
@@ -517,6 +536,13 @@ class HeadlessCollector:
                 except Exception as e:
                     fail_count += 1
                     logger.warning(f"  Upload exception: {e}")
+
+        if upload_halt_state["reason"]:
+            logger.error(
+                "  Upload stopped by server policy: %s",
+                upload_halt_state["message"] or upload_halt_state["reason"],
+            )
+            return False
 
         logger.info(f"  Upload summary: {success_count} succeeded, {fail_count} failed")
         return fail_count == 0

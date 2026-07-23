@@ -6163,13 +6163,28 @@ class CollectionWorker(QThread):
 
             upload_lock = threading.Lock()
             completed_count = 0
+            upload_halt = threading.Event()
+            upload_halt_state = {"reason": None, "message": None}
 
             def _upload_one_file(idx, file_path, artifact_type, metadata):
                 nonlocal completed_count, success_count
+                if upload_halt.is_set():
+                    return None
+
                 result = uploader.upload_file(file_path, artifact_type, metadata)
                 filename = Path(file_path).name
 
                 with upload_lock:
+                    stop_reason = getattr(result, "stop_batch_reason", None)
+                    if stop_reason and not upload_halt.is_set():
+                        upload_halt_state["reason"] = stop_reason
+                        upload_halt_state["message"] = (
+                            result.error_solution
+                            or result.error
+                            or "The server stopped this upload batch."
+                        )
+                        upload_halt.set()
+
                     completed_count += 1
                     stage_progress = int((completed_count / max(total_upload, 1)) * 100)
                     overall_progress = self._calculate_overall_progress(3, stage_progress)
@@ -6236,7 +6251,7 @@ class CollectionWorker(QThread):
                     futures[future] = k
 
                 for future in as_completed(futures):
-                    if self._cancelled:
+                    if self._cancelled or upload_halt.is_set():
                         # Cancel remaining futures
                         for f in futures:
                             f.cancel()
@@ -6246,6 +6261,23 @@ class CollectionWorker(QThread):
                     except Exception as e:
                         import logging
                         logging.debug(f"Upload exception: {e}")
+
+            if upload_halt_state["reason"]:
+                self._upload_batch_complete = False
+                message = str(upload_halt_state["message"] or "The server stopped this upload batch.")
+                self.log_message.emit(
+                    f"Upload stopped by server policy: {message}",
+                    True,
+                )
+                self.progress_updated.emit(
+                    3,
+                    0,
+                    self._calculate_overall_progress(3, 0),
+                    "Upload stopped",
+                    "",
+                )
+                self.finished.emit(False, message)
+                return
 
             # Complete
             elapsed = time.time() - self._start_time
