@@ -4499,6 +4499,7 @@ class CollectionWorker(QThread):
         self._upload_batch_complete = False
         self._completion_signal_in_flight = False
         self._server_completion_accepted = False
+        self._abort_notification_sent = False
         self.config = config or {}
         self.request_signer = request_signer
         self.collection_profile_id = collection_profile_id
@@ -5015,10 +5016,12 @@ class CollectionWorker(QThread):
         )
         return str(staged_path)
 
-    def _abort_session(self):
-        """Notify server of session abort (clear active collection flag)"""
+    def _abort_session(self) -> bool:
+        """Notify the server that the current attempt must be rolled back."""
+        if self._server_completion_accepted or self._abort_notification_sent:
+            return True
         if not self.session_id or not self.collection_token:
-            return
+            return False
         try:
             abort_path = f"/api/v1/collector/collection/abort/{self.session_id}"
             abort_url = f"{self.server_url}{abort_path}"
@@ -5030,14 +5033,18 @@ class CollectionWorker(QThread):
                 abort_headers.update(self.request_signer.sign_request(
                     "POST", abort_path, None, self.collection_token,
                 ))
-            requests.post(
+            response = requests.post(
                 abort_url,
                 headers=abort_headers,
-                timeout=5,  # Quick timeout (don't wait during shutdown)
+                timeout=5,
                 verify=_get_ssl_verify(),
             )
+            if response.ok:
+                self._abort_notification_sent = True
+                return True
         except Exception:
-            pass  # Ignore failure (shutting down)
+            pass
+        return False
 
     def _calculate_overall_progress(self, stage: int, stage_progress: int) -> int:
         """Calculate overall progress"""
@@ -6365,6 +6372,9 @@ class CollectionWorker(QThread):
             self.finished.emit(False, f"Error occurred: {str(e)}")
 
         finally:
+            if not self._server_completion_accepted:
+                self._abort_session()
+
             # Stop heartbeat thread
             self._stop_heartbeat()
 

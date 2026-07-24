@@ -216,6 +216,8 @@ class HeadlessCollector:
         self.collection_profile_id = collection_profile_id
         self.consent_record = consent_record
         self._cancelled = False
+        self._server_completion_accepted = False
+        self._abort_notification_sent = False
 
     def run(self) -> bool:
         """Execute the full collection pipeline. Returns True on success."""
@@ -265,6 +267,9 @@ class HeadlessCollector:
         except Exception as e:
             logger.error(f"Collection failed: {e}", exc_info=True)
             return False
+        finally:
+            if not self._server_completion_accepted:
+                self._abort_session()
 
     def _collect(self) -> List[Tuple[str, str, Dict[str, Any]]]:
         """Stage 1: Collect artifacts to output directory."""
@@ -572,6 +577,7 @@ class HeadlessCollector:
                 verify=_get_ssl_verify(),
             )
             if response.ok:
+                self._server_completion_accepted = True
                 logger.info("Collection session completion signal sent.")
                 return True
             logger.error(
@@ -582,6 +588,44 @@ class HeadlessCollector:
         except Exception as e:
             logger.error(f"Collection session completion signal error: {e}")
             return False
+
+    def _abort_session(self) -> bool:
+        """Reset an unsuccessful headless attempt through the collector abort API."""
+        if self._server_completion_accepted or self._abort_notification_sent:
+            return True
+        abort_path = f"/api/v1/collector/collection/abort/{self.session_id}"
+        headers = {
+            "X-Collection-Token": self.collection_token,
+            "X-Session-ID": self.session_id,
+        }
+        if self.request_signer:
+            headers.update(self.request_signer.sign_request(
+                "POST", abort_path, None, self.collection_token,
+            ))
+        try:
+            response = requests.post(
+                f"{self.server_url}{abort_path}",
+                headers=headers,
+                timeout=5,
+                verify=self._ssl_verify(),
+            )
+            if response.ok:
+                self._abort_notification_sent = True
+                logger.info("Collection session rollback signal sent.")
+                return True
+            logger.error(
+                "Collection session rollback signal failed: HTTP %s",
+                response.status_code,
+            )
+        except Exception as e:
+            logger.error(f"Collection session rollback signal error: {e}")
+        return False
+
+    @staticmethod
+    def _ssl_verify():
+        from core.token_validator import _get_ssl_verify
+
+        return _get_ssl_verify()
 
 
 def run_headless(args, config: dict) -> int:
